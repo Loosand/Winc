@@ -249,12 +249,10 @@ fn draw_calendar(
             hits.push((rect, part));
         }
     };
-    let iso = format!("{year:04}-{month:02}");
     let month_label = t!(
         "properties-calendar-month",
-        year = year.to_string(),
-        month = month.to_string(),
-        iso = iso
+        year = format!("{year:04}"),
+        month = format!("{month:02}")
     );
     let top = Rect::new(area.x, area.y, day_w * 4.0, row_h);
     ui_text(frame, app, top.x + 5.0, top, &month_label, p.text, top);

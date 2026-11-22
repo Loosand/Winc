@@ -3,7 +3,6 @@ reader-overview = My Reading
 reader-saved = Saved Articles
 reader-add = Paste Article Link
 reader-working = Working…
-reader-offline = Saved copies are available offline.
 reader-empty = Paste an article link to get started.
 reader-full = Full text · offline
 reader-link-only = Link only

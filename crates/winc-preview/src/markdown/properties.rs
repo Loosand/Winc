@@ -527,10 +527,9 @@ pub fn panel(fields: &[Field]) -> Block {
                 Kind::Date => date_parts(&f.input).map(|(year, month, day)| {
                     t!(
                         "properties-date-display",
-                        year = year.to_string(),
-                        month = month.to_string(),
-                        day = day.to_string(),
-                        iso = f.input.clone()
+                        year = format!("{year:04}"),
+                        month = format!("{month:02}"),
+                        day = format!("{day:02}")
                     )
                 }),
                 _ => None,

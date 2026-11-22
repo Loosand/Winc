@@ -3,7 +3,6 @@ reader-overview = 我的阅读
 reader-saved = 文章收藏
 reader-add = 粘贴文章链接
 reader-working = 正在处理…
-reader-offline = 已保存的正文可离线阅读。
 reader-empty = 粘贴一篇文章的链接，开始离线阅读。
 reader-full = 全文 · 可离线
 reader-link-only = 仅链接
