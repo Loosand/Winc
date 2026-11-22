@@ -27,6 +27,22 @@ impl App {
             return;
         }
 
+        // The card opens its own link, not whatever happens to sit behind it.
+        if matches!(
+            button,
+            MouseButton::Left | MouseButton::Middle | MouseButton::Right
+        ) && self
+            .link_tooltip_at(x, y)
+            .is_some_and(|card| card.contains(x, y))
+        {
+            if button == MouseButton::Left
+                && let Some(tip) = self.overlays.tooltip.link.take()
+            {
+                self.open_link_tooltip(tip);
+            }
+            return;
+        }
+
         // 点在前台以外的窗格里：先把它换到前台，这次按下按它的位置处理。
         if let Some(pane) = self.background_pane_at(x, y)
             && self.pane_divider_at(x, y).is_none()
@@ -228,6 +244,8 @@ impl App {
             Target::TreeMore => self.open_tree_tools_menu(),
             Target::ProjectName => self.open_project_menu(),
             Target::SidebarButton => self.toggle_sidebar(),
+            Target::Library(target) => self.press_library(target),
+            Target::NoteGraph(target) => self.press_note_graph(target, x, y),
             Target::Json(target) => self.click_json(target, x, y),
             Target::NewTab => self.new_file(),
             Target::TabList => self.open_tab_list_menu(),

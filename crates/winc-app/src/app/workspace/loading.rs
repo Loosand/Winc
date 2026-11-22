@@ -216,10 +216,8 @@ impl App {
 
     fn open_then(&mut self, path: &Path, preview: bool, then: impl FnOnce(&mut App) + 'static) {
         let from = self.editor.active().map(|d| d.id);
-        if preview {
-            self.preview_path(path);
-        } else {
-            self.open_path(path);
+        if !self.open_file(path, preview) {
+            return;
         }
         let switched = self.editor.active().map(|d| d.id) != from;
         self.when_loaded(move |app| {

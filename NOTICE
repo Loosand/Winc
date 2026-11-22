@@ -9,6 +9,13 @@ Source: https://github.com/DEEIX-AI/Winc
 
 Third-party components
 
+The note-library folder hover animation and paper layout are adapted from Quiet MD
+(https://github.com/s1dashu/quiet-md), used under the MIT License:
+
+Copyright (c) 2026 s1dashu
+
+The MIT License text below applies to this component.
+
 Windows builds include conpty.dll and OpenConsole.exe from Windows Terminal
 (https://github.com/microsoft/terminal), used under the MIT License:
 

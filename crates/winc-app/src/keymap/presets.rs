@@ -226,6 +226,12 @@ pub(super) const COMMON: &[PresetRow] = &[
     row(MarkdownFocusMode, Markdown, &["f8"], &["f8"]),
     row(MarkdownTypewriterMode, Markdown, &["f9"], &["f9"]),
     row(
+        MarkdownCopy,
+        Markdown,
+        &["alt+shift+cmd+c"],
+        &["ctrl+alt+shift+c"],
+    ),
+    row(
         MarkdownPastePlain,
         Markdown,
         &["alt+shift+cmd+v"],

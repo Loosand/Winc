@@ -109,6 +109,8 @@ pub struct PickerParts {
     pub actions: Rect,
     /// 结果列表区域，不含上下留白。
     pub list: Rect,
+    /// Height of each result row.
+    pub row_height: f32,
     /// 位置浮窗底部显示完整路径的一栏；快速打开面板没有，高度为 0。
     pub footer: Rect,
 }
@@ -137,6 +139,7 @@ impl PickerParts {
             bar: Rect::new(card.x, card.y, card.w, bar),
             actions: Rect::new(card.x, card.y + bar, card.w, actions),
             list: Rect::new(card.x, card.y + top, card.w, list),
+            row_height: PICKER_ROW,
             footer: Rect::new(card.x, card.bottom() - footer, card.w, footer),
         }
     }
@@ -146,6 +149,7 @@ impl PickerParts {
         PickerParts {
             bar: Rect::new(card.x, card.y, card.w, BAR_HEIGHT.min(card.h)),
             actions: Rect::new(card.x, card.y + BAR_HEIGHT.min(card.h), card.w, 0.0),
+            row_height: PICKER_ROW,
             list: Rect::new(
                 card.x,
                 card.y + BAR_HEIGHT + PICKER_PAD,
@@ -160,8 +164,8 @@ impl PickerParts {
     ///
     /// 矩形可能只有一部分在列表内，或完全在列表之外；绘制时需要裁剪到 `list`。
     pub fn row(&self, index: usize, scroll: f32) -> Rect {
-        let y = self.list.y + index as f32 * PICKER_ROW - scroll;
-        Rect::new(self.list.x, y, self.list.w, PICKER_ROW)
+        let y = self.list.y + index as f32 * self.row_height - scroll;
+        Rect::new(self.list.x, y, self.list.w, self.row_height)
     }
 
     /// 返回列表中纵坐标 `y` 处的结果序号（从 0 起），不检查实际是否有这条结果；`y` 不在列表内
@@ -169,14 +173,14 @@ impl PickerParts {
     pub fn row_at(&self, y: f32, scroll: f32) -> Option<usize> {
         let list = self.list;
         (y >= list.y && y < list.bottom())
-            .then(|| ((y - list.y + scroll) / PICKER_ROW).floor() as usize)
+            .then(|| ((y - list.y + scroll) / self.row_height).floor() as usize)
     }
 
     /// 返回滚动量为 `scroll`、共 `count` 条结果时，列表中可见（包括只露出一部分）的结果序号范围，
     /// 不含末尾。
     pub fn visible(&self, scroll: f32, count: usize) -> std::ops::Range<usize> {
-        let first = ((scroll / PICKER_ROW).floor().max(0.0) as usize).min(count);
-        let last = (((scroll + self.list.h) / PICKER_ROW).ceil() as usize).min(count);
+        let first = ((scroll / self.row_height).floor().max(0.0) as usize).min(count);
+        let last = (((scroll + self.list.h) / self.row_height).ceil() as usize).min(count);
         first..last.max(first)
     }
 }

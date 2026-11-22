@@ -65,6 +65,12 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) {
     app.preview.pdf.page = None;
     app.preview.pdf.strip = Rect::default();
 
+    if app.library_shown() {
+        app.preview.picture_cache = None;
+        workspace::library::draw(app, frame);
+        return;
+    }
+
     let Some(index) = app.editor.active else {
         // 没有标签：释放缩放后的预览缓存，避免继续占用内存。
         app.preview.picture_cache = None;
@@ -125,6 +131,9 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) {
     // 取回后显示排版后的 Markdown。
     if let Some(reading) = app.editor.documents[index].reading.clone() {
         match reading {
+            // 本地笔记库关闭后，旧主页不再指向任何目录。
+            winc_editor::Reading::Library => {}
+            winc_editor::Reading::NoteGraph => workspace::note_graph::draw(app, frame),
             winc_editor::Reading::Loading => {
                 let name = app.editor.documents[index].name().into_owned();
                 draw_placeholder(app, frame, t!("editor-reading", name = name), &[]);

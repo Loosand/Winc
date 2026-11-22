@@ -105,7 +105,7 @@ impl App {
         if self.panels.sidebar.visible {
             client.push(l.splitter);
         }
-        if self.editor.active().is_some_and(|d| d.can_preview()) {
+        if self.preview_switch_available() {
             client.push(l.preview);
         }
         if self.browser_page().is_some() {
@@ -197,6 +197,9 @@ impl App {
             _ => {}
         }
 
+        if self.link_tooltip_at(x, y).is_some() {
+            return self.pointer.hover;
+        }
         match self.target_at(x, y) {
             Target::WindowControl(control) => Hover::WindowControl(control),
             Target::ResizeEdge(direction) => Hover::ResizeEdge(direction),
@@ -210,10 +213,22 @@ impl App {
             {
                 Hover::PickerPart(part)
             }
-            Target::Picker => crate::app::workspace::picker::picker_parts(self, l.picker)
-                .row_at(y, self.overlays.picker.scroll)
-                .filter(|&i| i < self.overlays.picker.hits.len())
-                .map_or(Hover::None, Hover::PickerRow),
+            Target::Picker => {
+                let parts = crate::app::workspace::picker::picker_parts(self, l.picker);
+                if parts.list.contains(x, y) {
+                    let scroll = if self.overlays.picker.notebook.is_some() {
+                        crate::layout::drawn_scroll(self.overlays.picker.scroll)
+                    } else {
+                        self.overlays.picker.scroll
+                    };
+                    parts
+                        .row_at(y, scroll)
+                        .filter(|&i| i < self.overlays.picker.hits.len())
+                        .map_or(Hover::None, Hover::PickerRow)
+                } else {
+                    Hover::None
+                }
+            }
             Target::TreeMore => Hover::TreeMore,
             Target::Scrollbar(bar, _) => Hover::Scrollbar(bar),
             Target::Minimap => Hover::Minimap,
@@ -225,6 +240,8 @@ impl App {
             Target::TreeTool(tool) => Hover::TreeTool(tool),
             Target::ProjectName => Hover::ProjectName,
             Target::SidebarButton => Hover::SidebarButton,
+            Target::Library(target) => Hover::Library(target),
+            Target::NoteGraph(target) => Hover::NoteGraph(target),
             Target::Json(target) => Hover::Json(target),
             Target::NewTab => Hover::NewTab,
             Target::TabList => Hover::TabList,
@@ -390,7 +407,7 @@ impl App {
             return Target::TabList;
         }
         // 切换到不可预览的文件后，三段切换收起的动画过程中不响应点击。
-        if l.preview.contains(x, y) && self.editor.active().is_some_and(|d| d.can_preview()) {
+        if l.preview.contains(x, y) && self.preview_switch_available() {
             use winc_editor::PreviewMode::*;
             let segments = crate::layout::preview_segments(l.preview);
             // 按钮之间的空隙归属于距离较近的一段，否则点击空隙时没有响应。
@@ -462,8 +479,17 @@ impl App {
                 None => Target::Terminal,
             };
         }
+        if self.library_home_button().contains(x, y) {
+            return Target::Library(crate::app::workspace::library::LibraryTarget::Root);
+        }
         if l.tree.contains(x, y) || self.in_tree_overflow(x, y) {
             return Target::Tree(self.tree_row_at(y));
+        }
+        if self.note_graph_shown() && l.editor.contains(x, y) {
+            return Target::NoteGraph(self.graph_at(x, y));
+        }
+        if self.library_shown() && l.editor.contains(x, y) {
+            return hit(&self.hits.library, x, y).map_or(Target::Blocked, Target::Library);
         }
         if let Some(target) = self.json_at(x, y) {
             return Target::Json(target);
@@ -635,6 +661,14 @@ impl App {
         {
             let thumb = scrollbar_thumb(track, scroll, content)?;
             return Some((Scrollbar::Terminal, grab(y, thumb.y, thumb.h)));
+        }
+
+        if let Some((_, track, scroll, content)) = self.card_grid_scrollbar()
+            && track.contains(x, y)
+            && x >= track.right() - SCROLLBAR_HIT
+            && let Some(thumb) = scrollbar_thumb(track, scroll, content)
+        {
+            return Some((Scrollbar::CardGrid, grab(y, thumb.y, thumb.h)));
         }
 
         // 预览（分栏时位于右侧，仅预览时占满编辑区）先于编辑区判断，仅预览时两者重叠。
@@ -849,6 +883,13 @@ impl App {
             return;
         }
 
+        if self
+            .link_tooltip_at(x, y)
+            .is_some_and(|card| card.contains(x, y))
+        {
+            self.set_cursor_icon(CursorIcon::Pointer);
+            return;
+        }
         let in_text = self.editor.active.is_some()
             && self.active_shows_text()
             && !matches!(
@@ -930,6 +971,13 @@ impl App {
                 | Hover::TerminalBlock(_)
                 | Hover::Diff(crate::app::DiffTarget::Sticky(..))
                 | Hover::MarkdownLink(_)
+                | Hover::Library(_)
+                | Hover::NoteGraph(
+                    crate::app::workspace::note_links::graph::Target::Search
+                        | crate::app::workspace::note_links::graph::Target::Fit
+                        | crate::app::workspace::note_links::graph::Target::Isolated
+                        | crate::app::workspace::note_links::graph::Target::Node(_)
+                )
                 | Hover::MarkdownToc(
                     crate::app::preview::markdown::TocTarget::Heading(_)
                         | crate::app::preview::markdown::TocTarget::Pin
@@ -992,6 +1040,8 @@ pub(super) enum Target {
     TreeTool(crate::layout::TreeTool),
     ProjectName,
     SidebarButton,
+    Library(crate::app::workspace::library::LibraryTarget),
+    NoteGraph(crate::app::workspace::note_links::graph::Target),
     Json(crate::app::preview::json::Target),
     NewTab,
     /// 标签栏无法容纳全部标签时显示在最右端的「⌄」。

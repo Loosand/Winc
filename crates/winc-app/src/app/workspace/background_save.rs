@@ -12,8 +12,12 @@ use winc_editor::{SaveJob, Saved};
 
 use super::*;
 
-/// 后台保存完成的结果：文档、成功时是否不提示、保存结果。
-type Done = (DocumentId, bool, Saved);
+struct Done {
+    id: DocumentId,
+    quiet: bool,
+    edited: bool,
+    saved: Saved,
+}
 
 /// 在后台保存的文档。
 pub(crate) struct BackgroundSaves {
@@ -41,11 +45,22 @@ impl App {
     }
 
     /// 在后台写出 `job`（文档 `id` 的保存），完成后由 [`App::poll_saves`] 收取。
-    pub(in crate::app) fn save_in_background(&mut self, id: DocumentId, job: SaveJob, quiet: bool) {
+    pub(super) fn save_in_background(
+        &mut self,
+        id: DocumentId,
+        job: SaveJob,
+        quiet: bool,
+        edited: bool,
+    ) {
         self.disk.saves.running.insert(id);
         let sender = self.disk.saves.results.0.clone();
         let save = move || {
-            let _ = sender.send((id, quiet, job.run()));
+            let _ = sender.send(Done {
+                id,
+                quiet,
+                edited,
+                saved: job.run(),
+            });
         };
         // 远端的文件与改名、移动、删除在同一个线程上按顺序执行。
         let remote = (self.editor.document(id))
@@ -85,7 +100,15 @@ impl App {
         }
     }
 
-    fn saved_in_background(&mut self, (id, quiet, saved): Done) {
+    fn saved_in_background(
+        &mut self,
+        Done {
+            id,
+            quiet,
+            edited,
+            saved,
+        }: Done,
+    ) {
         self.disk.saves.running.remove(&id);
         let Some(doc) = self.editor.document_mut(id) else {
             return;
@@ -99,6 +122,7 @@ impl App {
                 }
                 self.blame_saved(id);
                 self.run_file_saved(id);
+                self.note_edit_saved(id, edited);
                 self.request_redraw();
             }
             Err(e) => self.save_failed(id, &name, &e),
@@ -162,6 +186,7 @@ impl App {
         let Some(doc) = self.editor.document_mut(id) else {
             return;
         };
+        let edited = doc.is_dirty();
         let started = crate::elevated::private_dir().and_then(|dir| {
             let copy = dir.join("content");
             match doc.begin_handed_save(&copy) {
@@ -182,7 +207,12 @@ impl App {
         self.spawn_blocking_then(UserEvent::Saved, move || {
             let result = crate::elevated::write(&copy, handed.target(), owner);
             let _ = winc_backend::fs::remove_all(&dir);
-            let _ = sender.send((id, false, handed.finish(result)));
+            let _ = sender.send(Done {
+                id,
+                quiet: false,
+                edited,
+                saved: handed.finish(result),
+            });
         });
     }
 }

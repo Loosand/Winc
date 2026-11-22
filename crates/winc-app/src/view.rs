@@ -13,7 +13,7 @@ use winc_editor::EntryKind;
 use winc_i18n::t;
 use winc_render::{Color, Faux, FontKind, Frame, Rect};
 
-use crate::app::animation::{Card, dialog_curve, reveal};
+use crate::app::animation::{Card, LinkTooltip, dialog_curve, reveal};
 use crate::app::workspace::picker::picker_parts;
 use crate::app::workspace::tab_names::{tab_folder, tab_icon_name};
 use crate::app::{
@@ -32,6 +32,8 @@ mod diff;
 mod editor;
 mod fields;
 mod git;
+mod note_property;
+mod note_search;
 mod overlays;
 #[cfg(all(test, unix))]
 pub(crate) use overlays::NOTICE_TEXT_X;
@@ -155,6 +157,7 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
     }
 
     // 拆分后最后画前台窗格：浮层和各区域记下的位置都是它的。
+    app.track_library_motion();
     app.draw_panes(|app, front| draw_pane(app, frame, front));
     draw_pane_dividers(app, frame);
     draw_tab_drop(app, frame);
@@ -201,6 +204,9 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
         draw_moving_card(app, frame, Card::Bar, rect, draw_goto);
     }
     if picker_open {
+        if app.overlays.picker.notebook.is_some() {
+            note_search::draw_scrim(app, frame);
+        }
         let rect = app.layout.picker;
         draw_moving_card(app, frame, Card::Picker, rect, draw_picker);
     } else if app.overlays.picker.open {
@@ -240,6 +246,7 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
     app.track_card(Card::Dialog, dialog_open);
     dialog::draw_ghost(app, frame);
     if dialog_open {
+        app.overlays.tooltip.link.take();
         dialog::draw(app, frame);
         draw_modal(app, frame);
         return;
@@ -248,6 +255,7 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
     // 设置浮层盖住整个窗口（侧栏、编辑区、状态栏）；绘制后直接返回，不再绘制主界面的悬停提示。
     // 关闭后淡出期间仍继续绘制（`SettingsState::motion`）。
     if app.settings.open {
+        app.overlays.tooltip.link.take();
         settings::draw(app, frame);
         draw_modal(app, frame);
         return;
@@ -261,6 +269,7 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let modal = app.popup().is_some() || app.overlays.alert.is_some();
     draw_modal(app, frame);
     if modal {
+        app.overlays.tooltip.link.take();
         return;
     }
     // 鼠标在其他窗格上时，提示按那个窗格的标签和按钮写。
@@ -323,7 +332,7 @@ fn draw_file_drop(app: &App, frame: &mut Frame<'_>) {
             l.top_bar.w,
             l.editor.bottom() - l.top_bar.y,
         ),
-        Some(DropZone::Tree(_)) | None => return,
+        Some(DropZone::Tree(_) | DropZone::NotebookSwitch) | None => return,
     };
     let area = area.inset(6.0, 6.0);
     frame.rect_clipped(area, app.palette.drop_target, RADIUS_ISLAND - 4.0, area);
@@ -397,6 +406,7 @@ fn draw_drag_card(app: &App, frame: &mut Frame<'_>, name: Cow<'_, str>) -> (Rect
 /// 鼠标在按钮上停留满 `TOOLTIP_DELAY`（500 毫秒）才显示，避免鼠标扫过时闪现。提示位于按钮
 /// 下方并水平居中；下方放不下时（状态栏上的按钮）改在上方；概览标尺上的提示位于标尺左侧。
 fn draw_tooltip(app: &App, frame: &mut Frame<'_>) {
+    let previous_link = app.overlays.tooltip.link.take();
     // 鼠标刚离开的提示在原处淡出。
     if let Some((button, label, beside, clock)) = &app.overlays.tooltip.leaving {
         draw_tip(app, frame, (*button, label, *beside), clock.fade_out());
@@ -410,6 +420,7 @@ fn draw_tooltip(app: &App, frame: &mut Frame<'_>) {
     if !rested {
         return;
     }
+    let mut link_target = None;
     let (button, label): (Rect, String) = match workspace::panel::tooltip(app) {
         Some(tip) => tip,
         None => match app.pointer.hover {
@@ -465,6 +476,19 @@ fn draw_tooltip(app: &App, frame: &mut Frame<'_>) {
                 let Some((rect, url)) = app.hits.markdown_links.get(i) else {
                     return;
                 };
+                let source = app.editor.active().map(|doc| (doc.id, doc.revision));
+                let (x, y) = app.mouse();
+                if !rect.contains(x, y)
+                    && !previous_link.is_some_and(|tip| {
+                        Some(tip.source) == source
+                            && tip.anchor == *rect
+                            && tip.target == *url
+                            && tip.contains(x, y)
+                    })
+                {
+                    return;
+                }
+                link_target = source.map(|source| (source, url));
                 let note = (url.strip_prefix("#fn-"))
                     .and_then(|n| app.preview.markdown.parsed.as_ref()?.footnote_text(n));
                 let text = match note {
@@ -589,20 +613,36 @@ fn draw_tooltip(app: &App, frame: &mut Frame<'_>) {
     };
     let beside = matches!(app.pointer.hover, Hover::RulerChange(_));
     let tip = (button, label.as_str(), beside);
-    draw_tip(app, frame, tip, app.tooltip_opacity());
+    let opacity = app.tooltip_opacity();
+    let card = draw_tip(app, frame, tip, opacity);
+    if let Some((source, target)) = link_target.filter(|_| opacity > 0.0) {
+        *app.overlays.tooltip.link.borrow_mut() = Some(LinkTooltip {
+            card,
+            anchor: button,
+            source,
+            pane: app.editor.panes.focused,
+            target: target.clone(),
+        });
+    }
     *app.overlays.tooltip.last.borrow_mut() = Some((button, label, beside));
 }
 
 /// 画一条提示：对着 `button`，文字 `label`；`beside` 时放在按钮左侧（概览标尺紧靠窗口右边缘），
 /// 否则放在按钮下方。整条按 `opacity` 变淡，用于淡入淡出。
-fn draw_tip(app: &App, frame: &mut Frame<'_>, tip: (Rect, &str, bool), opacity: f32) {
+fn draw_tip(app: &App, frame: &mut Frame<'_>, tip: (Rect, &str, bool), opacity: f32) -> Rect {
     let (button, label, beside) = tip;
     frame.with_opacity(opacity, |frame| {
         draw_tip_card(app, frame, button, label, beside)
-    });
+    })
 }
 
-fn draw_tip_card(app: &App, frame: &mut Frame<'_>, button: Rect, label: &str, beside: bool) {
+fn draw_tip_card(
+    app: &App,
+    frame: &mut Frame<'_>,
+    button: Rect,
+    label: &str,
+    beside: bool,
+) -> Rect {
     let p = app.palette;
     // 提示分「名称   快捷键」两栏，快捷键以淡色显示在右侧，两栏间距至少 16 逻辑像素。含 `\n` 时
     // 第一段为正文，其余各段为淡色说明（如标签的文件名和所在目录）。
@@ -669,6 +709,7 @@ fn draw_tip_card(app: &App, frame: &mut Frame<'_>, button: Rect, label: &str, be
             rect,
         );
     }
+    rect
 }
 
 /// 把提示正文 `name` 按宽度 `room`（逻辑像素）折行，返回各行及其是否属于正文段。

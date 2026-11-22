@@ -774,7 +774,7 @@ fn untitled_files_format_after_choosing_a_language_in_the_status_bar() {
         "json".to_owned(),
         format!("'{}' --stdin-filepath {{file}}", tool.display()),
     );
-    app.new_file();
+    app.editor.new_untitled();
     app.run(Command::Insert("{\"sa\": 1}\n".into()));
 
     // 没保存、认不出语言：提示先在状态栏选择语言。

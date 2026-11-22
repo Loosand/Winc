@@ -298,6 +298,9 @@ impl App {
     ///
     /// 文件之后改名、另存为时按新的文件名重新识别。
     pub(in crate::app) fn use_language(&mut self, language: &'static winc_syntax::Language) {
+        if !self.can_change_language() {
+            return;
+        }
         // 预览或分栏中换成预览方式不同的语言时，先回到源代码。
         let leaves = self.editor.active().is_some_and(|doc| {
             doc.preview_mode() != PreviewMode::Source
@@ -308,6 +311,9 @@ impl App {
         }
         if let Some(doc) = self.editor.active_mut() {
             doc.choose_language(language);
+            if doc.preview_kind() == Some(winc_editor::PreviewKind::Markdown) {
+                doc.set_preview_mode(PreviewMode::Preview);
+            }
         }
         self.relayout();
         self.request_redraw();

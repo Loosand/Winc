@@ -17,6 +17,7 @@ use crate::app::{App, Focus, ScrollArea};
 use crate::icons;
 use crate::theme::Palette;
 
+mod note_footer;
 mod resize;
 mod table;
 mod toolbar;
@@ -98,6 +99,14 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     let p = app.palette;
     frame.rect(area, p.editor_bg);
     app.preview.markdown.area = area;
+    if app
+        .editor
+        .active()
+        .and_then(|doc| doc.path.as_deref())
+        .is_some_and(|path| app.note_in_library(path))
+    {
+        app.ensure_note_links();
+    }
     // 可编辑的预览在排版之前取得当前文字的解析结果，本帧即按最新的结构显示。
     app.parse_markdown_inline();
     // 第一次解析还没回来：先留空。
@@ -114,11 +123,11 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     let left = (area.x + (area.w - width) / 2.0).round();
     // 有标题列表时正文左侧为指示条留出位置，留白不足时正文右移并变窄。钉住的列表占一列，
     // 同样由正文让出；让出后正文窄于 `TOC_PINNED_BODY` 时只保留指示条的位置。
-    let numbers = number_room(app, frame);
+    let gutter = toc_gutter(app, frame);
     let narrowed = |to: f32| (area.right() - pad - to).floor();
     let outline = has_outline(&parsed);
-    let bars = area.x + TOC_ROOM + numbers;
-    let pushed = area.x + TOC_PINNED_EDGE + TOC_PINNED_COLUMN + numbers;
+    let bars = area.x + TOC_ROOM + gutter;
+    let pushed = area.x + TOC_PINNED_EDGE + TOC_PINNED_COLUMN + gutter;
     let pinned = app.state.markdown_toc_pinned && narrowed(pushed) >= TOC_PINNED_BODY;
     let (left, width) = match (outline, pinned) {
         (true, true) if left < pushed => (pushed, width.min(narrowed(pushed))),
@@ -151,6 +160,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     let blank = live.as_ref().is_some_and(|l| l.blank);
     let loaded = std::mem::take(&mut app.preview.markdown.loaded);
     let toggled = app.preview.markdown.toggled_now.take();
+    let property_changed = std::mem::take(&mut app.preview.markdown.property_layout_dirty);
     let refold = std::mem::take(&mut app.preview.markdown.refold);
     // 重排之前光标在旧排版里的高度：重排后据此保持光标在屏幕上不动（见 [`keep_caret_still`]）。
     let mut still = None;
@@ -179,6 +189,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                 && loaded.is_empty()
                 && toggled.is_none()
                 && !refold
+                && !property_changed
                 && !laid.pending()
                 && (laid.near.as_ref()).is_none_or(|kept| kept.covers(&near, area.h)) =>
         {
@@ -281,7 +292,9 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     laid.left = left;
     laid.pad = pad;
     laid.set_upstream(app.live_upstream());
-    app.preview.markdown.height = laid.height + pad * 2.0;
+    app.note_links.footer_hits.clear();
+    let footer = note_footer::height(app);
+    app.preview.markdown.height = laid.height + pad * 2.0 + footer;
     // 可编辑的预览与编辑区相同：内容高于一屏时，最后一行下方可以滚出一段空白。
     if app.markdown_live() && app.preview.markdown.height > area.h {
         app.preview.markdown.height += area.h * crate::layout::OVERSCROLL;
@@ -290,12 +303,14 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     app.preview.markdown.layout = Some(laid);
     app.follow_live_caret();
     // 分栏时右边跟着左边滚；刚换成只看预览时对齐一次。
-    if area != app.layout.editor {
+    let split = area != app.layout.editor;
+    if split {
         app.sync_markdown_scroll();
     } else {
         app.align_markdown_once();
     }
     app.scroll_to_pending_anchor();
+    note_footer::follow_citation(app);
     app.hold_book_place();
     // `layout` 刚在上面放进去，取出时一定存在。
     let mut laid = app.preview.markdown.layout.take().expect("刚放进去");
@@ -316,7 +331,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         (f32::NAN, f32::NAN)
     };
     // 分栏时标出编辑区光标所在的行，便于对照两侧的位置；键盘焦点在预览上时不标出。
-    let caret = (area != app.layout.editor && !app.preview.markdown.focused)
+    let caret = (split && !app.preview.markdown.focused)
         .then(|| app.markdown_caret_source())
         .flatten()
         .and_then(|source| laid.caret_point(source));
@@ -570,6 +585,18 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                     Item::Link { rect, url } => {
                         let r = at(rect).intersect(area);
                         if r.w > 0.0 && r.h > 0.0 {
+                            if url.starts_with(winc_preview::markdown::properties::PROPERTY)
+                                && !app.overlays.picker.open
+                                && app.overlays.context_menu.is_none()
+                                && r.contains(mouse.0, mouse.1)
+                            {
+                                frame.rect_clipped(
+                                    r,
+                                    p.text.alpha(if p.dark { 0.07 } else { 0.045 }),
+                                    5.0,
+                                    area,
+                                );
+                            }
                             app.hits.markdown_links.push((r, url.to_string()));
                         }
                     }
@@ -719,8 +746,12 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         };
         (point, (!inline).then_some(font))
     });
+    let footer_at = Rect::new(left, origin_y + laid.height, key.width, footer);
     md.layout = Some(laid);
     md.motion = motion;
+    if footer > 0.0 {
+        note_footer::draw(app, frame, footer_at, area);
+    }
     // 与源代码的光标相同，只在编辑区持有焦点时绘制；焦点在终端、查找条等处时不显示，
     // 也不占用输入法候选窗的位置。
     if let Some(((x, y, h), font)) = live_point.filter(|_| app.focus == Focus::Editor) {
@@ -825,10 +856,12 @@ fn draw_heading_folds(
     let (mx, my) = app.mouse();
     let p = app.palette;
     let numbers = app.markdown_line_numbers_on() && app.markdown_live();
-    let x = match numbers {
-        true => laid.left - NUMBER_GAP - ARROW / 2.0,
-        false => laid.left - laid.pad / 2.0,
-    };
+    let x = laid.left
+        - if numbers {
+            FOLD_NUMBERED_OFFSET
+        } else {
+            FOLD_OFFSET
+        };
     let view = scroll - laid.pad;
     for i in laid.blocks_in(view, view + area.h) {
         let Some(section) = laid.sections.get(i).and_then(Option::as_ref) else {
@@ -861,7 +894,7 @@ fn draw_heading_folds(
             std::f32::consts::FRAC_PI_2
         };
         icons::chevron_turned(frame, (x, cy), ARROW, turned, color, area);
-        let hit = Rect::new(x - ARROW - 2.0, cy - 10.0, 2.0 * ARROW + 4.0, 20.0);
+        let hit = Rect::new(x - FOLD_HIT_RADIUS, cy - 10.0, 2.0 * FOLD_HIT_RADIUS, 20.0);
         let url = format!("{FOLD}{}", section.key);
         app.hits.markdown_links.push((hit, url));
         if let Some(&line) = laid.lines.get(i) {
@@ -886,6 +919,9 @@ const TALL_MIN: f32 = 320.0;
 
 /// 标题折叠箭头的大小（逻辑像素）。
 const ARROW: f32 = 8.0;
+const FOLD_HIT_RADIUS: f32 = ARROW + 2.0;
+const FOLD_OFFSET: f32 = FOLD_HIT_RADIUS + 2.0;
+const FOLD_NUMBERED_OFFSET: f32 = NUMBER_GAP + ARROW / 2.0;
 
 /// 光标或选区占据的范围，决定哪些行号显示为当前行（见 [`draw_source_numbers`]）。
 enum Lit {
@@ -937,6 +973,17 @@ fn number_room(app: &App, frame: &mut Frame<'_>) -> f32 {
     };
     let cell = frame.measure(FontKind::Mono, app.fonts.code, "0");
     rope.len_lines().to_string().len() as f32 * cell + NUMBER_GAP
+}
+
+/// 目录放在行号和折叠箭头的点击区域左边，即使行号关闭也要给箭头留位。
+fn toc_gutter(app: &App, frame: &mut Frame<'_>) -> f32 {
+    let numbers = number_room(app, frame);
+    let offset = if numbers > 0.0 {
+        FOLD_NUMBERED_OFFSET
+    } else {
+        FOLD_OFFSET
+    };
+    numbers.max(offset + FOLD_HIT_RADIUS)
 }
 
 /// 标题指示条左边离预览区域左边至少的距离（逻辑像素）。
@@ -1022,8 +1069,8 @@ fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f32) {
         return;
     };
     // 可编辑的预览在正文左侧显示原文行号，指示条位于行号左侧。
-    let numbers = number_room(app, frame);
-    if laid.left - numbers - area.x < TOC_ROOM {
+    let gutter = toc_gutter(app, frame);
+    if laid.left - gutter - area.x < TOC_ROOM {
         return;
     }
     // 各标题：（级别，文字，所在顶层块的上边缘，块高）。
@@ -1073,7 +1120,7 @@ fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f32) {
     let room = (area.h - pad * 2.0).max(0.0);
     let step = (room / headings.len() as f32).clamp(TOC_BAR + 2.0, TOC_STEP);
     let shown = ((room / step).floor() as usize).min(headings.len());
-    let x0 = (laid.left - numbers - TOC_GAP - TOC_CURRENT).max(area.x + TOC_X);
+    let x0 = (laid.left - gutter - TOC_GAP - TOC_CURRENT).max(area.x + TOC_X);
     let y0 = area.y + pad;
     let left = laid.left;
     let width = laid.key.width;
@@ -1115,11 +1162,11 @@ fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f32) {
     // 钉住的列表靠着正文放在左侧留白里，右边与正文之间留 8，留白不够时变窄（标题省略）；
     // 窄于 [`TOC_PINNED_MIN`] 时收成指示条，不盖住正文。鼠标停留展开时卡片在指示条处展开、
     // 盖住指示条，不超出预览的左边。
-    // 可编辑的预览在正文左侧写原文行号：钉住的列表放在行号左边，不盖住行号。
-    let edge = left - numbers - 8.0;
+    // 钉住的列表放在行号和折叠箭头左边，不遮挡它们。
+    let edge = left - gutter - 8.0;
     let room = (edge - (area.x + 4.0)).max(0.0);
     // 正文过渡期间按过渡结束后的位置判断能否容纳列表；取消钉住时按过渡开始前的位置。
-    let fits_at = |left: f32| left - numbers - 8.0 - (area.x + 4.0) >= TOC_PINNED_MIN;
+    let fits_at = |left: f32| left - gutter - 8.0 - (area.x + 4.0) >= TOC_PINNED_MIN;
     let fits = fits_at(app.preview.markdown.toc_left);
     let fitted = app.preview.markdown.toc_slide.is_some_and(fits_at);
     let stays = pinned && fits;

@@ -126,6 +126,7 @@ impl App {
     ///
     /// 命令面板即预填 `>` 的快速打开；删除 `>` 后回到文件列表。
     pub(in crate::app) fn open_palette(&mut self) {
+        self.overlays.picker.notebook = None;
         self.finish_name_input();
         self.overlays.picker.places = None;
         self.overlays.picker.branch_rows = None;
@@ -159,7 +160,9 @@ impl App {
 
     /// 是否正在列出命令，即输入框以 `>` 开头且不在「位置」、分支、最近目录等列表中。
     pub(crate) fn picker_lists_commands(&self) -> bool {
-        self.overlays.picker.places.is_none()
+        self.overlays.picker.notebook.is_none()
+            && self.overlays.picker.property.is_none()
+            && self.overlays.picker.places.is_none()
             && !self.picker_lists_branches()
             && !self.picker_lists_locations()
             && !self.overlays.picker.folders

@@ -101,15 +101,16 @@ fn the_full_preview_edits_the_document() {
         "{}",
         after_caret(&app, 12)
     );
-    // 继续向下：越过块间留白到达下一个标题（保持横坐标，落在该行末尾），
-    // 不因留白高于一行而停在原处或跳到文末。
-    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
-    paint(&mut app);
-    assert!(
-        after_caret(&app, 5).starts_with("\n\n1. "),
-        "{:?}",
-        after_caret(&app, 8)
-    );
+    // 继续向下：先到空行，再到标题末尾。即使标题前的间距较大也只前进一行。
+    for text in ["\n## 安装", "\n\n1. "] {
+        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
+        paint(&mut app);
+        assert!(
+            after_caret(&app, 12).starts_with(text),
+            "{:?}",
+            after_caret(&app, 12)
+        );
+    }
     // ⇧↑ 扩展选区。
     app.pointer.modifiers = winit::keyboard::ModifiersState::SHIFT;
     assert!(app.markdown_key(&Key::Named(NamedKey::ArrowUp), false));
@@ -337,6 +338,222 @@ fn enter_in_the_preview_continues_lists_and_splits_paragraphs() {
     put_caret(&mut app, "code", true);
     assert!(!app.markdown_key(&enter, false));
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn repeated_enter_moves_the_visible_caret_down_one_row_at_a_time() {
+    use winit::keyboard::{Key, NamedKey};
+    for (name, source) in [
+        ("between", "第一段\n\n第二段\n"),
+        ("end", "第一段"),
+        ("empty", ""),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-multiple-enter-{name}"), source);
+        if !source.is_empty() {
+            put_caret(&mut app, "第一段", true);
+        }
+        let y = |app: &App| {
+            app.preview
+                .markdown
+                .layout
+                .as_ref()
+                .unwrap()
+                .caret_point(app.live_caret_source().unwrap())
+                .map_or(
+                    app.preview.markdown.layout.as_ref().unwrap().pad,
+                    |(_, y, _)| y,
+                )
+        };
+        let mut above = y(&app);
+        for n in 1..=3 {
+            assert!(app.markdown_key(&Key::Named(NamedKey::Enter), false));
+            settle(&mut app);
+            assert!(
+                y(&app) > above + 5.0,
+                "{name}, Enter {n}: {} <= {above}",
+                y(&app)
+            );
+            above = y(&app);
+        }
+        let before = doc_text(&app);
+        let backspace = Key::Named(NamedKey::Backspace);
+        if !app.markdown_key(&backspace, false) {
+            app.run(winc_editor::Command::Backspace { word: false });
+        }
+        settle(&mut app);
+        assert_eq!(doc_text(&app).len() + 1, before.len());
+        assert!(y(&app) < above - 5.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn intentional_blank_rows_stay_visible_after_leaving_the_gap_and_reopening() {
+    use winit::keyboard::{Key, NamedKey};
+    let (mut app, dir) = live_doc("md-keep-blank-rows", "第一段\n\n第二段\n");
+    let second = |app: &App| app.preview.markdown.layout.as_ref().unwrap().tops[1];
+    let original = second(&app);
+    put_caret(&mut app, "第一段", true);
+    for _ in 0..3 {
+        assert!(app.markdown_key(&Key::Named(NamedKey::Enter), false));
+        settle(&mut app);
+    }
+    let expanded = second(&app);
+    put_caret(&mut app, "第二段", true);
+    let still_expanded = second(&app);
+    assert!(
+        still_expanded > original + 30.0,
+        "extra blank lines disappeared on leaving the gap"
+    );
+    assert!(
+        (expanded - still_expanded).abs() < 1.0,
+        "the following paragraph moved when the caret left"
+    );
+    let id = app.editor.active().unwrap().id;
+    assert!(app.save_document(id, None));
+    let path = dir.join("LIVE.md");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "第一段\n\n\n\n\n\n第二段\n"
+    );
+    let mut reopened = app_with(&path, false);
+    paint(&mut reopened);
+    reopened.set_preview_mode(PreviewMode::Preview);
+    settle(&mut reopened);
+    assert!((second(&reopened) - still_expanded).abs() < 1.0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn click_and_vertical_arrows_reach_each_blank_row() {
+    use winit::keyboard::{Key, NamedKey};
+    for (name, eol) in [("lf", "\n"), ("crlf", "\r\n")] {
+        let source = format!("甲{}乙", eol.repeat(4));
+        let (mut app, dir) = live_doc(&format!("md-click-blank-{name}"), &source);
+        let gap = |app: &App| {
+            let laid = app.preview.markdown.layout.as_ref().unwrap();
+            (laid.tops[0] + laid.blocks[0].1.height, laid.tops[1])
+        };
+        let (top, bottom) = gap(&app);
+        let first = "甲".len();
+        for row in 0..3 {
+            put_caret(&mut app, "乙", false);
+            let laid = app.preview.markdown.layout.as_ref().unwrap();
+            let x = laid.left + 45.0;
+            let y = app.preview.markdown.area.y + laid.pad - app.preview.markdown.scroll()
+                + top
+                + (bottom - top) * (row as f32 + 0.5) / 3.0;
+            super::click(&mut app, (x, y));
+            settle(&mut app);
+            let expected = first + eol.len() * (row + 1);
+            assert_eq!(app.live_caret_source(), Some(expected), "{name} row {row}");
+            let laid = app.preview.markdown.layout.as_ref().unwrap();
+            assert!(laid.caret_point(expected).is_some());
+            assert!((gap(&app).1 - bottom).abs() < 1.0, "body jumped");
+        }
+        put_caret(&mut app, "甲", true);
+        for pos in (1..=3)
+            .map(|row| first + row * eol.len())
+            .chain([source.len()])
+        {
+            assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
+            settle(&mut app);
+            assert_eq!(app.live_caret_source(), Some(pos), "{name} Down");
+        }
+        for pos in (1..=3).rev().map(|row| first + row * eol.len()) {
+            assert!(app.markdown_key(&Key::Named(NamedKey::ArrowUp), false));
+            settle(&mut app);
+            assert_eq!(app.live_caret_source(), Some(pos), "{name} Up");
+        }
+        assert_eq!(doc_text(&app), source);
+        app.run(winc_editor::Command::Insert("新".into()));
+        let mut expected = source.clone();
+        expected.insert(first + eol.len(), '新');
+        assert_eq!(doc_text(&app), expected);
+        app.run(winc_editor::Command::Undo);
+        assert_eq!(doc_text(&app), source);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn blank_rows_at_document_edges_and_after_properties_are_clickable() {
+    const HEADER: &str = "---\nstatus: draft\n---\n";
+    for (name, source, offsets) in [
+        ("leading", "\n\n\n# 乙".to_owned(), [0, 1, 2]),
+        ("trailing", "甲\r\n\r\n\r\n".to_owned(), [5, 7, 9]),
+        (
+            "properties",
+            format!("{HEADER}\n \n\n# 乙"),
+            [HEADER.len(), HEADER.len() + 1, HEADER.len() + 3],
+        ),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-blank-{name}"), &source);
+        let mut previous_y = 0.0;
+        for offset in offsets {
+            let laid = app.preview.markdown.layout.as_ref().unwrap();
+            let (_, top, h) = laid
+                .caret_point(offset)
+                .expect("each blank row has a caret box");
+            let y = app.preview.markdown.area.y - app.preview.markdown.scroll() + top + h / 2.0;
+            assert!(y > previous_y);
+            previous_y = y;
+            let x = laid.left + 32.0;
+            super::click(&mut app, (x, y));
+            settle(&mut app);
+            assert_eq!(app.live_caret_source(), Some(offset), "{name}");
+        }
+        assert_eq!(doc_text(&app), source);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn shift_enter_keeps_a_visible_line_break_when_the_note_is_reopened() {
+    use winc_editor::Command;
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
+    let enter = Key::Named(NamedKey::Enter);
+    for (name, prefix, continuation) in [
+        ("paragraph", "", ""),
+        ("list", "- ", "  "),
+        ("quote", "> ", "> "),
+        ("nested-continuation", "- 先写一行\n  ", "  "),
+    ] {
+        let source = format!("{prefix}甲乙\n");
+        let (mut app, dir) = live_doc(&format!("md-hard-break-{name}"), &source);
+        put_caret(&mut app, "甲", true);
+        app.pointer.modifiers = ModifiersState::SHIFT;
+        assert!(app.markdown_key(&enter, false));
+        app.pointer.modifiers = ModifiersState::empty();
+        let expected = format!("{prefix}甲  \n{continuation}乙\n");
+        assert_eq!(doc_text(&app), expected, "{name}");
+        assert!(with_caret(&app).contains(&format!("{continuation}|乙")));
+        app.run(Command::Undo);
+        assert_eq!(doc_text(&app), source, "{name}");
+        app.run(Command::Redo);
+        assert_eq!(doc_text(&app), expected, "{name}");
+        let id = app.editor.active().unwrap().id;
+        assert!(app.save_document(id, None));
+        let path = dir.join("LIVE.md");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+        let mut reopened = app_with(&path, false);
+        paint(&mut reopened);
+        reopened.set_preview_mode(PreviewMode::Preview);
+        settle(&mut reopened);
+        let shown = crate::app::preview::markdown::laid::full_text(&reopened).unwrap();
+        assert!(shown.contains("甲\n乙"), "{name}: {shown:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
+fn enter_at_an_existing_crlf_break_splits_the_paragraph_without_a_stray_lf() {
+    use winit::keyboard::{Key, NamedKey};
+    let (mut app, dir) = live_doc("md-enter-crlf", "第一行\r\n第二行\r\n");
+    put_caret(&mut app, "第一行", true);
+    assert!(app.markdown_key(&Key::Named(NamedKey::Enter), false));
+    assert_eq!(with_caret(&app), "第一行\r\n\r\n|第二行\r\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

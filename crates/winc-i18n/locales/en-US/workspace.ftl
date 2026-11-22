@@ -79,7 +79,80 @@ workspace-open-folder-new-window = New Window
 ## Start page
 
 workspace-start-settings = Settings
-workspace-start-new-file = New File
+workspace-start-new-file = New Note
+properties-title = Properties
+properties-date-display = { $iso }
+properties-calendar-month = { $iso }
+properties-weekdays = Su|Mo|Tu|We|Th|Fr|Sa
+properties-today = Today
+properties-clear = Clear
+properties-invalid-value = This value does not match the property type
+properties-choice-placeholder = Find or create an option…
+properties-choice-caption = Select or create an option
+properties-choice-empty = Type a name to create the first option
+properties-choice-create = ＋  Create “{ $name }”
+properties-add = Add property
+properties-edit = Edit property
+properties-name = Name
+properties-name-placeholder = e.g. Author
+properties-type = Type
+properties-value = Value
+properties-options = Options
+properties-apply = Apply
+properties-text = Text
+properties-number = Number
+properties-checkbox = Checkbox
+properties-date = Date
+properties-url = URL
+properties-list = Text list
+properties-select = Select
+properties-multi-select = Multi-select
+properties-check = Check
+properties-uncheck = Uncheck
+properties-unsupported-value = Complex YAML (preserved)
+properties-cannot-edit = This change cannot be safely applied to the existing YAML.
+
+workspace-library-home = Home
+workspace-notebook-search = Search
+workspace-note-links-loading = Loading note links…
+workspace-note-backlinks = References to this note
+workspace-note-backlink-count = { $notes } notes · { $links } references
+workspace-note-citation-changed = This reference moved. Open the note to find it.
+workspace-note-view-graph = View relationships
+workspace-note-graph = Relationship graph
+workspace-note-graph-search = Find a note in the graph…
+workspace-note-graph-search-keys = ↑ ↓  Select      ↵  Focus in graph      Esc  Close
+workspace-note-link-choose = Choose a note for this link…
+workspace-note-graph-fit = Fit
+workspace-note-graph-isolated = Show isolated
+workspace-note-graph-empty = No linked notes to show
+workspace-notebook-outline-open = Open a note to see its outline
+workspace-notebook-outline-empty = This note has no headings yet
+workspace-notebook-search-placeholder = Search note titles or contents…
+workspace-notebook-titles-only = Titles only
+workspace-notebook-search-results = Search results
+workspace-notebook-search-empty = No matching notes
+workspace-notebook-search-keys = ↑ ↓  Select      ↵  Open      Esc  Close
+workspace-notebook-search-limited = Some content was skipped in long notes or large libraries
+workspace-library-up = Up One Level
+workspace-library-refresh = Refresh
+workspace-library-refreshing = Refreshing…
+workspace-library-refreshed = Home refreshed
+workspace-library-notes = My Documents
+workspace-add-notebook = Open Folder…
+workspace-switch-notebook = Switch Workspace
+workspace-forget-notebook = Remove from Workspace List
+workspace-library-folder = Folder
+workspace-library-count =
+    { $count ->
+        [1] 1 item
+       *[other] { $count } items
+    }
+workspace-library-blank = Blank note
+workspace-library-create-failed = Could not create the note: { $error }
+workspace-library-loading = Loading notes…
+workspace-library-empty = No Markdown notes or folders here yet.
+workspace-library-failed = Could not read folder: { $error }
 workspace-start-open = Open File or Folder
 workspace-start-open-file = Open File
 workspace-start-open-folder = Open Folder
@@ -485,6 +558,7 @@ workspace-disk-conflicts = { $names } changed on disk and conflict with unsaved 
 
 ## Closing
 
+workspace-notebook-switch-unsaved = Could not switch documents. Save “{ $name }” first.
 workspace-close-save-one = Do you want to save the changes you made to “{ $name }”?
 workspace-close-save-detail = Your changes will be lost if you don’t save them.
 workspace-close-save = Save

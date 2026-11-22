@@ -505,6 +505,14 @@ impl App {
     /// 两段正文合并为一段。有选区、有多个光标、位于代码块等块中、或光标前还有文字时返回
     /// `false`，按普通删除处理。
     pub(super) fn live_backspace(&mut self) -> bool {
+        if let Some(start) = self.property_body_start()
+            && self
+                .editor
+                .active()
+                .is_some_and(|doc| doc.selection.is_empty() && doc.selection.head <= start)
+        {
+            return true;
+        }
         if let Some(done) = self.live_fenced_backspace() {
             return done;
         }
@@ -531,6 +539,10 @@ impl App {
                 return false;
             }
             let blank = |l: usize| rope.line(l).chars().all(char::is_whitespace);
+            if before.is_empty() && blank(line) && blank(line - 1) {
+                // On a run of empty rows, ordinary Backspace removes just one line ending.
+                return false;
+            }
             let to = rope.byte_to_char(caret);
             let from = if !blank(line - 1) {
                 // 同一段的续行：没有缩进时按普通删除合并两行。

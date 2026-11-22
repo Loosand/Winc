@@ -36,9 +36,29 @@ pub(in crate::view) fn draw_outline(app: &mut App, frame: &mut Frame<'_>) {
         return;
     }
     app.sync_outline(std::time::Instant::now());
-    app.reveal_outline_current();
     let p = app.palette;
     let clip = app.layout.sidebar.intersect(section);
+    if app.panels.sidebar.view == crate::layout::SidebarView::Outline {
+        let header = app.outline_header();
+        let text = t!("workspace-outline-title");
+        let x = header.x + (header.w - frame.measure(FontKind::Ui, app.fonts.ui, text)) / 2.0;
+        ui_text(frame, app, x, header, text, p.text_muted, clip);
+        let list = app.outline_list();
+        let mut hits = Vec::new();
+        if let Some(empty) = app.panels.outline.empty {
+            let message = if matches!(empty, OutlineEmpty::NoFile) {
+                t!("workspace-notebook-outline-open")
+            } else {
+                t!("workspace-notebook-outline-empty")
+            };
+            draw_empty_state(app, frame, (list, list), message, None);
+        } else {
+            draw_note_headings(app, frame, list, &mut hits);
+        }
+        app.hits.outline = hits;
+        return;
+    }
+    app.reveal_outline_current();
     // 文件树滚到底时最后几行延伸到大纲下方：先铺侧栏底色遮住它们，再画分隔线。
     frame.rect_clipped(section, p.sidebar_bg, 0.0, clip);
     frame.rect_clipped(
@@ -114,6 +134,100 @@ pub(in crate::view) fn draw_outline(app: &mut App, frame: &mut Frame<'_>) {
         }
     }
     app.hits.outline = hits;
+}
+
+fn draw_note_headings(
+    app: &mut App,
+    frame: &mut Frame<'_>,
+    list: Rect,
+    hits: &mut Vec<(Rect, OutlineTarget)>,
+) {
+    use crate::app::workspace::outline::{HeadingLayout, HeadingRow};
+    let size = app.fonts.ui;
+    let line_height = (size * 1.55).ceil();
+    let outline = &mut app.panels.outline;
+    if outline
+        .heading_layout
+        .as_ref()
+        .is_none_or(|l| l.width != list.w || l.size != size)
+    {
+        let mut top = 5.0;
+        let rows = outline
+            .items
+            .iter()
+            .map(|item| {
+                let inset = 17.0 + item.depth as f32 * 16.0;
+                let width = (list.w - inset - 17.0).max(1.0);
+                let lines: Vec<_> = crate::layout::wrap_text(&item.name, width, |s| {
+                    frame.measure(FontKind::Ui, size, s)
+                })
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+                let height = lines.len().max(1) as f32 * line_height + 7.0;
+                let row = HeadingRow {
+                    inset,
+                    top,
+                    height,
+                    lines,
+                };
+                top += height;
+                row
+            })
+            .collect();
+        outline.heading_layout = Some(HeadingLayout {
+            width: list.w,
+            size,
+            height: top + 12.0,
+            rows,
+        });
+    }
+    app.reveal_outline_current();
+    let max = app.outline_max_scroll();
+    app.panels.outline.scroll = app.panels.outline.scroll.clamp(0.0, max);
+    let scroll = drawn_scroll(app.panels.outline.scroll);
+    let layout = app.panels.outline.heading_layout.as_ref().unwrap();
+    let active = app.outline_highlight(&app.outline_rows());
+    let first = layout
+        .rows
+        .partition_point(|row| row.top + row.height <= scroll);
+    let p = app.palette;
+    for (i, row) in layout.rows.iter().enumerate().skip(first) {
+        let y = list.y + row.top - scroll;
+        if y >= list.bottom() {
+            break;
+        }
+        let band = Rect::new(list.x + 8.0, y, (list.w - 16.0).max(0.0), row.height);
+        let selected = active == Some(i);
+        let hovered = app.pointer.hover == Hover::Outline(OutlineTarget::Row(i));
+        if let Some(color) = row_color(p, selected, app.focus == Focus::Outline, hovered) {
+            frame.rect_clipped(band.inset(0.0, 1.0), color, RADIUS_ROW, list);
+        }
+        let x = list.x + row.inset;
+        for (line_no, line) in row.lines.iter().enumerate() {
+            let line_y = y + 3.5 + line_no as f32 * line_height;
+            let r = Rect::new(x, line_y, (list.right() - x - 12.0).max(0.0), line_height);
+            ui_text(
+                frame,
+                app,
+                x,
+                r,
+                line,
+                if selected { p.text } else { p.text_muted },
+                list,
+            );
+        }
+        hits.push((band.intersect(list), OutlineTarget::Row(i)));
+    }
+    draw_scrollbar(
+        app,
+        frame,
+        ScrollArea::Outline,
+        0,
+        list,
+        app.panels.outline.scroll,
+        layout.height,
+    );
 }
 
 /// 绘制标题行右端的「全部折叠」（有展开着的符号时）或「全部展开」按钮。

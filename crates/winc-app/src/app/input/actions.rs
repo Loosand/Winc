@@ -88,6 +88,8 @@ impl App {
                     && self.overlays.picker.remote.is_none()
                 {
                     self.close_picker();
+                } else if self.notebook_sidebar() {
+                    self.open_notebook_search();
                 } else {
                     self.open_picker();
                 }
@@ -251,6 +253,9 @@ impl App {
             MarkdownImage => self.markdown_link(true),
             MarkdownFocusMode => self.settings_toggle(crate::layout::Setting::MarkdownFocus),
             MarkdownPastePlain => self.paste_plain(),
+            MarkdownCopy => {
+                self.copy_note_selection(true);
+            }
             MarkdownTypewriterMode => {
                 self.settings_toggle(crate::layout::Setting::MarkdownTypewriter);
             }
@@ -371,6 +376,7 @@ impl App {
                 }
                 self.press_search_button(SearchButton::Filter);
             }
+            FindInFiles if self.notebook_sidebar() => self.open_notebook_search(),
             FindInFiles => self.open_global_search(false),
             ReplaceInFiles => self.open_global_search(true),
             ReplaceAllInFiles => self.ask_replace_all(),
@@ -536,11 +542,14 @@ impl App {
     pub(in crate::app) fn action_available(&self, action: Action) -> bool {
         match action {
             Action::RunConfiguration if self.editor.root().is_none() => return false,
+            Action::AddFolder if self.writing_workspace() => return false,
             // 只有打开的目录还不是仓库时才能初始化。
             Action::GitInit if self.editor.root().is_none() || self.git.root.is_some() => {
                 return false;
             }
             Action::StopConfiguration if !self.run_config_running() => return false,
+            Action::TogglePreview if !self.preview_switch_available() => return false,
+            Action::ChangeLanguageMode if !self.can_change_language() => return false,
             // 写作命令只在编辑 Markdown 时可用；其余位置同一个键执行其他命令。专注、打字机模式
             // 不受 `markdown.shortcuts` 影响。
             Action::MarkdownFocusMode | Action::MarkdownTypewriterMode => {
@@ -627,6 +636,7 @@ impl App {
         }
         self.focus = match self.panels.sidebar.view {
             SidebarView::Files => Focus::Tree,
+            SidebarView::Outline => Focus::Outline,
             SidebarView::Search => Focus::GlobalQuery,
             SidebarView::Commit => self.commit_view_focus(),
         };

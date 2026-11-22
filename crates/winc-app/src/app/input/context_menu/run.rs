@@ -29,6 +29,47 @@ impl App {
 
         match menu.target {
             MenuTarget::Tree(path) => self.run_tree_command(command, path),
+            MenuTarget::NotebookWorkspaces(roots) => match command {
+                MenuCommand::AddNotebookWorkspace => self.pick(Pick::OpenFolder),
+                MenuCommand::SwitchNotebookWorkspace(i) => {
+                    if let Some(path) = roots.get(i) {
+                        if winc_backend::fs::is_dir(path) {
+                            self.switch_folder(path);
+                        } else {
+                            self.flash(t!(
+                                "workspace-folder-missing",
+                                path = path.display().to_string()
+                            ));
+                        }
+                    }
+                }
+                MenuCommand::ForgetNotebookWorkspace(i) => {
+                    if let Some(path) = roots
+                        .get(i)
+                        .filter(|path| self.library_root() != Some(path.as_path()))
+                    {
+                        self.update_state(|state| {
+                            state.notebook_workspaces.retain(|folder| folder != path)
+                        });
+                    }
+                }
+                MenuCommand::NewFile
+                | MenuCommand::Reveal
+                | MenuCommand::CopyPath
+                | MenuCommand::CloseFolder => {
+                    if self.library_root() == roots.first().map(PathBuf::as_path) {
+                        if command == MenuCommand::NewFile {
+                            if let Some(ws) = &mut self.editor.workspace {
+                                ws.select(None);
+                            }
+                            self.panels.sidebar.documents_closed = false;
+                            self.show_files();
+                        }
+                        self.run_tree_command(command, None);
+                    }
+                }
+                _ => {}
+            },
             MenuTarget::Tab(id) => self.run_tab_command(command, id),
             MenuTarget::CommitFile(path) => self.run_commit_file_command(command, path),
             MenuTarget::LogCommit(oid) => self.run_log_commit_command(command, &oid),
@@ -102,7 +143,6 @@ impl App {
                     self.run(winc_editor::Command::SelectAll);
                 }
                 MenuCommand::SelectAll => self.markdown_select_all(),
-                MenuCommand::RevealSource => self.reveal_markdown_source(),
                 MenuCommand::TextWidth(i) => {
                     if let Some(&width) = winc_config::TextWidth::ALL.get(i) {
                         self.set_text_width(width);
@@ -116,6 +156,14 @@ impl App {
                 }
                 MenuCommand::ImageWidth(percent) => self.resize_image_to(percent),
                 MenuCommand::PastePlain => self.paste_plain(),
+                MenuCommand::PropertyType(_) => {
+                    if let Some(doc) = self.editor.active() {
+                        self.run_property_menu(doc.id, doc.revision, None, command);
+                    }
+                }
+                MenuCommand::CopyMarkdown => {
+                    self.copy_note_selection(true);
+                }
                 MenuCommand::OpenImage => {
                     if let Some(path) = self.preview.markdown.menu_picture.take() {
                         self.open_path(&path);
@@ -123,6 +171,7 @@ impl App {
                 }
                 _ => {}
             },
+            MenuTarget::NoteProperty(menu) => self.select_property_menu(menu, command),
             MenuTarget::Terminal(block) => self.run_terminal_command(command, block),
             MenuTarget::TerminalTab(id) => {
                 let Some(index) = self.terminal.tabs.iter().position(|t| t.id == id) else {
@@ -448,6 +497,7 @@ impl App {
                 // 右键时已选中了那一行（空白处则取消选中），新建的位置由选中的行决定。
                 self.start_new_entry(command == MenuCommand::NewFolder);
             }
+            MenuCommand::CloseFolder if target == root => self.close_folder(),
             MenuCommand::AddFolder => self.ask_add_folder(),
             MenuCommand::RemoveFolder => self.remove_folder(&target),
             MenuCommand::Reveal => self.reveal_in_file_manager(&target),
@@ -560,6 +610,11 @@ impl App {
             MenuCommand::GitRollbackFile => {
                 if let Some(path) = path {
                     self.confirm_rollback(vec![path]);
+                }
+            }
+            MenuCommand::ViewNoteGraph => {
+                if let Some(path) = path.filter(|path| self.note_in_library(path)) {
+                    self.open_note_graph(Some(path));
                 }
             }
             MenuCommand::Close => self.close_tab(index),

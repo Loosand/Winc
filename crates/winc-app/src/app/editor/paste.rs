@@ -123,16 +123,20 @@ impl App {
         let files = self.clipboard_files();
         if !files.is_empty() {
             self.paste_files(&files);
-        } else if let Some(text) = self.clipboard_text() {
-            // 网址和表格单元格的改写（`markdown_paste`）优先于 HTML 的转换。
-            let markdown = match self.markdown_paste(&text) {
-                Some(markdown) => Some(markdown),
-                None => self.markdown_html_paste(),
-            };
-            match markdown {
-                Some(markdown) => self.run(Command::Insert(markdown)),
-                None => self.paste_text(text),
-            }
+            return;
+        }
+        let text = self.clipboard_text();
+        // Preserve link-over-selection, then prefer real HTML structure over plain-text TSV.
+        let markdown = text
+            .as_deref()
+            .and_then(|text| self.markdown_url_paste(text))
+            .or_else(|| {
+                self.markdown_html_paste(text.as_deref().is_some_and(|text| !text.is_empty()))
+            });
+        if let Some(markdown) = markdown {
+            self.run(Command::Insert(markdown));
+        } else if let Some(text) = text.filter(|text| !text.is_empty()) {
+            self.paste_text(text);
         } else if let Some(png) = self.clipboard_png() {
             self.paste_image(&png);
         }

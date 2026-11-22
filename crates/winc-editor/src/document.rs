@@ -156,6 +156,10 @@ impl TableView {
 /// 阅读标签的内容：由界面在后台取回，取回之前和未能取回时编辑区显示相应的说明。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reading {
+    /// 由界面绘制的笔记库主页，不对应磁盘上的文件。
+    Library,
+    /// 由界面绘制的笔记关系图谱，不对应磁盘上的文件。
+    NoteGraph,
     /// 正在取回。
     Loading,
     /// 已取回的 Markdown 原文，排版后显示。

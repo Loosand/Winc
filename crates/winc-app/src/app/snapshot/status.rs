@@ -9,6 +9,51 @@ use crate::app::status::motion::STATUS_SLIDE;
 use std::time::Duration;
 
 #[test]
+fn all_pages_use_the_window_margin_by_default() {
+    let dir = sample_folder("status-bottom-margin");
+    let note = dir.join("note.md");
+    std::fs::write(&note, "# Note\n\nA paragraph.\n").unwrap();
+    let mut app = blank_app(false);
+    app.panels.sidebar.legacy_chrome = false;
+    app.store.state_path = Some(dir.join("state.json"));
+    let check = |app: &mut App| {
+        paint(app);
+        assert!(app.hits.status.is_empty());
+        assert_eq!(app.layout.status.h, ISLAND_MARGIN);
+        assert_eq!(
+            app.layout.window.bottom() - app.layout.editor.bottom(),
+            ISLAND_MARGIN
+        );
+        assert_eq!(
+            app.layout.window.bottom() - app.layout.sidebar.bottom(),
+            ISLAND_MARGIN
+        );
+    };
+
+    assert!(!app.switch_on(Setting::StatusBar));
+    check(&mut app);
+    app.open_path(&dir);
+    assert!(app.library_shown());
+    check(&mut app);
+    app.open_note_graph(None);
+    assert!(app.note_graph_shown());
+    check(&mut app);
+    app.open_path(&note);
+    assert!(app.editor.active().unwrap().path.is_some());
+    check(&mut app);
+
+    app.flash("Copied");
+    assert_eq!(app.notice.text.as_deref(), Some("Copied"));
+    check(&mut app);
+
+    app.config.status_bar = Some(true);
+    assert!(app.switch_on(Setting::StatusBar));
+    paint(&mut app);
+    assert_eq!(app.layout.status.h, STATUS_HEIGHT);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn the_settings_button_stays_at_the_right_end_of_the_status_bar() {
     let dir = sample_folder("status-settings");
     let mut app = app_with(&dir, false);

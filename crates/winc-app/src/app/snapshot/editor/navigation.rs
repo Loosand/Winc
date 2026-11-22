@@ -356,9 +356,9 @@ fn command_palette_runs_commands_and_remembers_them() {
     let installable = |a: &&crate::keymap::Action| {
         use crate::keymap::Action::{
             InstallShellCommand, MoveToSplitDown, MoveToSplitRight, NextPane, PreviousPane,
-            UninstallShellCommand, Unsplit,
+            TogglePreview, UninstallShellCommand, Unsplit,
         };
-        // 窗格的命令只在拆分过、或有不止一个标签时列出。
+        // Python 没有预览切换；窗格命令也只在有对应对象时列出。
         !a.markdown_only()
             && !matches!(
                 a,
@@ -369,6 +369,7 @@ fn command_palette_runs_commands_and_remembers_them() {
                     | PreviousPane
                     | MoveToSplitRight
                     | MoveToSplitDown
+                    | TogglePreview
             )
     };
     let always = (palette().iter())

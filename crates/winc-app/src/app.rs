@@ -341,6 +341,11 @@ pub enum UserEvent {
     Reread,
     /// 后台已重读文件树中被其他程序修改的目录。
     TreeScanned,
+    /// 本地笔记库的卡片读取完成。
+    LibraryScanned,
+    NotebookSearchScanned,
+    /// 笔记链接索引已在后台更新。
+    NoteLinksScanned,
     /// 后台已保存一个大文件。
     Saved,
     /// 后台已读取一个刚打开的文件。
@@ -489,8 +494,11 @@ pub enum Hover {
     PickerPart(PickerPart),
     ProjectName,
     SidebarButton,
+    Library(workspace::library::LibraryTarget),
+    NoteGraph(workspace::note_links::graph::Target),
     /// JSON 结构图的画布或按钮。
     Json(preview::json::Target),
+    NotebookNav(workspace::notebook::SidebarTarget),
     NewTab,
     /// 标签栏无法容纳全部标签时显示在最右端的「⌄」，用于列出全部标签。
     TabList,
@@ -700,6 +708,10 @@ enum Drag {
     Hex,
     /// 在 Markdown 预览中拖选文字（`App::drag_markdown`）。
     MarkdownText,
+    /// 拖动笔记关系图谱的画布。
+    NoteGraph {
+        at: (f32, f32),
+    },
     /// 拖动 JSON 结构图的画布。
     Json {
         at: (f32, f32),
@@ -905,6 +917,10 @@ pub struct App {
     pub key_path: status::breadcrumb::KeyPath,
     /// 侧栏及其中的面板：文件树、搜索、大纲，以及文件树中的重命名和拖入。
     pub(crate) panels: workspace::Panels,
+    /// 本地笔记库主页及卡片的状态。
+    pub(crate) library: workspace::library::Library,
+    /// 已保存笔记的链接索引和反链页尾状态。
+    pub(crate) note_links: workspace::note_links::State,
     /// 滚动的状态：滚轮与触控板的输入、平滑滚动的过渡、惯性滚动和滚动条的显示。
     pub(crate) scroll: scroll::ScrollState,
 
@@ -1087,6 +1103,9 @@ impl App {
             UserEvent::GitBlame => self.poll_blame(),
             UserEvent::Reread => self.poll_rereads(),
             UserEvent::TreeScanned => self.poll_tree_scans(),
+            UserEvent::LibraryScanned => self.poll_library(),
+            UserEvent::NotebookSearchScanned => self.poll_notebook_search(),
+            UserEvent::NoteLinksScanned => self.poll_note_links(),
             UserEvent::Saved => self.poll_saves(),
             UserEvent::Loaded => self.poll_loads(),
             UserEvent::Counted => self.poll_words(),
@@ -1170,6 +1189,7 @@ impl App {
         self.pointer.drag = Drag::None;
         self.pointer.close_pressed = None;
         self.pointer.control_pressed = None;
+        self.take_pressed_folder();
     }
 
     fn reset_blink(&mut self) {

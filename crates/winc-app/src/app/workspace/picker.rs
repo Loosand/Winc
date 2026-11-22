@@ -3,6 +3,7 @@
 //! 输入框内容以 `>` 开头时进入命令面板（见 `palette.rs`），以 `@` 开头时列出当前文件的符号。
 
 use super::*;
+use crate::app::preview::markdown::properties::popup::PropertyPopup;
 use crate::layout::PickerParts;
 
 /// 结果列表中一行的高度（逻辑像素）。
@@ -122,22 +123,49 @@ impl App {
     ///
     /// 文件表由 `picker_refresh` 在需要时建立；通常已在打开目录时由 `index_folder` 预先建好。
     pub(in crate::app) fn open_picker(&mut self) {
+        self.open_picker_mode(None);
+    }
+
+    pub(super) fn open_picker_mode(&mut self, notebook: Option<super::note_search::NoteSearch>) {
         if self.editor.root().is_none() {
             self.flash(winc_i18n::t!("workspace-open-folder-first"));
             return;
         }
 
+        self.start_picker(notebook, None);
+    }
+
+    pub(in crate::app) fn start_property_picker(&mut self, popup: PropertyPopup) {
+        self.start_picker(None, Some(popup));
+    }
+
+    fn start_picker(
+        &mut self,
+        notebook: Option<super::note_search::NoteSearch>,
+        property: Option<PropertyPopup>,
+    ) {
         self.finish_name_input();
+        self.hits.picker_parts.clear();
         self.overlays.picker.places = None;
+        self.overlays.picker.places_out = None;
         self.overlays.picker.branch_rows = None;
         self.overlays.picker.location_rows = None;
         self.overlays.picker.folders = false;
         self.overlays.picker.languages = false;
         self.overlays.picker.vim_list = None;
         self.overlays.picker.remote = None;
+        self.overlays.picker.notebook = notebook;
         self.overlays.picker.open = true;
         self.overlays.picker.doc = self.editor.active().map(|d| d.id);
-        self.overlays.picker.input.set_text("");
+        let value = property
+            .as_ref()
+            .filter(|p| !p.kind().is_choice())
+            .map_or("", |p| p.original.as_str());
+        self.overlays.picker.input.set_text(value);
+        if property.is_some() {
+            self.overlays.picker.input.select_all();
+        }
+        self.overlays.picker.property = property;
         self.overlays.picker.selected = 0;
         self.overlays.picker.scroll = 0.0;
         self.focus = Focus::Picker;
@@ -154,6 +182,8 @@ impl App {
         self.drop_symbols();
         self.overlays.picker.index.forget_query();
         self.overlays.picker.open = false;
+        self.overlays.picker.notebook = None;
+        self.overlays.picker.property = None;
         self.overlays.picker.branch_rows = None;
         self.overlays.picker.location_rows = None;
         self.overlays.picker.folders = false;
@@ -202,7 +232,10 @@ impl App {
         let target = self.layout.picker.h;
         // 位置浮窗和分支、位置选择器都依附于触发位置，筛选时高度直接到位：卡片边沿的滑动会使
         // 列表看起来在滚动。
-        if self.overlays.picker.places.is_some() || self.picker_is_git() {
+        if self.overlays.picker.places.is_some()
+            || self.picker_is_git()
+            || self.overlays.picker.property.is_some()
+        {
             self.overlays.picker.motion = None;
             self.overlays.picker.height = Some((target, size));
             return;
@@ -308,6 +341,14 @@ impl App {
         self.overlays.picker.selected = 0;
         self.overlays.picker.scroll = 0.0;
         self.overlays.picker.recent = 0;
+        if self.overlays.picker.property.is_some() {
+            self.refresh_property_picker();
+            return;
+        }
+        if self.overlays.picker.notebook.is_some() {
+            self.refresh_notebook_search();
+            return;
+        }
         if self.overlays.picker.places.is_some() {
             self.overlays.picker.goto = None;
             self.places_refresh();
@@ -463,7 +504,8 @@ impl App {
             return;
         }
 
-        let files = !self.picker_lists_commands()
+        let files = self.overlays.picker.property.is_none()
+            && !self.picker_lists_commands()
             && !self.picker_lists_symbols()
             && !self.picker_lists_branches()
             && !self.picker_lists_locations()
@@ -512,6 +554,9 @@ impl App {
             return;
         }
 
+        if let Some(search) = &mut self.overlays.picker.notebook {
+            search.keyboard_mouse = self.pointer.mouse;
+        }
         let last = self.overlays.picker.hits.len() - 1;
         self.overlays.picker.default = None;
         self.overlays.picker.selected = if self.picker_lists_branches() {
@@ -533,14 +578,19 @@ impl App {
 
     /// 滚动结果列表，使选中项进入可见范围。
     pub(in crate::app) fn picker_reveal(&mut self) {
-        let height = crate::app::workspace::picker::picker_span(self);
+        let parts = picker_parts(self, self.picker_rect());
+        let height = parts.list.h;
         if height <= 0.0 {
             return;
         }
 
-        let top = self.overlays.picker.selected as f32 * PICKER_ROW;
-        self.overlays.picker.scroll =
-            scroll_to_show(self.overlays.picker.scroll, top, top + PICKER_ROW, height);
+        let top = self.overlays.picker.selected as f32 * parts.row_height;
+        self.overlays.picker.scroll = scroll_to_show(
+            self.overlays.picker.scroll,
+            top,
+            top + parts.row_height,
+            height,
+        );
     }
 
     /// 确认选中项。
@@ -548,6 +598,14 @@ impl App {
     /// 文件列表中打开选中的文件（已有标签则切换过去，否则新开一个）；命令面板中执行选中的命令；
     /// 符号列表和位置列表中跳转到选中的位置；最近目录列表中打开选中的目录。
     pub(in crate::app) fn picker_accept(&mut self) {
+        if self.overlays.picker.property.is_some() {
+            self.accept_property_picker();
+            return;
+        }
+        if self.overlays.picker.notebook.is_some() {
+            self.accept_notebook_search();
+            return;
+        }
         if self.overlays.picker.places.is_some() {
             self.places_accept();
             return;
@@ -671,7 +729,11 @@ pub(crate) fn picker_span(app: &App) -> f32 {
 ///
 /// 绘制、点击和滚动都用这里的几何。
 pub(crate) fn picker_parts(app: &App, card: Rect) -> PickerParts {
-    if app.overlays.picker.places.is_some() {
+    if let Some(property) = &app.overlays.picker.property {
+        property.parts(card)
+    } else if let Some(search) = &app.overlays.picker.notebook {
+        super::note_search::search_parts(card, search.preview)
+    } else if app.overlays.picker.places.is_some() {
         PickerParts::places(card)
     } else if app.picker_is_git() {
         use crate::app::git::branch::picker::GIT_PICKER_ACTIONS;
@@ -696,6 +758,8 @@ pub struct Picker {
     pub(crate) doc: Option<DocumentId>,
     /// 快速打开面板中的查询输入。
     pub(crate) input: TextField,
+    pub(crate) notebook: Option<super::note_search::NoteSearch>,
+    pub(crate) property: Option<PropertyPopup>,
     /// 当前查询命中的文件索引下标。
     pub(crate) hits: Vec<usize>,
     /// 当前选中的结果在 `Picker::hits` 中的序号（从 0 起）。
@@ -760,6 +824,8 @@ impl Default for Picker {
             open: false,
             doc: None,
             input: TextField::default(),
+            notebook: None,
+            property: None,
             hits: Vec::new(),
             selected: 0,
             default: None,

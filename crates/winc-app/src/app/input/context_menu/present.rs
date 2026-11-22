@@ -131,8 +131,19 @@ impl App {
         let tab = self
             .tab_at(x, y)
             .and_then(|(index, _)| self.editor.documents.get(index));
-        let target = if let Some(doc) = tab {
+        let current_crumb = self.writing_workspace()
+            && crate::layout::hit(&self.hits.crumbs, x, y)
+                .is_some_and(|index| index + 1 == self.crumbs().len());
+        let document = tab.or_else(|| self.editor.active().filter(|_| current_crumb));
+        let target = if let Some(doc) = document {
             MenuTarget::Tab(doc.id)
+        } else if self.panels.sidebar.visible
+            && self
+                .notebook_folder_heading()
+                .is_some_and(|r| r.contains(x, y))
+        {
+            self.open_notebook_workspaces((x, y));
+            return;
         } else if self.panels.sidebar.visible
             && self.panels.sidebar.view == SidebarView::Files
             && (self.layout.tree.contains(x, y) || self.in_tree_overflow(x, y))
@@ -140,11 +151,14 @@ impl App {
         {
             let row = self.tree_row_at(y);
             let segment = row.and_then(|i| self.tree_segment_at(i, x));
+            let notebook = self.notebook_sidebar();
             let Some(ws) = &mut self.editor.workspace else {
                 return;
             };
             // 点在选区里的一行上时菜单作用于选中的各项，否则只选这一行。
-            if !row.is_some_and(|i| ws.is_selected(i)) {
+            if !row.is_some_and(|i| ws.is_selected(i))
+                || (notebook && row.is_some_and(|i| ws.is_folder_row(&ws.rows()[i].path)))
+            {
                 ws.select(row);
             }
             // 点在合并显示的一行上时，菜单作用于点中的那一级目录。
@@ -390,6 +404,31 @@ impl App {
                 self.add_folder_entries(&mut menu);
                 menu
             }
+            MenuTarget::NotebookWorkspaces(roots) => {
+                let mut menu = vec![
+                    MenuEntry::Item(MenuCommand::NewFile, true),
+                    MenuEntry::Item(MenuCommand::AddNotebookWorkspace, true),
+                    MenuEntry::Item(MenuCommand::Reveal, true),
+                    MenuEntry::Item(MenuCommand::CopyPath, true),
+                    MenuEntry::Item(MenuCommand::CloseFolder, true),
+                    MenuEntry::Separator,
+                    MenuEntry::Item(MenuCommand::NotebookWorkspaceList, false),
+                ];
+                menu.extend(
+                    (0..roots.len())
+                        .map(|i| MenuEntry::Item(MenuCommand::SwitchNotebookWorkspace(i), true)),
+                );
+                if roots.len() > 1 {
+                    menu.push(MenuEntry::Separator);
+                    menu.push(MenuEntry::Submenu(
+                        t!("workspace-forget-notebook").to_owned(),
+                        (1..roots.len())
+                            .map(|i| MenuEntry::Item(MenuCommand::ForgetNotebookWorkspace(i), true))
+                            .collect(),
+                    ));
+                }
+                menu
+            }
             MenuTarget::Tree(Some(_))
                 if self
                     .editor
@@ -409,16 +448,32 @@ impl App {
                 });
                 let kind = path.as_ref().filter(|_| folder.is_none()).and_then(|p| {
                     let ws = self.editor.workspace.as_ref()?;
-                    ws.row_of(p).map(|i| ws.rows()[i].kind)
+                    ws.row_of(p)
+                        .map(|i| ws.rows()[i].kind)
+                        .or_else(|| self.note_in_library(p).then_some(EntryKind::File))
                 });
                 let can_paste = self.can_paste_into_tree();
                 let remote = path.as_deref().is_some_and(winc_backend::is_remote);
                 let mut menu = tree_menu(kind, can_paste, remote);
+                if self.notebook_sidebar() {
+                    menu.retain(|entry| {
+                        !matches!(
+                            entry,
+                            MenuEntry::Item(
+                                MenuCommand::AddFolder
+                                    | MenuCommand::OpenInTerminal
+                                    | MenuCommand::FindInFolder,
+                                _
+                            )
+                        )
+                    });
+                }
                 if kind.is_none() {
                     menu.extend(self.folder_items(folder));
                 }
                 // Git 模块开着、文件在仓库里：最后加「显示文件历史」，有更改的文件再加暂存与回滚。
-                if let Some(path) = path.as_deref()
+                if !self.notebook_sidebar()
+                    && let Some(path) = path.as_deref()
                     && kind == Some(EntryKind::File)
                     && self.in_repo(path)
                 {
@@ -457,6 +512,17 @@ impl App {
                 }
                 menu
             }
+            MenuTarget::NoteProperty(menu) => {
+                let mut entries = self.property_menu(menu.index);
+                if !menu.options.is_empty() {
+                    entries.push(MenuEntry::Separator);
+                    entries.extend(
+                        (0..menu.options.len())
+                            .map(|i| MenuEntry::Item(MenuCommand::PropertyOption(i), true)),
+                    );
+                }
+                entries
+            }
             // 可编辑的预览：选区即文档的选区，剪切、复制、粘贴按编辑区的方式处理。
             MenuTarget::Markdown if self.markdown_live() => {
                 let selected = self
@@ -466,11 +532,19 @@ impl App {
                 let mut menu = vec![
                     MenuEntry::Item(MenuCommand::Cut, selected),
                     MenuEntry::Item(MenuCommand::Copy, selected),
+                    MenuEntry::Item(MenuCommand::CopyMarkdown, selected),
                     MenuEntry::Item(MenuCommand::Paste, true),
                     MenuEntry::Item(MenuCommand::PastePlain, true),
                     MenuEntry::Separator,
                     MenuEntry::Item(MenuCommand::SelectAll, true),
                 ];
+                if self.note_properties_available() {
+                    menu.push(MenuEntry::Separator);
+                    menu.push(MenuEntry::Submenu(
+                        t!("properties-add").into(),
+                        self.property_menu(None),
+                    ));
+                }
                 // 右键点击图片时提供「在新标签中打开图片」和「图片大小」，两项同在一组。
                 let (picture, image) = (
                     self.preview.markdown.menu_picture.is_some(),
@@ -501,11 +575,6 @@ impl App {
                     MenuEntry::Separator,
                     MenuEntry::Submenu(t!("menu-text-width").into(), text_width_menu()),
                     MenuEntry::Item(MenuCommand::MarkdownLineNumbers, true),
-                    MenuEntry::Separator,
-                    MenuEntry::Item(
-                        MenuCommand::RevealSource,
-                        self.preview.markdown.menu_source.is_some(),
-                    ),
                 ]);
                 menu
             }
@@ -520,26 +589,11 @@ impl App {
                         MenuEntry::Item(MenuCommand::OpenImage, true),
                     ]);
                 }
-                // docx、EPUB 的阅读视图由转换得到，阅读标签只有排版后的内容：都没有可以显示的
-                // 源代码。
-                let has_source = self
-                    .editor
-                    .active()
-                    .is_some_and(|d| d.unsupported.is_none() && d.reading.is_none());
                 menu.extend([
                     MenuEntry::Separator,
                     MenuEntry::Submenu(t!("menu-text-width").into(), text_width_menu()),
                     MenuEntry::Item(MenuCommand::MarkdownLineNumbers, true),
                 ]);
-                if has_source {
-                    menu.extend([
-                        MenuEntry::Separator,
-                        MenuEntry::Item(
-                            MenuCommand::RevealSource,
-                            self.preview.markdown.menu_source.is_some(),
-                        ),
-                    ]);
-                }
                 menu
             }
             MenuTarget::TerminalTab(id) => vec![
@@ -582,14 +636,33 @@ impl App {
                 } else {
                     1
                 };
-                let mut menu = tab_menu(
-                    span,
-                    selected,
-                    docs.len(),
-                    path.is_some(),
-                    path.is_some_and(|p| self.relative_path(p).is_some()),
-                    docs.iter().any(|d| !d.is_dirty()),
-                );
+                let relative = path.is_some_and(|p| self.relative_path(p).is_some());
+                let mut menu = if self.writing_workspace() && docs.len() == 1 {
+                    vec![
+                        MenuEntry::Item(MenuCommand::Close, true),
+                        MenuEntry::Separator,
+                        MenuEntry::Item(MenuCommand::CopyPath, path.is_some()),
+                        MenuEntry::Item(MenuCommand::CopyRelativePath, relative),
+                        MenuEntry::Separator,
+                        MenuEntry::Item(MenuCommand::Reveal, path.is_some()),
+                        MenuEntry::Item(MenuCommand::RevealInTree, relative),
+                    ]
+                } else {
+                    tab_menu(
+                        span,
+                        selected,
+                        docs.len(),
+                        path.is_some(),
+                        relative,
+                        docs.iter().any(|d| !d.is_dirty()),
+                    )
+                };
+                if selected == 1 && path.is_some_and(|path| self.note_in_library(path)) {
+                    menu.extend([
+                        MenuEntry::Separator,
+                        MenuEntry::Item(MenuCommand::ViewNoteGraph, true),
+                    ]);
+                }
                 let doc = &docs[index];
                 if doc.can_lock() && doc.shows_text() {
                     let command = MenuCommand::ReadOnly(!doc.is_locked());
@@ -931,6 +1004,18 @@ impl App {
     /// 状态栏缩进、行尾、编码菜单中当前使用的那一项打勾；「排除的语言」菜单中已被排除的语言打勾；
     /// 格式化工具菜单中当前使用的那一项打勾。
     pub(in crate::app) fn menu_checked(&self, command: MenuCommand) -> bool {
+        if let MenuCommand::SwitchNotebookWorkspace(i) = command {
+            return i == 0;
+        }
+        if let MenuCommand::PropertyOption(i) = command
+            && let Some(MenuTarget::NoteProperty(menu)) =
+                self.overlays.context_menu.as_ref().map(|m| &m.target)
+        {
+            return menu
+                .options
+                .get(i)
+                .is_some_and(|option| menu.chosen.contains(option));
+        }
         if let MenuCommand::ShowTab(i) = command {
             return self.editor.active == Some(i);
         }
@@ -1158,7 +1243,9 @@ impl App {
                 })
             }
             MenuCommand::OpenGroup(_) => Some(MenuIcon::Folders),
-            MenuCommand::GroupFolder(..) => Some(MenuIcon::Folder),
+            MenuCommand::GroupFolder(..) | MenuCommand::SwitchNotebookWorkspace(_) => {
+                Some(MenuIcon::Folder)
+            }
             MenuCommand::ShowTab(i) => self.editor.documents.get(i).map(|_| MenuIcon::Tab(i)),
             _ => None,
         }

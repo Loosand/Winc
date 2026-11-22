@@ -361,6 +361,7 @@ fn edits_refresh_the_outline_after_a_pause() {
 fn the_outline_explains_why_it_is_empty() {
     let dir = sample_folder("outline-empty");
     let mut app = app_with(&dir, false);
+    App::apply_preview_state(&mut app.editor, &app.state);
     app.run_action(Action::ShowOutline);
     paint(&mut app);
     assert_eq!(app.panels.outline.empty, Some(OutlineEmpty::NoFile));
@@ -381,8 +382,8 @@ fn the_outline_explains_why_it_is_empty() {
         .collect();
     assert_eq!(tree, [("Title", 0), ("Usage", 1), ("Build", 1)]);
 
-    // 切到 Markdown 的预览，再切到别的文件、切回来：在预览状态下重新提取，标题同样列出。
-    app.run_action(Action::TogglePreview);
+    // Markdown 一打开就是排版视图；切走再回来，标题同样列出。
+    assert!(app.markdown_live());
     assert!(app.editor.active().unwrap().edits_text());
     assert!(!app.editor.active().unwrap().shows_text());
     app.open_path(&text);

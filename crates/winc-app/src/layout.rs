@@ -485,6 +485,8 @@ pub enum Scrollbar {
     LogBranches,
     /// 终端面板的竖直滚动条（回滚缓冲）。
     Terminal,
+    /// Vertical scrollbar shared by the notebook and Reading card grids.
+    CardGrid,
     /// Markdown 预览的竖直滚动条。
     Markdown,
     /// Markdown 预览中比正文宽的表格的水平滚动条。

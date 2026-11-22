@@ -296,10 +296,17 @@ impl App {
 
     /// 处理焦点在编辑区时的按键：移动光标、翻页、换行、缩进、删除和键入。
     pub(in crate::app) fn on_key_editor(&mut self, event: &KeyEvent, cmd: bool) {
+        if self.card_grid_key(&event.logical_key, cmd) {
+            return;
+        }
         if self.editor.active.is_none() {
             if !event.repeat {
                 self.setup_key(&event.logical_key);
             }
+            return;
+        }
+        if self.note_graph_shown() {
+            self.note_graph_key(&event.logical_key, cmd);
             return;
         }
         if self.log_active() {

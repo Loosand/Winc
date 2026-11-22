@@ -36,9 +36,25 @@ impl App {
     /// - 没有选区时粘贴图片网址：`![](网址)`。
     /// - 粘贴表格单元格（见 `cells::from_tsv`）：单独成块的 GFM 表格。
     pub(in crate::app) fn markdown_paste(&self, content: &str) -> Option<String> {
+        self.markdown_url_paste(content).or_else(|| {
+            let doc = self.editor.active()?;
+            if !doc.selection.is_empty() || !content.contains('\t') {
+                return None;
+            }
+            let spot = self.prose_spot()?;
+            let table = winc_preview::markdown::cells::from_tsv(content)?;
+            Some(spot.block(&table))
+        })
+    }
+
+    /// Pasting a bare URL over a selection keeps using the selected words as the label.
+    pub(in crate::app) fn markdown_url_paste(&self, content: &str) -> Option<String> {
         let doc = self.editor.active()?;
         let is_url = super::writing::is_url;
         let url = content.trim();
+        if !is_url(url) {
+            return None;
+        }
         let rope = doc.text().rope()?;
         let chars = rope.len_chars();
         let (from, to) = (
@@ -46,19 +62,13 @@ impl App {
             doc.selection.to().min(chars),
         );
         let selected = rope.slice(from..to).to_string();
-        let table = winc_preview::markdown::cells::from_tsv(content).filter(|_| from == to);
-        let link = is_url(url)
-            && !selected.is_empty()
-            && !selected.contains(['\n', '`'])
-            && !is_url(selected.trim());
-        let image = is_url(url) && selected.is_empty() && super::writing::is_image_url(url);
-        if table.is_none() && !link && !image {
+        let link =
+            !selected.is_empty() && !selected.contains(['\n', '`']) && !is_url(selected.trim());
+        let image = selected.is_empty() && super::writing::is_image_url(url);
+        if !link && !image {
             return None;
         }
-        let spot = self.prose_spot()?;
-        if let Some(table) = table {
-            return Some(spot.block(&table));
-        }
+        self.prose_spot()?;
         let text = if image { "" } else { selected.as_str() };
         Some(winc_preview::markdown::paragraph::link(text, Some(url), image).0)
     }
@@ -66,14 +76,14 @@ impl App {
     /// 返回 Markdown 中粘贴剪贴板 HTML 时写成的 Markdown；HTML 没有结构时为 `None`。
     ///
     /// 只有一段文字时就地插入，有多块时单独成块。
-    pub(in crate::app) fn markdown_html_paste(&mut self) -> Option<String> {
+    pub(in crate::app) fn markdown_html_paste(&mut self, has_plain: bool) -> Option<String> {
         let spot = self.prose_spot()?;
         let html = self.clipboard.html()?;
         let converted = winc_preview::markdown::from_html::from_html(&html);
-        if !converted.rich {
+        let body = converted.text.trim_end();
+        if body.is_empty() || (!converted.rich && has_plain) {
             return None;
         }
-        let body = converted.text.trim_end();
         let starts_block = ["#", "- ", "> ", "|", "```", "---", "!["]
             .iter()
             .any(|p| body.starts_with(p))
@@ -84,6 +94,75 @@ impl App {
             true => Some(body.to_owned()),
             false => Some(spot.block(&converted.text)),
         }
+    }
+
+    /// Copy a single note selection without changing the note or caret.
+    pub(in crate::app) fn copy_note_selection(&mut self, markdown: bool) -> bool {
+        let Some(doc) = self.editor.active() else {
+            return false;
+        };
+        let Some(rope) = doc.text().rope() else {
+            return false;
+        };
+        let sel = doc.selection;
+        if doc.preview_kind() != Some(PreviewKind::Markdown) || sel.is_empty() || doc.has_cursors()
+        {
+            return false;
+        }
+        use winc_preview::markdown::clipboard;
+        let mut start = sel.from();
+        let mut end = sel.to();
+        let line = rope.char_to_line(start);
+        let literal = self.preview.markdown.checked == Some(doc.revision)
+            && self.preview.markdown.parsed.as_ref().is_some_and(|parsed| {
+                let from = rope.char_to_byte(start);
+                let to = rope.char_to_byte(end);
+                let i = parsed
+                    .leaves
+                    .partition_point(|leaf| leaf.range.start <= from);
+                i.checked_sub(1).is_some_and(|i| {
+                    let leaf = &parsed.leaves[i];
+                    !leaf.prose && !leaf.table && from < leaf.range.end && to <= leaf.range.end
+                })
+            });
+        let mut copied_run = None;
+        if !literal && rope.char_to_line(end) == line && rope.line(line).len_bytes() <= 32 * 1024 {
+            let offset = rope.line_to_byte(line);
+            let source = rope.line(line).to_string();
+            let range = rope.char_to_byte(start) - offset..rope.char_to_byte(end) - offset;
+            let expanded = clipboard::include_markers(&source, range.clone());
+            if !markdown && expanded == range {
+                copied_run = clipboard::formatted_run(&source, range);
+            }
+            start = rope.byte_to_char(offset + expanded.start);
+            end = rope.byte_to_char(offset + expanded.end);
+        }
+        let Some(source) = doc.text_range(start, end) else {
+            self.flash(winc_i18n::t!(
+                "editor-selection-too-large-to-copy",
+                size = winc_editor::COPY_LIMIT >> 20
+            ));
+            return true;
+        };
+        // Bound synchronous HTML conversion; large selections still copy the original source.
+        let written = if markdown || literal || source.len() > 512 * 1024 {
+            self.clipboard.set_text(source, false)
+        } else {
+            let (plain, html) = copied_run.unwrap_or_else(|| clipboard::formatted(&source));
+            if plain.is_empty() || !self.clipboard.set_formatted(html, plain.clone()) {
+                self.clipboard
+                    .set_text(if plain.is_empty() { source } else { plain }, false)
+            } else {
+                true
+            }
+        };
+        if written {
+            self.forget_remote_copy();
+            self.flash(winc_i18n::t!("editor-selection-copied"));
+        } else {
+            self.flash(winc_i18n::t!("editor-paste-clipboard-unavailable"));
+        }
+        true
     }
 
     /// 原样插入剪贴板中的文字，不改写为 Markdown 的写法。
@@ -123,9 +202,10 @@ impl App {
         } else if in_fence(rope.lines_at(0).take(line)) {
             return None;
         }
-        let to = rope.char_to_byte(doc.selection.to().min(rope.len_chars()));
-        let end = rope.line_to_byte((line + 1).min(rope.len_lines()));
-        let after = rope.byte_slice(to.max(start).min(end)..end).to_string();
+        let to = doc.selection.to().min(rope.len_chars());
+        let end_line = rope.char_to_line(to);
+        let end = rope.line_to_byte((end_line + 1).min(rope.len_lines()));
+        let after = rope.byte_slice(rope.char_to_byte(to)..end).to_string();
         let blank_above = line == 0 || rope.line(line - 1).to_string().trim().is_empty();
         Some(Spot {
             before,

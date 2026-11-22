@@ -1,6 +1,6 @@
 //! 处理从系统文件管理器等来源拖入窗口的文件和目录。
 //!
-//! 拖动经过窗口时标出松手后的落点：落在文件树上时复制进落点所在的目录，落在终端上时输入转义
+//! 拖动经过窗口时标出松手后的落点：拖目录到笔记侧栏会切换工作区，普通文件树接收副本，落在终端上时输入转义
 //! 后的路径，落在其他位置（编辑区等）时打开。
 //!
 //! 系统只在拖入窗口、拖出窗口和松手时各通知一次（`HoveredFile`、`HoveredFileCancelled`、
@@ -22,6 +22,8 @@ const POLL: Duration = Duration::from_micros(16_667);
 pub enum DropZone {
     /// 文件树中的目录：文件复制进去。
     Tree(PathBuf),
+    /// 我的文档：打开这个目录并切换工作区，不复制。
+    NotebookSwitch,
     /// 终端：输入转义过的路径。
     Terminal,
     /// 其他位置：文件在编辑区打开，目录切换为工作区。落在编辑区里时记着落点所在的窗格，
@@ -57,13 +59,30 @@ impl App {
         }
     }
 
+    fn path_drop_zone(&self, x: f32, y: f32, directory: bool) -> DropZone {
+        if directory
+            && self.notebook_sidebar()
+            && self.panels.sidebar.visible
+            && self.panels.sidebar.view == SidebarView::Files
+            && (self.layout.tree.contains(x, y)
+                || self
+                    .notebook_folder_heading()
+                    .is_some_and(|r| r.contains(x, y)))
+        {
+            return DropZone::NotebookSwitch;
+        }
+        self.drop_zone(x, y)
+    }
+
     /// 拖动中的落点（见 [`DropZone`]），绘制时据此铺底色；没有拖动时为 `None`。
     pub(crate) fn file_hover(&self) -> Option<&DropZone> {
         self.panels.file_hover.as_ref()
     }
 
     /// 文件或目录拖入了窗口（`HoveredFile`；同时拖动多项时每项触发一次）：开始跟踪落点。
-    pub(in crate::app) fn hover_file(&mut self) {
+    pub(in crate::app) fn hover_file(&mut self, path: &Path) {
+        self.panels.file_hover_directory |=
+            self.notebook_sidebar() && winc_backend::fs::is_dir(path);
         self.panes.dropped_into = None;
         // 从 Winc 拖出的文件不放回 Winc 的窗口，不标出落点。
         #[cfg(target_os = "macos")]
@@ -75,6 +94,7 @@ impl App {
 
     /// 拖出了窗口或松了手：不再标出落点。
     pub(in crate::app) fn end_file_hover(&mut self) {
+        self.panels.file_hover_directory = false;
         if self.panels.file_hover.take().is_some() {
             self.request_redraw();
         }
@@ -91,7 +111,7 @@ impl App {
     /// 按鼠标当前位置重新计算落点，落点变化时才请求重绘。
     fn update_file_hover(&mut self) {
         let (x, y) = self.drop_point();
-        let zone = Some(self.drop_zone(x, y));
+        let zone = Some(self.path_drop_zone(x, y, self.panels.file_hover_directory));
         if zone != self.panels.file_hover {
             self.panels.file_hover = zone;
             self.request_redraw();
@@ -127,7 +147,15 @@ impl App {
     ///
     /// 可以加为附加目录的目录先按设置询问或添加（见 [`App::drop_folder`]）。
     pub(in crate::app) fn drop_file_at(&mut self, path: &Path, x: f32, y: f32) {
-        let into = match self.drop_zone(x, y) {
+        let into = match self.path_drop_zone(
+            x,
+            y,
+            self.notebook_sidebar() && winc_backend::fs::is_dir(path),
+        ) {
+            DropZone::NotebookSwitch => {
+                self.switch_folder(path);
+                return;
+            }
             DropZone::Tree(dir) => Some(dir),
             DropZone::Terminal => {
                 self.drop_path_on_terminal(path);

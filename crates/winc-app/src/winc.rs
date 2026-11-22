@@ -821,7 +821,7 @@ impl Winc {
             .set_staging(app.config.git_staging_area == Some(true));
         app.restore_panel_width();
         app.editor.diff_unified = app.config.diff_inline == Some(true);
-        app.apply_preview_state();
+        App::apply_preview_state(&mut app.editor, &app.state);
         app.store.state_path = template.state_path;
         app.backup.root = template.backup_root;
         app.opening.cascade = cascade;

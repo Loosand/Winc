@@ -33,6 +33,7 @@ pub(crate) mod links;
 mod live;
 mod live_caret;
 mod paste;
+pub(crate) mod properties;
 pub(crate) mod resize;
 mod scroll;
 pub(crate) mod slash;
@@ -150,6 +151,8 @@ pub(crate) struct MarkdownPreview {
     scrolls: HashMap<DocumentId, f32>,
     /// 排版结果，见 [`laid::Laid`]。
     pub layout: Option<crate::app::preview::markdown::laid::Laid>,
+    pub(crate) property_layout_dirty: bool,
+    pub(crate) imported_property_types: properties::ImportedTypes,
     /// 排版缓存，见 `winc_typeset::Memo`。
     pub memo: crate::app::preview::markdown::laid::Memo,
     /// 用到的图片，键为解析后的本地路径。
@@ -228,9 +231,7 @@ pub(crate) struct MarkdownPreview {
     /// 最近一次点击是否在预览上：为真时分栏中的 ⌘C、⌘A、⌘F 作用于预览；点击左侧文字后
     /// 恢复为作用于文字。
     pub focused: bool,
-    /// 右键点中的字在原文中的位置（字节偏移），供「在源代码中显示」使用；点在没有对应原文的
-    /// 位置或解析结果不是当前版本时为 `None`。
-    pub menu_source: Option<usize>,
+
     /// 查找用的文字：预览的整段文字装入一个不显示的文档，查找条按普通文档的方式查找。
     ///
     /// 重新排版时作废，需要查找时重新装入。
@@ -372,6 +373,8 @@ impl Default for MarkdownPreview {
             cost: None,
             scrolls: HashMap::new(),
             layout: None,
+            property_layout_dirty: false,
+            imported_property_types: properties::ImportedTypes::default(),
             last_table: None,
             memo: Default::default(),
             images: HashMap::new(),
@@ -406,7 +409,6 @@ impl Default for MarkdownPreview {
             height: 0.0,
             selection: None,
             focused: false,
-            menu_source: None,
             find_doc: None,
             find_serial: 0,
             synced: None,
@@ -798,9 +800,8 @@ impl App {
 
     /// 在编辑器中打开预览里链接指向的本地文件。
     ///
-    /// 目标同为 Markdown 时沿用当前的显示方式（分栏或只看预览）；`其他.md#标题` 在排版完成后
-    /// 滚动到该标题。
-    fn open_markdown_file(&mut self, path: &Path, url: &str) {
+    /// 目标同为 Markdown 时直接显示可编辑的排版视图；`其他.md#标题` 在排版完成后滚到该标题。
+    pub(in crate::app) fn open_markdown_file(&mut self, path: &Path, url: &str) {
         let mode = self
             .editor
             .active()
@@ -814,11 +815,18 @@ impl App {
                 return;
             };
             let id = doc.id;
-            if let Some(mode) = mode
-                && doc.can_preview()
-                && doc.preview_mode() == PreviewMode::Source
-            {
-                app.set_preview_mode(mode);
+            match doc.preview_kind() {
+                Some(PreviewKind::Markdown) if doc.preview_mode() != PreviewMode::Preview => {
+                    app.set_preview_mode(PreviewMode::Preview);
+                }
+                Some(PreviewKind::Svg | PreviewKind::Table | PreviewKind::Json)
+                    if doc.preview_mode() == PreviewMode::Source =>
+                {
+                    if let Some(mode) = mode {
+                        app.set_preview_mode(mode);
+                    }
+                }
+                _ => {}
             }
             if let Some(anchor) = anchor {
                 app.preview.markdown.pending_anchor = Some((id, anchor));
@@ -904,9 +912,9 @@ impl App {
         })
     }
 
-    /// Markdown 预览是否显示行号（`markdown.lineNumbers`，默认为是）。
+    /// Markdown 排版视图默认不显示行号；不影响源码编辑区的设置。
     pub(crate) fn markdown_line_numbers_on(&self) -> bool {
-        self.config.markdown_line_numbers != Some(false)
+        self.config.markdown_line_numbers == Some(true)
     }
 
     /// 当前标签是否为可直接编辑的 Markdown 预览（只看预览）。
@@ -1040,20 +1048,6 @@ impl App {
         self.request_redraw();
     }
 
-    /// 执行「在源代码中显示」：将光标放到右键点中的字在原文中的位置，键盘焦点回到文字；
-    /// 只看预览时改为分栏，预览保留在旁边。
-    pub(in crate::app) fn reveal_markdown_source(&mut self) {
-        let Some(source) = self.preview.markdown.menu_source.take() else {
-            return;
-        };
-        if self.editor.active().map(|d| d.preview_mode()) == Some(PreviewMode::Preview) {
-            self.set_preview_mode(PreviewMode::Split);
-        }
-        self.preview.markdown.focused = false;
-        self.focus = crate::app::Focus::Editor;
-        self.place_caret_at_source(source);
-    }
-
     /// 处理预览上不在链接上的右键点击，返回是否点在预览上。
     ///
     /// 预览获得焦点，点击位置在选区外时取消选区。可编辑的预览中改为将文档的光标移到该处
@@ -1070,9 +1064,7 @@ impl App {
         self.focus = crate::app::Focus::Editor;
         if self.markdown_live() {
             self.preview.markdown.menu_image = self.image_at(x, y);
-            self.preview.markdown.menu_source =
-                crate::app::preview::markdown::laid::source_at(self, x, y);
-            if let Some(source) = self.preview.markdown.menu_source
+            if let Some(source) = crate::app::preview::markdown::laid::source_at(self, x, y)
                 && let Some(doc) = self.editor.active_mut()
                 && let Some(rope) = doc.text().rope()
             {
@@ -1086,7 +1078,6 @@ impl App {
             return true;
         }
         self.preview.markdown.focused = true;
-        self.preview.markdown.menu_source = self.current_source_at(x, y);
         let at = crate::app::preview::markdown::laid::offset_at(self, x, y);
         let inside = self
             .preview
@@ -1404,6 +1395,7 @@ pub(crate) fn local_target(doc: &Path, url: &str) -> Option<PathBuf> {
         Some(rest) => &rest[rest.find('/')?..],
         None if url.is_empty()
             || url.contains("://")
+            || winc_preview::note_links::is_web(url)
             || url.starts_with("mailto:")
             || url.starts_with("data:") =>
         {

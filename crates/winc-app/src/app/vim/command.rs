@@ -371,7 +371,7 @@ impl App {
             }
             // 重新读取当前文档没有对应的功能。
             AppCommand::Edit { path: None, .. } => self.flash(t!("editor-vim-unsupported")),
-            AppCommand::New { path: None } => self.new_file(),
+            AppCommand::New { path: None } => self.new_text_buffer(),
             AppCommand::BufferStep(step) => {
                 let count = self.editor.tab_count();
                 for _ in 0..step.unsigned_abs().min(count) {

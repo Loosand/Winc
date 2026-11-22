@@ -42,6 +42,11 @@ pub enum GitAnchor {
 /// 选择面板里除了各行以外可以点的地方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerPart {
+    NoteTitles,
+    NotePreview,
+    CloseNoteSearch,
+    PropertyCalendar(crate::app::preview::markdown::properties::popup::CalendarPart),
+    PropertyApply,
     /// 第几行行尾的「⋯」。
     More(usize),
     /// 搜索框下面的「拉取」；按住 ⌥ 时是拉取并变基。
@@ -651,6 +656,22 @@ impl App {
     /// 点了选择面板里的 `part`。
     pub(in crate::app) fn press_picker_part(&mut self, part: PickerPart) {
         match part {
+            PickerPart::NoteTitles => {
+                if let Some(search) = &mut self.overlays.picker.notebook {
+                    search.titles_only = !search.titles_only;
+                    self.picker_refresh();
+                    self.request_redraw();
+                }
+            }
+            PickerPart::NotePreview => {
+                if let Some(search) = &mut self.overlays.picker.notebook {
+                    search.preview = !search.preview;
+                    self.request_redraw();
+                }
+            }
+            PickerPart::CloseNoteSearch => self.close_picker(),
+            PickerPart::PropertyCalendar(part) => self.press_property_calendar(part),
+            PickerPart::PropertyApply => self.accept_property_picker(),
             PickerPart::More(row) => self.press_picker_more(row),
             PickerPart::Pull | PickerPart::Push | PickerPart::Fetch => {
                 if !self.picker_action_enabled(part) {

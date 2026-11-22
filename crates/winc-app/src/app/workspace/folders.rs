@@ -23,7 +23,7 @@ impl App {
     /// 返回文件树菜单中管理附加目录的项；`folder` 是右键点中的目录行，空白处为 `None`。
     pub(in crate::app) fn folder_items(&self, folder: Option<&Path>) -> Vec<MenuEntry> {
         let mut items = Vec::new();
-        if self.can_add_folder() {
+        if self.can_add_folder() && !self.notebook_sidebar() {
             items.push(MenuEntry::Item(MenuCommand::AddFolder, true));
         }
         let extra = self.editor.workspace.as_ref().zip(folder);
@@ -38,7 +38,9 @@ impl App {
 
     /// 打开系统的面板选择要添加的目录。
     pub(in crate::app) fn ask_add_folder(&mut self) {
-        if self.editor.root().is_none() {
+        if self.writing_workspace() {
+            self.pick(Pick::OpenFolder);
+        } else if self.editor.root().is_none() {
             self.flash(t!("workspace-add-folder-none"));
         } else if self.can_add_folder() {
             self.pick(Pick::AddFolder);
@@ -51,6 +53,10 @@ impl App {
     ///
     /// 单独打开着一组中的打开的目录时，先恢复这一组，再加入新的目录。
     pub(in crate::app) fn add_folder(&mut self, path: &Path) {
+        if self.writing_workspace() {
+            self.switch_folder(path);
+            return;
+        }
         if self.disk.solo {
             self.attach_group();
         }
@@ -124,6 +130,9 @@ impl App {
 
     /// 返回最近打开的目录 `folder` 上次附加的目录数和起的名字；没有附加过目录时返回 `None`。
     pub(crate) fn recent_group(&self, folder: &Path) -> Option<(usize, Option<&str>)> {
+        if self.writing_workspace() {
+            return None;
+        }
         let session = self.state.session_for(folder)?;
         (!session.folders.is_empty()).then_some((session.folders.len(), session.name.as_deref()))
     }
@@ -157,6 +166,9 @@ impl App {
 
     /// 恢复会话 `session` 中记下的附加目录和这一组的名字；已不可用的目录不恢复，并说明是哪些。
     pub(in crate::app) fn restore_group(&mut self, session: Option<&winc_config::Session>) {
+        if self.writing_workspace() {
+            return;
+        }
         let Some(session) = session else {
             return;
         };
@@ -231,6 +243,9 @@ impl App {
     /// 打开。打开了本机的目录时，「打开目录…」之后加入「添加目录到窗口…」，已有附加的目录时
     /// 再加入给这一组起名的一项。
     pub(in crate::app) fn add_folder_entries(&self, menu: &mut Vec<MenuEntry>) {
+        if self.writing_workspace() {
+            return;
+        }
         let mut at = 0;
         while at < menu.len() {
             let MenuEntry::Item(MenuCommand::OpenRecent(i), _) = menu[at] else {
@@ -362,6 +377,10 @@ impl App {
     pub(in crate::app) fn drop_folder(&mut self, path: &Path, into: Option<PathBuf>) {
         use winc_config::FolderDrop;
 
+        if self.writing_workspace() && winc_backend::fs::is_dir(path) {
+            self.switch_folder(path);
+            return;
+        }
         let addable = self.can_add_folder()
             && (self.editor.workspace.as_ref()).is_some_and(|ws| ws.can_add_folder(path));
         let choice = self.config.drop_folder.unwrap_or_default();

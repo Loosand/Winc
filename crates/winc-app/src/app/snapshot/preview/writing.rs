@@ -288,6 +288,65 @@ fn link_paths_are_suggested_while_typing() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn markdown_link_tooltip_stays_open_and_follows_its_link_without_a_modifier() {
+    let url = "./destination.md";
+    let (mut app, dir) = live_doc("md-hover-card", "见 [文档](./destination.md)。\n");
+    let destination = dir.join("destination.md");
+    std::fs::write(&destination, "# Destination\n").unwrap();
+    let destination = winc_config::files::canonicalize(destination).unwrap();
+    let link = app
+        .hits
+        .markdown_links
+        .iter()
+        .find(|(_, target)| target == url)
+        .unwrap()
+        .0;
+    let x = link.x + link.w / 2.0;
+    app.on_mouse_move(x, link.y + link.h / 2.0);
+    let hover = app.pointer.hover;
+    assert!(matches!(hover, Hover::MarkdownLinkText(_)));
+    let since = std::time::Instant::now()
+        - crate::theme::TOOLTIP_DELAY
+        - crate::app::animation::TOOLTIP_FADE;
+    app.overlays.tooltip.since = Some(since);
+    paint(&mut app);
+    let card = app.overlays.tooltip.link.borrow().as_ref().unwrap().card;
+    let card_y = card.y + card.h / 2.0;
+    let gap_y = (link.bottom() + card.y) / 2.0;
+    for y in [gap_y, card_y] {
+        app.on_mouse_move(x, y);
+        assert_eq!(app.pointer.hover, hover);
+        assert_eq!(app.overlays.tooltip.since, Some(since));
+        paint(&mut app);
+        assert_eq!(
+            app.overlays.tooltip.link.borrow().as_ref().unwrap().card,
+            card
+        );
+    }
+    assert_eq!(app.pointer.cursor_icon, winit::window::CursorIcon::Pointer);
+    app.on_mouse_move(x, link.y + link.h / 2.0);
+    assert_eq!(app.overlays.tooltip.since, Some(since));
+    app.on_mouse_move(x, link.bottom() + 130.0);
+    assert_eq!(app.overlays.tooltip.since, None);
+    assert!(app.overlays.tooltip.link.borrow().is_none());
+    assert!(app.overlays.tooltip.last.borrow().is_none());
+
+    app.on_mouse_move(x, link.y + link.h / 2.0);
+    app.overlays.tooltip.since = Some(since);
+    paint(&mut app);
+    app.on_mouse_move(x, card_y);
+    assert!(!app.command_held());
+    app.on_mouse_down(winit::event::MouseButton::Left);
+    app.on_mouse_up(winit::event::MouseButton::Left);
+    assert_eq!(
+        app.editor.active().unwrap().path.as_deref(),
+        Some(destination.as_path())
+    );
+    assert!(app.overlays.tooltip.link.borrow().is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// 悬停在预览的链接上提示地址，在脚注的编号上提示脚注的内容。
 #[test]
 fn hovering_links_and_footnotes_shows_where_they_go() {
@@ -405,7 +464,17 @@ fn headings_fold_their_sections_in_the_preview() {
         .find(|(_, url)| url.ends_with("fold:甲"))
         .unwrap()
         .clone();
-    super::click(&mut app, (arrow.x + arrow.w / 2.0, arrow.y + arrow.h / 2.0));
+    let point = (arrow.x + arrow.w / 2.0, arrow.y + arrow.h / 2.0);
+    let toc_overlap = app
+        .hits
+        .markdown_toc
+        .iter()
+        .any(|(rect, _)| rect.contains(point.0, point.1));
+    assert!(
+        !toc_overlap,
+        "fold arrow overlaps the table-of-contents hit area"
+    );
+    super::click(&mut app, point);
     settle(&mut app);
     assert!(shown(&app).contains("第一段"));
 

@@ -505,6 +505,13 @@ impl App {
             }
             return;
         }
+        if !cut
+            && self.markdown_live()
+            && self.focus == Focus::Editor
+            && self.copy_note_selection(false)
+        {
+            return;
+        }
         let Some(doc) = self.editor.active() else {
             return;
         };
@@ -645,14 +652,44 @@ impl App {
     ///
     /// 文档不可编辑时在状态栏提示原因，不执行命令。
     pub(in crate::app) fn run(&mut self, command: Command) {
+        self.execute_text_command(command, false);
+    }
+
+    /// A validated property patch targets YAML rather than the visible body.
+    pub(in crate::app) fn run_note_property_patch(&mut self, command: Command) {
+        debug_assert!(matches!(command, Command::Insert(_)));
+        self.execute_text_command(command, true);
+    }
+
+    fn execute_text_command(&mut self, command: Command, property_patch: bool) {
         let page = self.page_lines();
         let tab_width = self.editor.active_tab_width();
         let lines_before = self.line_count();
+        let property_start = (!property_patch
+            && self.focus == Focus::Editor
+            && command.is_edit()
+            && !matches!(command, Command::Undo | Command::Redo))
+        .then(|| self.property_body_start())
+        .flatten();
 
         let Some(doc) = self.editor.active_mut() else {
             return;
         };
 
+        if let Some(start) = property_start
+            && doc.selection.is_empty()
+            && doc.selection.head <= start
+        {
+            if matches!(
+                command,
+                Command::Backspace { .. } | Command::DeleteToLineStart
+            ) {
+                return;
+            }
+            if doc.selection.head < start {
+                doc.selection = winc_core::Selection::point(start);
+            }
+        }
         // 没有可编辑文本的文档（无法打开的文件、图片、SVG 的预览）不处理编辑命令；Markdown 的
         // 预览可以直接编辑。
         if !doc.edits_text() {
@@ -665,11 +702,15 @@ impl App {
         }
 
         // Vim 的替换模式下键入的文字覆盖已有的字符，由 Vim 层执行。
-        if self.vim.is_some() && self.vim_overtype(&command) {
+        if !property_patch && self.vim.is_some() && self.vim_overtype(&command) {
             return;
         }
         // Vim 的插入模式记录执行的输入，供次数与点重复重放。
-        let input = self.vim_input(&command);
+        let input = if property_patch {
+            None
+        } else {
+            self.vim_input(&command)
+        };
         let Some(doc) = self.editor.active_mut() else {
             return;
         };
@@ -683,7 +724,9 @@ impl App {
             self.relayout();
         }
 
-        self.ensure_caret_visible();
+        if !property_patch {
+            self.ensure_caret_visible();
+        }
         self.reset_blink();
         self.request_redraw();
     }

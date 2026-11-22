@@ -27,6 +27,78 @@ fn listed(app: &mut App, path: Option<PathBuf>) -> Vec<MenuCommand> {
 }
 
 #[test]
+fn notebook_switches_roots_and_creates_in_the_selected_folder() {
+    use crate::app::DropZone;
+    let main = winc_config::files::canonicalize(sample_folder("数字花园-切换测试")).unwrap();
+    let wiki = winc_config::files::canonicalize(sample_folder("Wiki-切换测试")).unwrap();
+    let child = main.join("花园笔记.md");
+    let wiki_note = wiki.join("Wiki笔记.md");
+    std::fs::write(&child, "# 保留原文\n").unwrap();
+    std::fs::write(&wiki_note, "# Wiki\n").unwrap();
+    let mut app = blank_app(false);
+    app.panels.sidebar.legacy_chrome = false;
+    app.state.set_session(winc_config::Session {
+        folder: main.clone(),
+        folders: vec![wiki.clone()],
+        ..Default::default()
+    });
+    app.open_folder_now(&main);
+    paint(&mut app);
+    let shows = |app: &App, path: &Path| {
+        app.editor
+            .workspace
+            .as_ref()
+            .unwrap()
+            .row_of(path)
+            .is_some()
+    };
+    assert!(shows(&app, &child));
+    assert!(!shows(&app, &main) && !shows(&app, &wiki));
+    assert!(app.extra_folders().is_empty());
+    assert_eq!(app.state.notebook_workspaces, [main.clone(), wiki.clone()]);
+    let menu = |app: &mut App| {
+        let r = app.panels.sidebar.navigation.folder_menu;
+        super::click(app, (r.x + r.w / 2.0, r.y + r.h / 2.0));
+    };
+    menu(&mut app);
+    assert!(super::menu_commands(&app).contains(&(MenuCommand::SwitchNotebookWorkspace(1), true)));
+    app.run_menu_command(MenuCommand::SwitchNotebookWorkspace(1));
+    paint(&mut app);
+    assert_eq!(app.library.folder.as_deref(), Some(wiki.as_path()));
+    assert!(shows(&app, &wiki_note) && !shows(&app, &child));
+    assert!(app.extra_folders().is_empty());
+
+    menu(&mut app);
+    app.run_menu_command(MenuCommand::NewFile);
+    let input = app.panels.name_input.as_mut().unwrap();
+    assert_eq!(input.dir, wiki);
+    input.field.set_text("新笔记.md");
+    app.submit_name_input();
+    assert!(wiki.join("新笔记.md").is_file());
+    assert!(!main.join("新笔记.md").exists());
+
+    app.config.drop_folder = Some(winc_config::FolderDrop::Open);
+    let heading = app.notebook_folder_heading().unwrap();
+    let (x, y) = (heading.x + 20.0, heading.y + heading.h / 2.0);
+    app.on_mouse_move(x, y);
+    app.hover_file(&main);
+    assert_eq!(app.file_hover(), Some(&DropZone::NotebookSwitch));
+    app.end_file_hover();
+    app.drop_file_at(&main, x, y);
+    paint(&mut app);
+    assert_eq!(app.library.folder.as_deref(), Some(main.as_path()));
+    assert_eq!(app.state.notebook_workspaces, [main.clone(), wiki.clone()]);
+    assert!(!wiki.join(main.file_name().unwrap()).exists());
+    menu(&mut app);
+    app.run_menu_command(MenuCommand::ForgetNotebookWorkspace(1));
+    assert_eq!(app.state.notebook_workspaces, [main.clone()]);
+    assert_eq!(std::fs::read_to_string(&wiki_note).unwrap(), "# Wiki\n");
+    for path in [main, wiki] {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+#[test]
 fn a_folder_can_be_added_to_the_window_and_removed() {
     let main = winc_config::files::canonicalize(sample_folder("folders-main")).unwrap();
     let other = winc_config::files::canonicalize(search_folder("folders-other")).unwrap();

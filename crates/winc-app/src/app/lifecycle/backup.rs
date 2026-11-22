@@ -299,6 +299,21 @@ impl App {
 
     /// 记录刚恢复的文档已有备份，不需要立即重写；对磁盘上的文件在此期间被修改过的文档，提示用户。
     pub(crate) fn adopt_restored(&mut self, restored: Restored) {
+        if self.writing_workspace() {
+            self.unsplit_editor();
+            let active = self.editor.active().map(|doc| doc.id);
+            // Leave recovered edits visible rather than silently dropping a legacy unsaved tab.
+            let clean: Vec<_> = self
+                .editor
+                .documents
+                .iter()
+                .filter(|doc| Some(doc.id) != active && !doc.is_dirty())
+                .map(|doc| doc.id)
+                .collect();
+            for id in clean {
+                self.discard_tab(id);
+            }
+        }
         if let Some(lock) = restored.lock {
             self.adopt_lock(lock);
         }

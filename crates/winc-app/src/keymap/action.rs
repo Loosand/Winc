@@ -114,6 +114,8 @@ pub enum Action {
     MarkdownTypewriterMode,
     /// Markdown 中粘贴为纯文本。
     MarkdownPastePlain,
+    /// 把选区复制为 Markdown。
+    MarkdownCopy,
     DeleteLine,
     DeleteAllLeft,
     IndentLines,
@@ -458,6 +460,7 @@ impl Action {
             MarkdownFocusMode => t!("cmd-markdown-focus-mode"),
             MarkdownTypewriterMode => t!("cmd-markdown-typewriter-mode"),
             MarkdownPastePlain => t!("cmd-markdown-paste-plain"),
+            MarkdownCopy => t!("cmd-markdown-copy"),
             DeleteLine => t!("cmd-delete-line"),
             DeleteAllLeft => t!("cmd-delete-all-left"),
             IndentLines => t!("cmd-indent-lines"),
@@ -709,6 +712,7 @@ impl Action {
             | MarkdownFocusMode
             | MarkdownTypewriterMode
             | MarkdownPastePlain
+            | MarkdownCopy
             | DeleteLine
             | DeleteAllLeft
             | IndentLines
@@ -921,6 +925,7 @@ impl Action {
                 | MarkdownFocusMode
                 | MarkdownTypewriterMode
                 | MarkdownPastePlain
+                | MarkdownCopy
         )
     }
 
@@ -982,7 +987,8 @@ impl Action {
             | MarkdownImage
             | MarkdownFocusMode
             | MarkdownTypewriterMode
-            | MarkdownPastePlain => false,
+            | MarkdownPastePlain
+            | MarkdownCopy => false,
             _ => self.group() == Group::Edit,
         }
     }
@@ -1214,6 +1220,7 @@ pub const ACTIONS: &[Action] = {
         MarkdownFocusMode,
         MarkdownTypewriterMode,
         MarkdownPastePlain,
+        MarkdownCopy,
         DeleteLine,
         DeleteAllLeft,
         IndentLines,

@@ -47,6 +47,8 @@ pub(crate) enum FormKind {
     LogPath,
     /// 给窗口中的这组目录起名。
     RenameGroup,
+    /// 添加或编辑本地笔记的属性。
+    Property(crate::app::preview::markdown::properties::PropertyEdit),
     /// 交互式变基。
     Rebase(Box<RebaseForm>),
     /// 连接远端主机：主机、端口，见 [`crate::app::remote`]。
@@ -98,6 +100,7 @@ impl FormKind {
             FormKind::CompareRevision { commit } => Some(QuestionView::compare_revision(commit)),
             FormKind::LogPath => Some(QuestionView::log_path()),
             FormKind::RenameGroup => Some(QuestionView::rename_group()),
+            FormKind::Property(edit) => Some(edit.view()),
             FormKind::Worktree
             | FormKind::Branch { .. }
             | FormKind::Clone
@@ -343,6 +346,7 @@ impl App {
     /// 按对话框当前填写的内容，说明「创建」会做什么。
     pub(crate) fn form_plan(&self, dialog: &FormDialog) -> FormPlan {
         match &dialog.kind {
+            FormKind::Property(edit) => self.property_plan(edit, dialog),
             FormKind::Worktree => self.worktree_plan(dialog),
             FormKind::Branch { at } => self.branch_plan(dialog, at.as_deref()),
             FormKind::Rebase(form) => self.rebase_plan(form, dialog.name.text()),
@@ -586,6 +590,7 @@ impl App {
             return;
         };
         match kind {
+            FormKind::Property(edit) => self.submit_property(edit),
             FormKind::Worktree => self.submit_worktree(),
             FormKind::Branch { at } => {
                 let name = dialog.name.text().trim().to_owned();

@@ -112,6 +112,8 @@ fn blank_app(dark: bool) -> App {
         Config::default(),
     );
     app.palette = palette;
+    // The inherited snapshots still cover the underlying Winc tools. New notebook tests opt into Minc's chrome.
+    app.panels.sidebar.legacy_chrome = true;
 
     let renderer =
         Renderer::offscreen(SIZE.0, SIZE.1, SCALE, palette.frame_bg, None, None).unwrap();

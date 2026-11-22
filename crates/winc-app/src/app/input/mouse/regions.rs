@@ -15,6 +15,9 @@ impl App {
         if let Some(view) = hit(&self.sidebar_tabs(), x, y) {
             return Some(Hover::ViewTab(view));
         }
+        if let Some(target) = self.notebook_sidebar_at(x, y) {
+            return Some(Hover::NotebookNav(target));
+        }
         // 第二行的项目和分支，三个视图都一样。
         if self.hits.project.contains(x, y) {
             return Some(Hover::ProjectName);
@@ -271,7 +274,13 @@ impl App {
 
         self.focus = Focus::Picker;
 
-        if let Some(index) = parts.row_at(y, self.overlays.picker.scroll)
+        let scroll = if self.overlays.picker.notebook.is_some() {
+            crate::layout::drawn_scroll(self.overlays.picker.scroll)
+        } else {
+            self.overlays.picker.scroll
+        };
+        if parts.list.contains(x, y)
+            && let Some(index) = parts.row_at(y, scroll)
             && index < self.overlays.picker.hits.len()
         {
             // 分组标题点了没有反应。
@@ -305,10 +314,15 @@ impl App {
         if let Some(view) = hit(&self.sidebar_tabs(), x, y) {
             match view {
                 SidebarView::Files => self.show_files(),
+                SidebarView::Outline => self.show_outline(),
                 SidebarView::Search => self.open_global_search(false),
                 SidebarView::Commit => self.show_commit(),
             }
 
+            return true;
+        }
+        if let Some(target) = self.notebook_sidebar_at(x, y) {
+            self.press_notebook_sidebar(target);
             return true;
         }
         if self.hits.project.contains(x, y) {

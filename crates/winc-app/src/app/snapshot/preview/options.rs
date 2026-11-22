@@ -130,6 +130,7 @@ fn the_heading_list_can_be_pinned_open() {
 fn the_editable_preview_numbers_source_lines() {
     let (app, dir) = notes("md-numbers", PreviewMode::Preview);
     assert!(app.markdown_live());
+    assert!(!app.markdown_line_numbers_on());
     let lines = || {
         let laid = app.preview.markdown.layout.as_ref().unwrap();
         let rope = app.editor.active().unwrap().text().rope().unwrap();
@@ -150,6 +151,11 @@ fn code_blocks_are_numbered_in_the_read_only_preview() {
     let (mut app, dir) = notes("md-code-numbers", PreviewMode::Split);
     assert!(!app.markdown_live());
     let key = |app: &App| app.preview.markdown.layout.as_ref().unwrap().key.numbers;
+    assert!(!key(&app));
+    assert!(!app.menu_checked(MenuCommand::MarkdownLineNumbers));
+    app.settings_toggle(Setting::MarkdownLineNumbers);
+    settle(&mut app);
+    assert_eq!(app.config.markdown_line_numbers, Some(true));
     assert!(key(&app));
     let text = full_text(&app).unwrap();
     assert!(text.contains("fn a() {}\nlet b = 1;\nlet c = 2;"), "{text}");
@@ -174,6 +180,7 @@ fn code_blocks_are_numbered_in_the_read_only_preview() {
 #[ignore = "截图，手动运行"]
 fn shoot_preview_options() {
     let (mut app, dir) = notes("md-options-shot", PreviewMode::Preview);
+    app.settings_toggle(Setting::MarkdownLineNumbers);
     app.toggle_sidebar();
     app.state.markdown_toc_pinned = true;
     settle(&mut app);
@@ -199,16 +206,14 @@ fn the_preview_follows_the_chosen_language() {
     let kind = |app: &App| app.editor.active().unwrap().preview_kind();
     let mode = |app: &App| app.editor.active().unwrap().preview_mode();
 
-    // 新建的文件没有路径，语言为纯文本，不能预览；选择 Markdown 后可以预览并完成排版。
-    app.new_file();
-    assert!(app.editor.active().unwrap().path.is_none());
+    // 已保存的普通文本可以选择用 Markdown 排版。
+    app.open_path(&dir.join("a.txt"));
     assert_eq!(kind(&app), None);
     app.use_language(language("markdown"));
     assert_eq!(kind(&app), Some(PreviewKind::Markdown));
     app.run(Command::Insert(
         "# 标题\n\n正文 ![图](a.png)\n\n## 小节\n".into(),
     ));
-    app.set_preview_mode(PreviewMode::Preview);
     settle(&mut app);
     assert_eq!(mode(&app), PreviewMode::Preview);
     let text = crate::app::preview::markdown::laid::full_text(&app).unwrap();
@@ -232,11 +237,6 @@ fn the_preview_follows_the_chosen_language() {
     app.use_language(language("svg"));
     assert_eq!(kind(&app), Some(PreviewKind::Svg));
 
-    // 已保存的文件同理：`.txt` 选择 Markdown 后可以预览，`.md` 默认可以预览。
-    app.open_path(&dir.join("a.txt"));
-    assert_eq!(kind(&app), None);
-    app.use_language(language("markdown"));
-    assert_eq!(kind(&app), Some(PreviewKind::Markdown));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

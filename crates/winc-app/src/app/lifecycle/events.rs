@@ -427,7 +427,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.picture_pinch(delta as f32);
                 }
             }
-            WindowEvent::HoveredFile(_) => self.hover_file(),
+            WindowEvent::HoveredFile(path) => self.hover_file(&path),
             WindowEvent::HoveredFileCancelled => self.end_file_hover(),
             WindowEvent::DroppedFile(path) => self.drop_file(&path),
             _ => {}
@@ -468,6 +468,9 @@ impl App {
             | UserEvent::GitBlame
             | UserEvent::Reread
             | UserEvent::TreeScanned
+            | UserEvent::LibraryScanned
+            | UserEvent::NotebookSearchScanned
+            | UserEvent::NoteLinksScanned
             | UserEvent::Saved
             | UserEvent::Loaded
             | UserEvent::Counted
@@ -678,6 +681,7 @@ impl App {
             }
         }
         earliest(&mut wake, self.reading_tick(now));
+        earliest(&mut wake, self.library_refresh_tick(now));
         earliest(&mut wake, self.terminal_settle_tick(now));
         earliest(&mut wake, self.auto_save_tick(now));
         let copying = self.copy_tick(now);

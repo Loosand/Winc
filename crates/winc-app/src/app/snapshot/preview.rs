@@ -879,33 +879,114 @@ fn heap_breakdown(md: &winc_preview::markdown::Markdown) {
 }
 
 #[test]
-fn the_chosen_preview_mode_applies_to_files_opened_later() {
-    use winc_editor::PreviewMode;
+fn markdown_opens_in_the_editable_view_even_with_an_old_mode_saved() {
+    use winc_editor::{Editor, PreviewMode};
 
-    let dir = sample_folder("preview-mode-remembered");
-    let (a, b, c) = (dir.join("a.md"), dir.join("b.md"), dir.join("c.md"));
-    for path in [&a, &b, &c] {
+    let dir = sample_folder("md-startup-mode");
+    let (note, text) = (dir.join("note.md"), dir.join("text.txt"));
+    for path in [&note, &text] {
         std::fs::write(path, "# 标题\n").unwrap();
     }
-    let mut app = app_with(&a, false);
-    paint(&mut app);
-    let mode = |app: &App| app.editor.active().unwrap().preview_mode();
-    assert_eq!(mode(&app), PreviewMode::Source);
+    let args = crate::cli::parse([note.into_os_string(), text.into_os_string()]).unwrap();
+    for state_json in ["{}", r#"{"previewMode":{"markdown":"split"}}"#] {
+        let mut editor = Editor::default();
+        App::apply_preview_state(&mut editor, &winc_config::State::parse(state_json));
+        assert!(crate::open_targets(&mut editor, &args).is_empty());
+        assert_eq!(
+            editor.active().unwrap().preview_mode(),
+            PreviewMode::Preview
+        );
+        assert_eq!(editor.documents[1].preview_mode(), PreviewMode::Source);
+        assert!(editor.active().unwrap().edits_text());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
-    // 选择只看预览：记入状态，之后打开的 Markdown 文件同样只看预览。
-    app.choose_preview_mode(PreviewMode::Preview);
-    let saved = |app: &App| app.state.preview_modes.get("markdown").cloned();
-    assert_eq!(saved(&app).as_deref(), Some("preview"));
-    app.open_path(&b);
-    paint(&mut app);
-    assert_eq!(mode(&app), PreviewMode::Preview);
+#[test]
+fn a_new_note_can_be_written_saved_and_reopened_in_the_single_view() {
+    use crate::app::workspace::files::Pick;
+    use crate::keymap::Action;
+    use winit::{
+        event::Ime,
+        keyboard::{Key, NamedKey},
+    };
 
-    // 改回源代码：状态清空，之后打开的文件显示源代码。
-    app.choose_preview_mode(PreviewMode::Source);
-    assert_eq!(saved(&app), None);
-    app.open_path(&c);
-    paint(&mut app);
-    assert_eq!(mode(&app), PreviewMode::Source);
+    let dir = sample_folder("new-markdown-note");
+    let mut app = app_with(&dir, false);
+    App::apply_preview_state(&mut app.editor, &app.state);
+    assert!(app.run_action(Action::NewFile));
+    settle(&mut app);
+    let doc = app.editor.active().unwrap();
+    let id = doc.id;
+    assert!(doc.path.is_none() && !doc.is_dirty());
+    assert!(app.markdown_live() && app.live_caret_shown());
+    assert!(!app.run_action(Action::ChangeLanguageMode));
+    assert_eq!(app.save_as_name(id), "untitled.md");
+
+    app.run(Command::Insert("# ".into()));
+    app.on_ime(Ime::Preedit("nihao".into(), Some((5, 5))));
+    settle(&mut app);
+    assert_eq!(doc_text(&app), "# ");
+    app.on_ime(Ime::Commit("你好".into()));
+    settle(&mut app);
+    assert!(app.markdown_key(&Key::Named(NamedKey::Enter), false));
+    app.run(Command::Insert("- 第一条".into()));
+    settle(&mut app);
+    assert!(app.markdown_key(&Key::Named(NamedKey::Enter), false));
+    assert!(doc_text(&app).ends_with("- 第一条\n- "));
+    assert!(app.run_action(Action::Undo));
+    let source = "# 你好\n\n- 第一条";
+    assert_eq!(doc_text(&app), source);
+
+    let path = dir.join("我的笔记.md");
+    app.on_picked(Pick::SaveAs(id), Some(path.clone()));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    assert!(!app.editor.active().unwrap().is_dirty());
+    assert!(app.markdown_live());
+    app.close_tab(app.editor.active.unwrap());
+    app.open_path(&path);
+    settle(&mut app);
+    assert!(app.markdown_live());
+    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    assert!(
+        shown.contains("你好") && shown.contains("第一条"),
+        "{shown}"
+    );
+
+    let plus = app.tabs.new_tab;
+    super::click(&mut app, (plus.x + plus.w / 2.0, plus.y + plus.h / 2.0));
+    settle(&mut app);
+    assert!(app.editor.active().unwrap().path.is_none());
+    assert!(app.markdown_live() && app.live_caret_shown());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn markdown_has_no_user_facing_mode_switch() {
+    use crate::keymap::Action;
+    use winc_editor::PreviewMode;
+
+    let dir = sample_folder("md-single-view");
+    let note = dir.join("note.md");
+    std::fs::write(&note, "# 标题\n").unwrap();
+    let mut app = blank_app(false);
+    App::apply_preview_state(&mut app.editor, &app.state);
+    app.open_path(&dir);
+    app.open_path(&note);
+    settle(&mut app);
+    assert!(app.markdown_live());
+    assert_eq!(app.preview.markdown.area, app.layout.editor);
+    assert_eq!(app.layout.preview, Rect::default());
+    assert_eq!(app.layout.split, Rect::default());
+    assert!(!app.markdown_line_numbers_on());
+    assert!(!app.run_action(Action::TogglePreview));
+    assert!(!app.run_action(Action::ChangeLanguageMode));
+    app.use_language(winc_syntax::detect("note.txt"));
+    assert!(app.markdown_live());
+    for mode in [PreviewMode::Source, PreviewMode::Split] {
+        app.choose_preview_mode(mode);
+        assert!(app.markdown_live());
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -918,30 +999,32 @@ fn each_kind_of_file_keeps_its_own_preview_mode() {
     std::fs::write(&a, "# 标题\n").unwrap();
     std::fs::write(&b, "# 标题\n").unwrap();
     std::fs::write(&table, "a,b\n1,2\n").unwrap();
-    let mut app = app_with(&a, false);
+    let mut app = blank_app(false);
+    App::apply_preview_state(&mut app.editor, &app.state);
+    app.open_path(&a);
     paint(&mut app);
     let mode = |app: &App| app.editor.active().unwrap().preview_mode();
+    assert_eq!(mode(&app), PreviewMode::Preview);
 
-    // Markdown 选了只看预览，表格选回源代码：各记各的。
-    app.choose_preview_mode(PreviewMode::Preview);
+    // 表格可继续切换；不会影响 Markdown 的固定视图。
     app.open_path(&table);
     paint(&mut app);
     assert_eq!(mode(&app), PreviewMode::Source);
     app.choose_preview_mode(PreviewMode::Split);
-    app.choose_preview_mode(PreviewMode::Source);
+    assert_eq!(mode(&app), PreviewMode::Split);
     app.open_path(&b);
     paint(&mut app);
     assert_eq!(mode(&app), PreviewMode::Preview);
 
     // 新窗口按状态恢复各类的方式。
     app.editor.preview_defaults.fill(PreviewMode::Source);
-    app.apply_preview_state();
+    App::apply_preview_state(&mut app.editor, &app.state);
     assert_eq!(
         app.editor.preview_defaults,
         [
             PreviewMode::Source,
             PreviewMode::Preview,
-            PreviewMode::Source,
+            PreviewMode::Split,
             PreviewMode::Source,
         ]
     );

@@ -123,7 +123,7 @@ impl App {
         let remote = self.remote_enabled();
         let git = self.git_enabled();
         let branch = self.git.status.as_ref().is_some_and(|s| s.head.is_some());
-        let preview = self.editor.active().is_some_and(|d| d.can_preview());
+        let preview = self.preview_switch_available();
         let browser = self.browser_page().is_some();
         let fx = &self.motion.module_fx;
         let changed = fx.commit_tab.shown != commit

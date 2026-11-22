@@ -2,6 +2,9 @@
 
 use super::*;
 
+pub(super) mod library;
+pub(super) mod note_graph;
+mod notebook;
 pub(super) mod outline;
 pub(super) mod panel;
 pub(super) mod sidebar;

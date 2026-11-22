@@ -48,8 +48,19 @@ pub(in crate::view) fn draw_sidebar(app: &mut App, frame: &mut Frame<'_>) {
         return;
     }
 
-    draw_project_header(app, frame);
-    draw_tree(app, frame);
+    if app.panels.sidebar.view == SidebarView::Outline {
+        outline::draw_outline(app, frame);
+        return;
+    }
+    if app.notebook_sidebar() {
+        super::notebook::draw_navigation(app, frame);
+    } else {
+        draw_project_header(app, frame);
+        super::library::draw_home_button(app, frame);
+    }
+    if app.layout.tree.h > 0.0 {
+        draw_tree(app, frame);
+    }
     outline::draw_outline(app, frame);
 }
 
@@ -681,7 +692,11 @@ fn draw_tree_entry(
     // 右端的 Git 状态与提交视图相同：文件显示带颜色的字母（M、U、A……），目录中有改动时
     // 显示圆点。名称会被状态截断的行在悬停时不绘制状态，以完整显示名称；
     // 放不下的部分继续绘制在编辑区上方。
-    let change = app.git.change_of(&entry.path);
+    let change = if app.notebook_sidebar() {
+        None
+    } else {
+        app.git.change_of(&entry.path)
+    };
     let letter = change
         .filter(|_| entry.kind != EntryKind::Dir)
         .map(|c| c.letter().to_string());

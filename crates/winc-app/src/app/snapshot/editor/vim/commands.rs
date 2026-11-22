@@ -125,8 +125,7 @@ fn write_and_quit_saves_before_closing_without_asking() {
     assert_eq!(app.editor.documents.len(), 0);
 
     // 没有路径的文档：先选择保存的位置，选好之前不关闭，也不询问是否保存。
-    app.new_file();
-    app.focus = Focus::Editor;
+    app.new_text_buffer();
     paint(&mut app);
     keys(&mut app, "inew<Esc>");
     ex(&mut app, "wq");
@@ -165,8 +164,7 @@ fn writing_to_a_path_leaves_the_document_where_it_is() {
     assert!(!app.editor.active().unwrap().is_dirty());
 
     // 没有路径的文档以给出的路径保存。
-    app.new_file();
-    app.focus = Focus::Editor;
+    app.new_text_buffer();
     paint(&mut app);
     keys(&mut app, "inew<Esc>");
     ex(&mut app, "w named.txt");

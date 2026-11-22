@@ -96,17 +96,10 @@ impl App {
             && self.preview.markdown.live_drag.is_some()
     }
 
-    /// ←→ 移出光标所在的块、落到块之间的空行上时，跳过这些空行，到下一块的开头或上一块的
-    /// 末尾：排版后的预览不显示空行，光标不停留在不可见的位置。
-    ///
-    /// 后方（前方）没有块时停在空行上。落到不显示的块标记（列表记号、引用的 `>`、续行的
-    /// 缩进）中时同样跳过，见 [`App::live_visible`]。其余情形返回 `false`，交给编辑区逐字移动。
+    /// ←→ 只略过不显示的块标记（见 [`App::live_visible`]）。空行和普通文字交给编辑区逐字移动。
     pub(super) fn live_horizontal(&mut self, right: bool) -> bool {
         self.preview.markdown.line_end = None;
         let extend = self.pointer.modifiers.shift_key();
-        let Some(live) = self.live_leaf() else {
-            return false;
-        };
         let Some(doc) = self.editor.active() else {
             return false;
         };
@@ -122,35 +115,7 @@ impl App {
             false if sel.head > 0 => sel.head - 1,
             _ => return false,
         };
-        // 正文中没有空行，落到空行上即表示离开了该块；代码块中的空行是代码的一部分。
-        let byte = rope.char_to_byte(next);
-        let outside = live.prose
-            || if right {
-                byte >= live.leaf.end
-            } else {
-                byte < live.leaf.start
-            };
-        let blank = |line: usize| rope.line(line).chars().all(char::is_whitespace);
-        let mut line = rope.char_to_line(next);
-        let mut target = next;
-        if outside && blank(line) {
-            if right {
-                while line < rope.len_lines() && blank(line) {
-                    line += 1;
-                }
-                if line < rope.len_lines() {
-                    target = rope.line_to_char(line);
-                }
-            } else {
-                while blank(line) && line > 0 {
-                    line -= 1;
-                }
-                if !blank(line) {
-                    target = line_end(rope, line);
-                }
-            }
-        }
-        let target = self.live_visible(target, right);
+        let target = self.live_visible(next, right);
         if target == next {
             return false;
         }
@@ -223,23 +188,35 @@ impl App {
     /// 光标位置 `pos`（字符偏移）落在不显示的块标记中时，返回移动方向上最近的可见位置；
     /// 否则返回 `pos`。
     ///
-    /// 向后（`forward`）时取该行内容的开头，向前时取上方最近一个非空行的末尾；上方没有内容时
-    /// 留在该行内容的开头。
+    /// 向后（`forward`）时取该行内容的开头；向前时优先停在上方可编辑的空行，否则取上一行文字的末尾。
     pub(super) fn live_visible(&self, pos: usize, forward: bool) -> usize {
         let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
             return pos;
         };
-        let line = rope.char_to_line(pos.min(rope.len_chars()));
+        let body_start = self.property_body_start().unwrap_or(0);
+        let pos = pos.max(body_start).min(rope.len_chars());
+        let line = rope.char_to_line(pos);
+        let mapped = |line| {
+            self.preview.markdown.layout.as_ref().is_some_and(|laid| {
+                self.preview.markdown.checked == self.editor.active().map(|d| d.revision)
+                    && laid.blank_point(rope.line_to_byte(line)).is_some()
+            })
+        };
+        if mapped(line) {
+            return pos;
+        }
         let start = rope.line_to_char(line);
         let hidden = self.live_hidden_prefix(line);
         if pos - start >= hidden {
             return pos;
         }
-        let blank = |l: usize| rope.line(l).chars().all(char::is_whitespace);
-        match (0..line).rev().find(|&l| !blank(l)) {
-            Some(above) if !forward => line_end(rope, above),
-            _ => start + hidden,
+        if !forward {
+            let visible = |l| mapped(l) || !rope.line(l).chars().all(char::is_whitespace);
+            if let Some(above) = (0..line).rev().find(|&l| visible(l)) {
+                return line_end(rope, above).max(body_start);
+            }
         }
+        start + hidden
     }
 
     /// 编辑区的命令移动光标之后调用：光标落在不显示的块标记中时移到可见位置。
@@ -390,11 +367,20 @@ impl App {
         };
         // 块间留白高于一行时，下一行的目标位置落在留白中，取到的最近一行仍是原来的行；
         // 因此每次再前进半行，直到到达其他行或超出内容范围。
-        let mut target = y + h / 2.0 + sign * step;
+        let center = y + h / 2.0;
+        let mut target = center + sign * step;
         let mut moved = None;
         let mut upstream = false;
-        while (0.0..=height).contains(&target) {
-            let (sx, sy) = screen(laid, target);
+        loop {
+            let probe = if by.is_none() {
+                laid.limit_blank_step(center, target)
+            } else {
+                target
+            };
+            if !(0.0..=height).contains(&probe) {
+                break;
+            }
+            let (sx, sy) = screen(laid, probe);
             let found = crate::app::preview::markdown::laid::source_at(self, sx, sy);
             moved = found.filter(|&s| {
                 upstream = self.live_row_affinity(s, sy);
@@ -406,7 +392,7 @@ impl App {
                     .and_then(|l| l.caret_point(s));
                 point.is_none_or(|(_, py, _)| (py - y).abs() >= 0.5)
             });
-            if moved.is_some() || by.is_some() {
+            if moved.is_some() || by.is_some() || !(0.0..=height).contains(&target) {
                 break;
             }
             target += sign * h / 2.0;
@@ -415,7 +401,8 @@ impl App {
         if moved.is_none() && down && !extend && self.live_append_paragraph() {
             return;
         }
-        // 仍在原来的行上（已是第一行或最后一行）时，移到文档的开头或末尾。
+        // 仍在原来的行上（已是第一行或最后一行）时，移到可编辑正文的开头、末尾。
+        let body_start = self.property_body_start().unwrap_or(0);
         let Some(doc) = self.editor.active_mut() else {
             return;
         };
@@ -425,8 +412,9 @@ impl App {
         let pos = match moved {
             Some(s) => rope.byte_to_char(s.min(rope.len_bytes())),
             None if down => rope.len_chars(),
-            None => 0,
-        };
+            None => body_start,
+        }
+        .max(body_start);
         doc.goal_cell = None;
         doc.collapse_selections();
         let anchor = if extend { doc.selection.anchor } else { pos };
@@ -451,7 +439,15 @@ impl App {
         self.preview.markdown.goal = None;
         self.preview.markdown.line_end = None;
         self.request_redraw();
-        let Some(source) = crate::app::preview::markdown::laid::source_at(self, x, y) else {
+        let property_start = self.property_body_start().and_then(|at| {
+            let rope = self.editor.active()?.text().rope()?;
+            Some(rope.char_to_byte(at))
+        });
+        let source = crate::app::preview::markdown::laid::source_at(self, x, y);
+        let Some(source) = source
+            .map(|source| source.max(property_start.unwrap_or(0)))
+            .or(property_start)
+        else {
             // 没有可定位的文字（空文档）：仍然进入编辑，显示光标。
             self.start_live_editing();
             return;

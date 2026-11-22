@@ -474,6 +474,7 @@ impl App {
     pub(super) fn animating(&self) -> bool {
         self.panels.sidebar.motion.is_some()
             || self.panels.tree.motion.is_some()
+            || self.library.animating()
             || self.log_tree_animating()
             || self.panels.tree.labels.moving()
             || self.git.commit.names.moving()
@@ -571,14 +572,52 @@ pub struct Tooltip {
     pub(crate) shown: bool,
     /// 最近一次画出的提示：对着的按钮、文字、是否放在按钮旁边（见 `view::draw_tip`）。
     pub(crate) last: std::cell::RefCell<Option<(Rect, String, bool)>>,
+    /// 只有 Markdown 链接提示能接住鼠标；普通按钮提示不截获悬停。
+    pub(crate) link: std::cell::RefCell<Option<LinkTooltip>>,
     /// 鼠标离开后正在淡出的提示和淡出的时钟。
     pub(crate) leaving: Option<(Rect, String, bool, Clock)>,
+}
+
+/// A visible link tooltip and the gap the pointer crosses to reach it.
+pub(crate) struct LinkTooltip {
+    pub(crate) card: Rect,
+    pub(crate) anchor: Rect,
+    pub(crate) source: (DocumentId, u64),
+    pub(crate) pane: winc_editor::panes::PaneId,
+    pub(crate) target: String,
+}
+
+impl LinkTooltip {
+    pub(crate) fn contains(&self, x: f32, y: f32) -> bool {
+        let anchor = self.anchor;
+        let card = self.card;
+        let (top, bottom) = if card.y >= anchor.bottom() {
+            (anchor.bottom(), card.y)
+        } else {
+            (card.bottom(), anchor.y)
+        };
+        // Cover the short gap even when clamping at the window edge shifts the card sideways.
+        let left = card.x.min(anchor.x);
+        let right = card.right().max(anchor.right());
+        card.contains(x, y) || Rect::new(left, top, right - left, bottom - top).contains(x, y)
+    }
 }
 
 /// 悬停提示淡入、淡出的时长，取 [`DETAILS_FADE`]：只为缓和出现和消失，比卡片的动画短。
 pub(crate) const TOOLTIP_FADE: Duration = DETAILS_FADE;
 
 impl App {
+    /// Return the card bounds when the pointer is on the live link tooltip or crossing its gap.
+    pub(in crate::app) fn link_tooltip_at(&self, x: f32, y: f32) -> Option<Rect> {
+        self.overlays
+            .tooltip
+            .link
+            .borrow()
+            .as_ref()
+            .filter(|tip| tip.contains(x, y) && !self.dragging() && !self.overlay_covers(x, y))
+            .map(|tip| tip.card)
+    }
+
     /// 悬停提示此刻的不透明度：停留满 `TOOLTIP_DELAY` 之后在 [`TOOLTIP_FADE`] 内淡入；关闭了
     /// 动画效果时直接显示。
     pub(crate) fn tooltip_opacity(&self) -> f32 {
@@ -596,6 +635,7 @@ impl App {
 
     /// 悬停的目标变了：正显示着的提示开始淡出。
     pub(super) fn leave_tooltip(&mut self) {
+        self.overlays.tooltip.link.take();
         let last = self.overlays.tooltip.last.take();
         if let (true, Some((rect, label, beside))) = (self.overlays.tooltip.shown, last) {
             let clock = self.clock(TOOLTIP_FADE);

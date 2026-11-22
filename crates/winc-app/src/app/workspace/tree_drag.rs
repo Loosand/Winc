@@ -248,6 +248,7 @@ impl App {
                 self.toggle_dir_recursively(index);
             } else {
                 self.set_dir_expanded(index, None);
+                self.browse_library_tree_folder(path);
             }
         } else {
             if keep || !self.preview_on_click() {

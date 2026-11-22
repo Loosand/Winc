@@ -107,6 +107,28 @@ impl Clipboard {
         }
     }
 
+    /// Put HTML and its plain-text fallback on the clipboard in the same write.
+    pub(in crate::app) fn set_formatted(&mut self, rich: String, plain: String) -> bool {
+        #[cfg(test)]
+        {
+            if !self.set_text(plain, false) {
+                return false;
+            }
+            self.copied_html = Some(rich);
+            true
+        }
+        #[cfg(not(test))]
+        {
+            let written = self
+                .system()
+                .is_some_and(|system| system.set_html(rich, Some(plain)).is_ok());
+            if written {
+                self.whole_line = None;
+            }
+            written
+        }
+    }
+
     /// 最近一次写入的是否是整行，并且内容与 `text` 相同。
     ///
     /// 剪贴板的内容被其他程序替换后，`text`（当前读到的内容）与记录的文本不同，返回 `false`。

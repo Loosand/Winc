@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock, mpsc};
 
-use winc_editor::DocumentId;
-use winc_editor::{PictureState, PreviewKind, PreviewMode};
+use winc_config::State;
+use winc_editor::{DocumentId, Editor, PictureState, PreviewKind, PreviewMode};
 use winc_preview::image::{self, Picture, Pixels, Source};
 use winc_preview::svg;
 
@@ -393,7 +393,15 @@ impl App {
         }
     }
 
-    /// 切换源代码与预览（SVG、Markdown）；当前文件不能预览时在状态栏提示。
+    /// Markdown 只有可编辑的排版视图，不显示模式切换。
+    pub(crate) fn preview_switch_available(&self) -> bool {
+        self.editor.active().is_some_and(|doc| {
+            doc.preview_kind()
+                .is_some_and(|kind| kind != PreviewKind::Markdown)
+        })
+    }
+
+    /// 切换当前文件的源代码与预览。
     pub(in crate::app) fn toggle_preview(&mut self) {
         let Some(doc) = self.editor.active() else {
             return;
@@ -408,6 +416,9 @@ impl App {
     /// 用户选择以 `mode` 显示当前标签（标签栏右端的三段切换、切换预览的命令）：切换成功时
     /// 为同类文件记住该方式，之后打开的同类文件按它显示，下次启动沿用。
     pub(in crate::app) fn choose_preview_mode(&mut self, mode: PreviewMode) {
+        if !self.preview_switch_available() {
+            return;
+        }
         self.set_preview_mode(mode);
         let Some(doc) = self.editor.active().filter(|d| d.preview_mode() == mode) else {
             return;
@@ -428,13 +439,13 @@ impl App {
         });
     }
 
-    /// 按 `state.json` 记下的方式设定之后打开的各类能预览的文件的显示方式（启动、新开窗口时）。
-    pub(crate) fn apply_preview_state(&mut self) {
+    /// 打开 Markdown 始终进入可编辑的排版视图；其他类型沿用上次的选择。
+    pub(crate) fn apply_preview_state(editor: &mut Editor, state: &State) {
         for kind in PreviewKind::ALL {
-            let saved = self.state.preview_modes.get(preview_key(kind));
-            self.editor.preview_defaults[kind as usize] = match saved.map(String::as_str) {
-                Some("split") => PreviewMode::Split,
-                Some("preview") => PreviewMode::Preview,
+            let saved = state.preview_modes.get(preview_key(kind));
+            editor.preview_defaults[kind as usize] = match (kind, saved.map(String::as_str)) {
+                (PreviewKind::Markdown, _) | (_, Some("preview")) => PreviewMode::Preview,
+                (_, Some("split")) => PreviewMode::Split,
                 _ => PreviewMode::Source,
             };
         }

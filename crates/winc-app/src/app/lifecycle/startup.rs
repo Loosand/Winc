@@ -93,6 +93,8 @@ impl App {
             layout: Layout::default(),
             tabs: TabBar::default(),
             panes: Default::default(),
+            library: Default::default(),
+            note_links: Default::default(),
             diff: Default::default(),
             status: Default::default(),
             caches: crate::app::editor::EditorCaches {
@@ -140,6 +142,7 @@ impl App {
                     ..Default::default()
                 },
                 file_hover: None,
+                file_hover_directory: false,
                 name_input: None,
                 global: GlobalSearch::default(),
                 outline: OutlineState::default(),

@@ -17,7 +17,8 @@ fn touch(app: &mut App, id: u64, phase: TouchPhase, x: f32, y: f32) {
 
 fn document() -> App {
     let mut app = blank_app(false);
-    app.new_file();
+    // 这些测试按纯文本的行高、网格列和滚动条位置定位落点。
+    app.new_text_buffer();
     app.run(Command::Insert("hello world\n".repeat(400)));
     app.editor.active_mut().unwrap().selection = winc_core::Selection::point(0);
     app.editor.active_mut().unwrap().scroll_line = 0.0;

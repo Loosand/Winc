@@ -11,7 +11,7 @@ use winc_i18n::t;
 use super::*;
 use crate::system;
 
-/// 「停止输入后」自动保存时，最后一次修改之后等待的时间。
+/// 写作窗口从第一次修改计时；其他窗口在「停止输入后」从最后一次修改计时。
 const AUTO_SAVE_DELAY: Duration = Duration::from_secs(1);
 
 /// 自动保存的时机（见 [`App::auto_save_tick`]）。
@@ -19,7 +19,7 @@ const AUTO_SAVE_DELAY: Duration = Duration::from_secs(1);
 pub(crate) struct AutoSaveWatch {
     /// 上次检查时的焦点。
     focus: Option<Focus>,
-    /// 等待保存的文档（标识和版本号）和到期时刻；文档再被修改时重新计时。
+    /// 等待保存的文档（标识和版本号）和到期时刻。
     due: Option<(Vec<(DocumentId, u64)>, Instant)>,
     /// 上次保存时的文档和版本号。
     tried: Vec<(DocumentId, u64)>,
@@ -288,17 +288,34 @@ impl App {
     }
 
     /// 打开文件或目录 `path`；`preview` 为真时在预览标签中打开文件（见 [`Self::preview_path`]）。
-    fn open_file(&mut self, path: &Path, preview: bool) {
+    pub(super) fn open_file(&mut self, path: &Path, preview: bool) -> bool {
         if self.is_folder(path) {
             self.open_folder(path);
-            return;
+            return true;
         }
 
+        let writing = self.writing_workspace();
+        if writing {
+            let canonical = winc_editor::canonical_path(path);
+            let keep = self
+                .editor
+                .documents
+                .iter()
+                .find(|doc| doc.path.as_ref() == Some(&canonical))
+                .map(|doc| doc.id);
+            if !self.prepare_writing_switch(keep) {
+                return false;
+            }
+            self.preview_tab = None;
+        }
+        let preview = preview && !writing;
         let replace = self.preview_index();
         if replace.is_none() {
             self.preview_tab = None;
         }
-        self.auto_save_active();
+        if !writing {
+            self.auto_save_active();
+        }
         let count = self.editor.tab_count();
         let index = self.editor.open_tab(path);
         let id = self.editor.documents[index].id;
@@ -324,6 +341,44 @@ impl App {
         self.ensure_caret_visible();
         self.reset_blink();
         self.request_redraw();
+        true
+    }
+
+    /// Flush edits before replacing the document. A failed save must not close any document.
+    pub(in crate::app) fn prepare_writing_switch(&mut self, keep: Option<DocumentId>) -> bool {
+        if !self.writing_workspace() {
+            return true;
+        }
+        let closing: Vec<_> = self
+            .editor
+            .documents
+            .iter()
+            .filter_map(|doc| (Some(doc.id) != keep).then_some(doc.id))
+            .collect();
+        if !closing.iter().all(|&id| self.flush_writing_document(id)) {
+            return false;
+        }
+        self.close_documents(&closing);
+        true
+    }
+
+    pub(in crate::app) fn flush_writing_document(&mut self, id: DocumentId) -> bool {
+        self.wait_for_save(id);
+        let Some(doc) = self.editor.document(id) else {
+            return true;
+        };
+        if self.is_formatting(id)
+            || (doc.is_dirty() && (doc.path.is_none() || doc.deleted_on_disk()))
+        {
+            let name = doc.name().into_owned();
+            self.notify(
+                NoticeKind::Warning,
+                t!("workspace-notebook-switch-unsaved", name = name),
+            );
+            return false;
+        }
+        // The regular save path checks for outside changes and reports I/O errors.
+        !doc.is_dirty() || self.write_document(id, None, true)
     }
 
     /// 用新打开的第 `new` 个标签替换预览标签（第 `old` 个）：新标签移到原位置，原标签关闭，
@@ -357,6 +412,14 @@ impl App {
             }
         };
         self.history.files.iter_mut().for_each(relocate);
+        if self
+            .state
+            .recent_files
+            .iter()
+            .any(|path| path.starts_with(from))
+        {
+            self.update_state(|state| state.recent_files.iter_mut().for_each(relocate));
+        }
         self.history
             .closed
             .iter_mut()
@@ -654,8 +717,26 @@ impl App {
         self.activate_tab(index);
     }
 
-    /// 新建未命名文档并切换到该文档。
+    /// 新建未命名笔记，直接在排版视图里放好光标。
     pub(in crate::app) fn new_file(&mut self) {
+        if !self.prepare_writing_switch(None) {
+            return;
+        }
+        self.editor.new_untitled_note();
+        self.focus = Focus::Editor;
+        self.relayout();
+        if self.markdown_live() {
+            self.start_live_editing();
+            self.reset_blink();
+        }
+        self.request_redraw();
+    }
+
+    /// Vim 的 `:new` 保留普通文本缓冲区，不把命令模式切换成笔记编辑。
+    pub(in crate::app) fn new_text_buffer(&mut self) {
+        if !self.prepare_writing_switch(None) {
+            return;
+        }
         self.editor.new_untitled();
         self.focus = Focus::Editor;
         self.relayout();
@@ -729,13 +810,15 @@ impl App {
             self.auto_save_active();
         }
 
+        let writing = self.writing_workspace();
         let watch = &mut self.auto_save_watch;
-        if self.config.auto_save != Some(AutoSave::AfterDelay) {
+        if !writing && self.config.auto_save != Some(AutoSave::AfterDelay) {
             watch.due = None;
             return None;
         }
         let dirty: Vec<(DocumentId, u64)> = (self.editor.documents.iter())
             .filter(|doc| doc.is_dirty() && !doc.in_conflict())
+            .filter(|doc| !writing || doc.path.is_some())
             .map(|doc| (doc.id, doc.revision))
             .collect();
         // 保存过而没有保存成功的（只读、已删除、没有路径）不每隔一段时间重试，再修改后再保存。
@@ -743,9 +826,14 @@ impl App {
             watch.due = None;
             return None;
         }
-        match &watch.due {
-            Some((seen, at)) if *seen == dirty && now < *at => Some(*at),
-            Some((seen, _)) if *seen == dirty => {
+        let due = watch.due.as_ref().and_then(|(seen, at)| {
+            let same = *seen == dirty
+                || (writing && seen.iter().map(|d| d.0).eq(dirty.iter().map(|d| d.0)));
+            same.then_some(*at)
+        });
+        match due {
+            Some(at) if now < at => Some(at),
+            Some(_) => {
                 let ids: Vec<DocumentId> = dirty.iter().map(|&(id, _)| id).collect();
                 watch.due = None;
                 watch.tried = dirty;
@@ -761,7 +849,7 @@ impl App {
     }
 
     /// 开启「自动保存」时，在切换离开之前保存当前文档。
-    fn auto_save_active(&mut self) {
+    pub(super) fn auto_save_active(&mut self) {
         if let Some(id) = self.editor.active().map(|d| d.id) {
             self.auto_save(&[id]);
         }
@@ -774,7 +862,7 @@ impl App {
     /// 窗口上有提示框时也不保存，提示框会使窗口失去焦点，用户随后点「不保存」就不再有效。保存成功
     /// 时不提示，失败时仍然提示。
     pub(in crate::app) fn auto_save(&mut self, ids: &[DocumentId]) {
-        if self.config.auto_save.unwrap_or_default() == AutoSave::Off {
+        if !self.writing_workspace() && self.config.auto_save.unwrap_or_default() == AutoSave::Off {
             return;
         }
         #[cfg(target_os = "macos")]
@@ -913,10 +1001,11 @@ impl App {
         let Some(doc) = self.editor.document_mut(id) else {
             return false;
         };
+        let edited = doc.is_dirty();
         if (background || remote) && to.is_none() {
             match doc.begin_save() {
                 Ok(Some(job)) => {
-                    self.save_in_background(id, job, quiet);
+                    self.save_in_background(id, job, quiet, edited);
                     if background {
                         return true;
                     }
@@ -947,6 +1036,7 @@ impl App {
                 }
                 self.blame_saved(id);
                 self.run_file_saved(id);
+                self.note_edit_saved(id, edited);
                 if saved_as {
                     if let Some((other, _)) = other {
                         self.close_documents(&[other]);
@@ -974,6 +1064,22 @@ impl App {
         }
     }
 
+    /// 另存为沿用已有文件名，未命名的笔记默认加上 `.md`。
+    pub(in crate::app) fn save_as_name(&self, id: DocumentId) -> String {
+        self.editor.document(id).map_or_else(
+            || "untitled.txt".into(),
+            |doc| {
+                if doc.path.is_none()
+                    && doc.preview_kind() == Some(winc_editor::PreviewKind::Markdown)
+                {
+                    "untitled.md".into()
+                } else {
+                    doc.name().into_owned()
+                }
+            },
+        )
+    }
+
     /// 弹出系统的打开或另存为面板，选择完成后经事件循环回到 `on_picked`。
     ///
     /// macOS 上是系统的面板；Windows 上是系统的文件对话框；其他 Unix 平台通过 XDG 桌面门户由
@@ -986,7 +1092,7 @@ impl App {
         let (name, dir) = match &kind {
             Pick::SaveAs(id) => {
                 let doc = self.editor.document(*id);
-                let name = doc.map_or_else(|| "untitled.txt".to_owned(), |d| d.name().into_owned());
+                let name = self.save_as_name(*id);
                 let dir = doc
                     .and_then(|d| d.path.as_ref()?.parent().map(Path::to_path_buf))
                     .or_else(|| self.editor.root().map(Path::to_path_buf));
@@ -1221,6 +1327,9 @@ impl App {
         }
 
         if !live {
+            if self.library_shown() {
+                self.refresh_library();
+            }
             // 发行版无法访问时目录都读不到，保留现有的文件树。
             let reachable = self.editor.root().is_none_or(winc_editor::wsl::reachable);
             if let Some(ws) = (self.editor.workspace.as_mut()).filter(|_| reachable) {

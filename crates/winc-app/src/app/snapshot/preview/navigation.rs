@@ -244,7 +244,7 @@ fn preview_and_source_point_at_each_other() {
         assert_eq!(top, line, "{target}");
     }
 
-    // 只看预览时右键「在源代码中显示」：改为分栏，光标放到点中的字上。
+    // 在排版视图直接右键定位原文光标，不离开正在编辑的页面。
     app.set_preview_mode(PreviewMode::Preview);
     settle(&mut app);
     let at = shown[..shown.find("打印一行").unwrap()].chars().count();
@@ -252,9 +252,8 @@ fn preview_and_source_point_at_each_other() {
     paint(&mut app);
     let (x, y) = point_of(&app, at);
     assert!(app.markdown_context_target(x, y));
-    app.reveal_markdown_source();
     let doc = app.editor.active().unwrap();
-    assert_eq!(doc.preview_mode(), PreviewMode::Split);
+    assert_eq!(doc.preview_mode(), PreviewMode::Preview);
     let expected = SAMPLE[..SAMPLE.find("打印一行").unwrap()].chars().count();
     assert_eq!(doc.selection, Selection::point(expected));
     assert!(!app.preview.markdown.focused);

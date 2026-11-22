@@ -372,6 +372,10 @@ impl App {
     /// 鼠标在 `(x, y)` 时悬停的东西。在其他窗格上时按那个窗格判断，并记下是哪个窗格
     /// （[`PaneUi::hover`]）；Markdown 预览里代码块的悬停也记在那个窗格。
     pub(in crate::app) fn hover_here(&mut self, x: f32, y: f32) -> Hover {
+        if self.link_tooltip_at(x, y).is_some() {
+            // The card can extend across a pane divider. Keep the link's pane, not the pointer's.
+            return self.pointer.hover;
+        }
         let pane = self
             .background_pane_at(x, y)
             .filter(|_| !self.tab_dragging());
@@ -396,11 +400,9 @@ impl App {
     /// 在鼠标所在的窗格里运行 `f`：鼠标在其他窗格上时临时把它换到前台。
     pub(crate) fn in_hovered_pane<T>(&mut self, f: impl FnOnce(&mut App) -> T) -> T {
         let (x, y) = self.pointer.mouse;
-        match self
-            .panes
-            .hover
-            .filter(|p| self.background_pane_at(x, y) == Some(*p))
-        {
+        match self.panes.hover.filter(|p| {
+            self.link_tooltip_at(x, y).is_some() || self.background_pane_at(x, y) == Some(*p)
+        }) {
             Some(pane) => self.with_pane(pane, f),
             None => f(self),
         }
@@ -719,6 +721,9 @@ impl App {
 
     /// 向右（`Axis::Row`）或向下拆分前台窗格，新窗格打开当前标签。
     pub(in crate::app) fn split_editor(&mut self, axis: Axis) {
+        if self.writing_workspace() {
+            return;
+        }
         let old = self.editor.panes.focused;
         self.settle_editor_glide();
         if self.editor.split(axis).is_none() {
@@ -737,7 +742,7 @@ impl App {
         let Some(doc) = self.editor.active().map(|d| d.id) else {
             return;
         };
-        if self.editor.tab_count() < 2 {
+        if self.writing_workspace() || self.editor.tab_count() < 2 {
             return;
         }
         self.split_editor(axis);

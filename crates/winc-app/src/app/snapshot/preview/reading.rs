@@ -30,11 +30,7 @@ fn docx_files_open_as_a_reading_view() {
 
     let area = app.preview.markdown.area;
     right_click(&mut app, (area.x + area.w / 2.0, area.y + 60.0));
-    assert!(
-        !menu_commands(&app)
-            .iter()
-            .any(|(c, _)| *c == MenuCommand::RevealSource)
-    );
+    assert!(menu_commands(&app).contains(&(MenuCommand::SelectAll, true)));
 
     let broken = dir.join("损坏.docx");
     std::fs::write(&broken, b"not a docx").unwrap();
@@ -79,11 +75,7 @@ fn release_notes_open_in_a_reading_tab() {
     assert!(shown(&app).contains("新功能") && shown(&app).contains('乙'));
     let area = app.preview.markdown.area;
     right_click(&mut app, (area.x + area.w / 2.0, area.y + 60.0));
-    assert!(
-        !menu_commands(&app)
-            .iter()
-            .any(|(c, _)| *c == MenuCommand::RevealSource)
-    );
+    assert!(menu_commands(&app).contains(&(MenuCommand::SelectAll, true)));
 
     // 未能读取：标签中有两个按钮，重试沿用上一次的范围并回到正在读取。
     app.show_release_notes(None);

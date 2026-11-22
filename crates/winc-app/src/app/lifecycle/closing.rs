@@ -196,6 +196,22 @@ impl App {
         if self.closing.prompt.is_some() {
             return;
         }
+        if self.writing_workspace() {
+            let named: Vec<_> = self
+                .editor
+                .documents
+                .iter()
+                .filter(|doc| doc.is_dirty() && doc.path.is_some())
+                .filter(|doc| match &request {
+                    CloseRequest::Tabs(ids) => ids.contains(&doc.id),
+                    _ => true,
+                })
+                .map(|doc| doc.id)
+                .collect();
+            for id in named {
+                self.flush_writing_document(id);
+            }
+        }
 
         // 退出、关闭开着目录的窗口时先写入备份，已备份的文档不再询问（热退出），下次启动或再次
         // 打开该目录时恢复。没开目录的窗口关闭后，这些备份没有恢复的时机，因此逐个询问。

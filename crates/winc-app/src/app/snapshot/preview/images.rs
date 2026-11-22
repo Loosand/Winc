@@ -135,8 +135,8 @@ fn dragging_the_split_divider_resizes_both_halves() {
     use winit::event::MouseButton;
 
     let dir = sample_folder("split-divider-drag");
-    let path = dir.join("a.md");
-    std::fs::write(&path, "# 标题\n\n正文\n").unwrap();
+    let path = dir.join("a.csv");
+    std::fs::write(&path, "a,b\n1,2\n").unwrap();
     let mut app = app_with(&path, false);
     app.choose_preview_mode(PreviewMode::Split);
     paint(&mut app);

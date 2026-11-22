@@ -309,6 +309,14 @@ fn draw_pick_row(app: &App, frame: &mut Frame<'_>, row: Rect, i: usize, clip: Re
 ///
 /// 文件索引尚未建好时，列表区显示「正在索引文件…」。
 pub(super) fn draw_picker(app: &mut App, frame: &mut Frame<'_>) {
+    if app.overlays.picker.property.is_some() {
+        super::note_property::draw(app, frame);
+        return;
+    }
+    if app.overlays.picker.notebook.is_some() {
+        super::note_search::draw(app, frame);
+        return;
+    }
     if app.picker_is_git() {
         super::git::picker::draw(app, frame);
         return;

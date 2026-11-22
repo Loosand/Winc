@@ -43,6 +43,10 @@ impl App {
     /// 窗口里已经开着另一个目录时，按 `editor.openFolderInNewWindow` 在新窗口或此窗口打开；
     /// 没有设置时弹出提示框询问。其余情况同 [`Self::switch_folder`]。
     pub(in crate::app) fn open_folder(&mut self, path: &Path) {
+        if self.writing_workspace() && !winc_backend::is_remote(path) {
+            self.switch_folder(path);
+            return;
+        }
         let target = winc_config::files::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let other = self.editor.root().is_some_and(|root| root != target);
         if !other || self.focus_window_with(&target) {
@@ -156,6 +160,7 @@ impl App {
         self.folder_opened();
         self.focus = match self.panels.sidebar.view {
             SidebarView::Files => Focus::Tree,
+            SidebarView::Outline => Focus::Outline,
             SidebarView::Search => Focus::GlobalQuery,
             SidebarView::Commit => self.commit_view_focus(),
         };
@@ -166,7 +171,9 @@ impl App {
         let session = self.state.session_for(&root).cloned();
         // 单独打开一组中的打开的目录时不恢复附加的目录，这一组仍记在会话里。
         let alone = self.disk.open_alone.take().is_some_and(|path| path == root);
-        self.disk.solo = alone && session.as_ref().is_some_and(|s| !s.folders.is_empty());
+        self.disk.solo = !self.notebook_sidebar()
+            && alone
+            && session.as_ref().is_some_and(|s| !s.folders.is_empty());
         if !self.disk.solo {
             self.restore_group(session.as_ref());
         }
@@ -249,6 +256,7 @@ impl App {
     /// 包括输入框和浮层、全局搜索结果、`⌘P` 面板的文件表、文件树的滚动位置和动画、
     /// 已关闭标签的记录（`⇧⌘T`）以及后退前进历史。
     fn reset_folder_views(&mut self) {
+        self.reset_library();
         // 输入框和浮层中保存的行号、路径属于旧目录，在新目录中无效。
         self.panels.name_input = None;
         self.bars.goto_input = None;
@@ -283,8 +291,12 @@ impl App {
 
         // 退出时会再记录一次；此处先设置 `last`，使进程异常中止后下次启动仍能回到该目录，
         // 并找回未保存的内容。还没有现场的目录先记一个空现场：`last` 只认有现场的目录。
+        let notebook = self.notebook_sidebar();
         self.update_state(|state| {
             state.remember(&root);
+            if notebook {
+                state.register_notebook(&root);
+            }
             if state.session_for(&root).is_none() {
                 state.set_session(Session {
                     folder: root.clone(),

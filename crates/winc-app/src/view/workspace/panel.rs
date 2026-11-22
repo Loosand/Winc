@@ -93,6 +93,7 @@ pub(super) fn draw_view_tabs(app: &App, frame: &mut Frame<'_>) {
         };
         match view {
             SidebarView::Files => icons::files(frame, center(rect), scale, color, clip),
+            SidebarView::Outline => icons::list_view(frame, center(rect), color, clip),
             SidebarView::Search => icons::search(frame, center(rect), scale, color, clip),
             SidebarView::Commit => icons::git(frame, center(rect), scale, color, clip),
         }

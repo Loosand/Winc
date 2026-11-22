@@ -87,8 +87,9 @@ fn splits_are_saved_with_the_session_and_restored() {
 #[test]
 fn drawing_other_panes_leaves_the_focused_panes_layout_alone() {
     let dir = sample_folder("panes-parts");
-    std::fs::write(dir.join("notes.md"), "# Notes\n\nSome text.\n").unwrap();
-    let mut app = app_with(&dir.join("notes.md"), false);
+    let path = dir.join("picture.svg");
+    std::fs::write(&path, r#"<svg xmlns="http://www.w3.org/2000/svg"/>"#).unwrap();
+    let mut app = app_with(&path, false);
     app.config.minimap = Some(true);
     app.run_action(Action::SplitRight);
     app.relayout();
@@ -377,7 +378,7 @@ fn files_dropped_at_a_pane_edge_open_in_a_new_split() {
     let editor = app.layout.editor;
     let at = (editor.x + editor.w / 2.0, editor.bottom() - 20.0);
     // 同一次拖进来两个文件，落在下边：下面拆出一个窗格，两个文件都开在里面。
-    app.hover_file();
+    app.hover_file(&dir.join("a.txt"));
     app.drop_file_at(&dir.join("a.txt"), at.0, at.1);
     app.drop_file_at(&dir.join("Cargo.toml"), at.0, at.1);
     let below = app.editor.panes.focused;

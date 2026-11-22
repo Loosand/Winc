@@ -155,9 +155,13 @@ impl App {
         let _ = token;
     }
 
-    /// 是否显示状态栏（`statusBar`）。
+    /// The status bar is opt-in, regardless of the current page.
     pub(crate) fn status_bar_shown(&self) -> bool {
-        self.config.status_bar != Some(false)
+        #[cfg(test)]
+        if self.panels.sidebar.legacy_chrome {
+            return self.config.status_bar != Some(false);
+        }
+        self.config.status_bar == Some(true)
     }
 
     /// 返回从本窗口打开的新窗口的位置（外框左上角，物理像素）和本窗口的缩放比例：比本窗口往
@@ -323,12 +327,16 @@ impl App {
         // 依附于触发位置的浮层在终端、窗格都排好以后再放。
         self.place_places();
         self.place_git_picker();
+        self.place_property_picker();
         self.animate_picker((w, h));
         if let Some(bottom) = self.overlays.picker.places_bottom {
             self.layout.picker.y = bottom - self.layout.picker.h;
         }
 
+        self.place_notebook_search((w, h));
+        self.place_notebook_sidebar();
         self.place_outline();
+        self.sync_library();
         // 搜索和历史差异各有自己的列表，不能命中工作区文件树原来的区域。
         if self.panels.sidebar.view == SidebarView::Search || self.log_diff_tree().is_some() {
             let tree = self.layout.tree;
@@ -347,13 +355,13 @@ impl App {
         self.place_minimap();
     }
 
-    /// 当前文件能预览（SVG）时，在标签栏右端留出「源代码 / 分栏 / 预览」三个按钮，标签栏
+    /// 当前文件能切换预览时，在标签栏右端留出「源代码 / 分栏 / 预览」三个按钮，标签栏
     /// 让出这一块。
     ///
     /// 在可预览与不可预览的文件之间切换时，按钮组按比例从右侧展开或收起，标签栏随之让出或
     /// 收回空间。
     fn place_preview_button(&mut self) {
-        let present = self.editor.active().is_some_and(|d| d.can_preview());
+        let present = self.preview_switch_available();
         let share = self.motion.module_fx.preview.share(present);
         let l = &mut self.layout;
         l.preview = Rect::default();

@@ -97,6 +97,7 @@ fn draw_card(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
         | FormKind::GoToRevision
         | FormKind::CompareRevision { .. }
         | FormKind::RenameGroup
+        | FormKind::Property(_)
         | FormKind::LogPath => {
             return draw_question(app, frame, layout);
         }

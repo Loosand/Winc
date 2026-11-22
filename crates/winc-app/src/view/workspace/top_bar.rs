@@ -3,11 +3,17 @@
 use super::*;
 use crate::app::TabHit;
 
-/// 绘制顶栏：底色与编辑区相同，与下方的代码区之间不绘制分隔线。
-///
-/// 标签为胶囊形状，一直排到顶栏右端；右端不放按钮。
+/// Show the current document's path. Keep tabs when recovering multiple drafts or using multi-document tools.
 pub(in crate::view) fn draw_top_bar(app: &mut App, frame: &mut Frame<'_>) {
-    draw_tabs(app, frame);
+    if app.writing_workspace() && app.editor.documents.len() <= 1 {
+        app.tabs = Default::default();
+        let bar = app.layout.tabs;
+        crate::view::status::draw_crumbs(app, frame, bar, (bar.w - 24.0).max(0.0));
+    } else {
+        draw_tabs(app, frame);
+    }
+    draw_preview_button(app, frame);
+    draw_browser_button(app, frame);
 }
 
 /// 绘制顶栏右端的窗口按钮（最小化、最大化或还原、关闭），由应用绘制标题栏时才有。
@@ -379,8 +385,6 @@ fn draw_tabs(app: &mut App, frame: &mut Frame<'_>) {
         );
     }
     app.hits.tabs = hits;
-    draw_preview_button(app, frame);
-    draw_browser_button(app, frame);
 }
 
 /// 绘制标签栏右端的「在浏览器中打开」按钮（`Layout::browser`）：出现、消失时随按钮宽度淡入
@@ -412,7 +416,7 @@ fn draw_browser_button(app: &App, frame: &mut Frame<'_>) {
 fn draw_preview_button(app: &mut App, frame: &mut Frame<'_>) {
     use winc_editor::PreviewMode::*;
     let group = app.layout.preview;
-    let present = app.editor.active().is_some_and(|d| d.can_preview());
+    let present = app.preview_switch_available();
     if present {
         app.motion.module_fx.preview_mode = app.editor.active().map(|d| d.preview_mode());
     }
@@ -470,7 +474,15 @@ fn draw_tab(
     // 图标按 `tab_icon_name` 取；日志标签绘制 Git 的图标。
     let icon_name = tab_icon_name(doc);
     let icon = (tab.x + 10.0, icon_center_y(app, tab, app.fonts.ui));
-    let cx = if doc.log.is_some() {
+    let cx = if doc.reading == Some(winc_editor::Reading::Library) {
+        let c = (icon.0 + icons::FILE_WIDTH / 2.0, icon.1);
+        super::library::home_icon(frame, c, p.accent, view);
+        icon.0 + icons::FILE_WIDTH + 7.0
+    } else if doc.reading == Some(winc_editor::Reading::NoteGraph) {
+        let c = (icon.0 + icons::FILE_WIDTH / 2.0, icon.1);
+        super::note_graph::icon(frame, c, p.accent, view);
+        icon.0 + icons::FILE_WIDTH + 7.0
+    } else if doc.log.is_some() {
         let c = (icon.0 + icons::FILE_WIDTH / 2.0, icon.1);
         // 实色的强调色，与文件标签的彩色图标同样醒目。
         icons::git(frame, c, 1.0, p.accent, view);

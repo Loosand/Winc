@@ -487,6 +487,7 @@ fn quitting_keeps_unsaved_changes_for_next_time() {
     assert!(crate::open_session_folder(&mut editor, &session));
     let restored = crate::app::restore_at_launch(&mut editor, Some(&session), Some(&root));
     let mut next = App::new(editor, None, Bench::from_env(), Config::default());
+    next.panels.sidebar.legacy_chrome = true;
     next.backup.root = Some(root.clone());
     next.adopt_restored(restored);
     let docs: Vec<(String, bool)> = next
@@ -890,6 +891,7 @@ fn waiting_asks_about_other_unsaved_files_before_quitting() {
     app.start_one_off(&args);
     let mut winc = crate::winc::Winc::new(None, None);
     let key = winc.add_detached(app);
+    winc.app(key).panels.sidebar.legacy_chrome = true;
 
     // 等待期间又新建了一个文件并写入内容，没有保存（临时打开时不写备份）。
     winc.app(key).new_file();

@@ -107,8 +107,24 @@ pub enum OutlineEmpty {
     NoContents,
 }
 
+/// Notebook heading geometry, shared by drawing, scrolling and keyboard jumps.
+pub(crate) struct HeadingLayout {
+    pub(crate) width: f32,
+    pub(crate) size: f32,
+    pub(crate) height: f32,
+    pub(crate) rows: Vec<HeadingRow>,
+}
+
+pub(crate) struct HeadingRow {
+    pub(crate) inset: f32,
+    pub(crate) top: f32,
+    pub(crate) height: f32,
+    pub(crate) lines: Vec<String>,
+}
+
 /// 大纲的状态。
 pub struct OutlineState {
+    pub(crate) heading_layout: Option<HeadingLayout>,
     /// 大纲是否展开。
     pub open: bool,
     /// 展开时符号列表的高度（逻辑像素），拖动标题行的上沿时改变。
@@ -156,6 +172,7 @@ impl Default for OutlineState {
     /// 尚未提取符号的状态：与没有打开文档时相同，写「未打开文件」。
     fn default() -> Self {
         OutlineState {
+            heading_layout: None,
             open: false,
             height: OUTLINE_HEIGHT,
             motion: None,
@@ -259,7 +276,7 @@ pub(crate) fn has_children(items: &[Symbol], i: usize) -> bool {
 impl App {
     /// 符号列表是否正在显示：侧栏可见、在文件视图，且大纲展开着（含展开、收起的途中）。
     pub(crate) fn outline_shown(&self) -> bool {
-        self.layout.sidebar.right() > 0.0 && self.layout.outline.h > OUTLINE_HEADER
+        self.layout.sidebar.right() > 0.0 && self.outline_list().h > 0.0
     }
 
     /// 在文件树下面排出大纲，文件树让出这一段；不在文件视图时没有大纲。
@@ -267,8 +284,23 @@ impl App {
     /// 展开时列表高度取 [`OutlineState::height`]，并为文件树至少留下 `OUTLINE_MIN`；过渡途中按
     /// 时钟从起点的高度变到终点。
     pub(in crate::app) fn place_outline(&mut self) {
+        let notebook = self.notebook_sidebar();
         let l = &mut self.layout;
         l.outline = Rect::default();
+        if self.panels.sidebar.view == SidebarView::Outline {
+            let tree = l.tree;
+            l.outline = Rect::new(
+                tree.x,
+                l.sidebar_header.y,
+                tree.w,
+                (tree.bottom() - l.sidebar_header.y).max(0.0),
+            );
+            l.tree.h = 0.0;
+            return;
+        }
+        if notebook {
+            return;
+        }
         let off = self.config.outline == Some(false);
         if off || self.panels.sidebar.view != SidebarView::Files || l.tree.h <= 0.0 {
             return;
@@ -296,7 +328,7 @@ impl App {
 
     /// 标题行上沿可以拖动调整高度的一条（逻辑像素，上下各 3）；大纲收起或不显示时为空。
     pub(crate) fn outline_divider(&self) -> Rect {
-        if !self.panels.outline.open || self.layout.outline.h <= 0.0 {
+        if self.notebook_sidebar() || !self.panels.outline.open || self.layout.outline.h <= 0.0 {
             return Rect::default();
         }
         let o = self.layout.outline;
@@ -327,6 +359,19 @@ impl App {
 
     /// 切到文件视图并展开大纲，焦点交给大纲（`⌘7`）；大纲在设置中关闭时只在状态栏说明。
     pub(in crate::app) fn show_outline(&mut self) {
+        if self.notebook_sidebar() {
+            if self.panels.sidebar.view != SidebarView::Outline {
+                self.panels.outline.source = None;
+                self.panels.outline.revealed = None;
+            }
+            self.set_sidebar_view(SidebarView::Outline);
+            self.set_sidebar(true);
+            self.focus = Focus::Outline;
+            self.panels.outline.selected = None;
+            self.sync_outline(Instant::now());
+            self.request_redraw();
+            return;
+        }
         if self.config.outline == Some(false) {
             self.flash(t!("workspace-outline-off"));
             return;
@@ -419,6 +464,7 @@ impl App {
     /// 重新提取当前文档的符号：文本在后台线程提取（没有事件循环的测试里直接提取），不是文本、
     /// 文件过大时直接换上说明；预览的 PDF 列出它的目录。
     fn refresh_outline(&mut self) {
+        let notebook = self.panels.sidebar.view == SidebarView::Outline;
         let Some(doc) = self.editor.active() else {
             let o = &mut self.panels.outline;
             o.source = None;
@@ -436,6 +482,14 @@ impl App {
         o.pending = None;
         o.anchor_tops.replace(None);
         o.kind = OutlineKind::Symbols;
+        if notebook && doc.reading == Some(winc_editor::Reading::Library) {
+            self.apply_outline(Some(id), Vec::new(), Some(OutlineEmpty::NoFile));
+            return;
+        }
+        if notebook && doc.highlighter.language().id != "markdown" {
+            self.apply_outline(Some(id), Vec::new(), Some(OutlineEmpty::NotText));
+            return;
+        }
         let pdf = doc.unsupported == Some(winc_editor::Unsupported::Pdf);
         if pdf && winc_preview::pdf::supported() {
             let path = doc.path.clone();
@@ -545,6 +599,7 @@ impl App {
         let switched = o.shown != id;
         o.shown_doc = doc;
         o.empty = empty.or_else(|| items.is_empty().then_some(OutlineEmpty::NoSymbols));
+        o.heading_layout = None;
         o.paths = symbol_paths(&items);
         o.items = items;
         o.shown = id;
@@ -609,6 +664,9 @@ impl App {
 
     /// 当前列出的各行：未被收起的上级挡住的符号（[`OutlineState::items`] 的下标），按顺序排列。
     pub(crate) fn outline_rows(&self) -> Vec<usize> {
+        if self.panels.sidebar.view == SidebarView::Outline {
+            return (0..self.panels.outline.items.len()).collect();
+        }
         self.outline_rows_opening(None)
     }
 
@@ -706,7 +764,15 @@ impl App {
 
     /// 列表的最大滚动量（逻辑像素）：内容比列表高时多留一行空白。
     pub(crate) fn outline_max_scroll(&self) -> f32 {
-        let content = (self.outline_rows().len() as f32 + 1.0) * TREE_ROW;
+        let content = if self.panels.sidebar.view == SidebarView::Outline {
+            self.panels
+                .outline
+                .heading_layout
+                .as_ref()
+                .map_or(0.0, |layout| layout.height)
+        } else {
+            (self.outline_rows().len() as f32 + 1.0) * TREE_ROW
+        };
         (content - self.outline_list().h).max(0.0)
     }
 
@@ -729,13 +795,26 @@ impl App {
     fn scroll_outline_to(&mut self, row: usize) {
         let list = self.outline_list();
         let max = self.outline_max_scroll();
-        let top = row as f32 * TREE_ROW;
+        let (top, height) = if self.panels.sidebar.view == SidebarView::Outline {
+            let Some(r) = self
+                .panels
+                .outline
+                .heading_layout
+                .as_ref()
+                .and_then(|l| l.rows.get(row))
+            else {
+                return;
+            };
+            (r.top, r.height)
+        } else {
+            (row as f32 * TREE_ROW, TREE_ROW)
+        };
         let before = self.panels.outline.scroll;
         let o = &mut self.panels.outline;
         if top < o.scroll {
             o.scroll = top;
-        } else if top + TREE_ROW > o.scroll + list.h {
-            o.scroll = top + TREE_ROW - list.h;
+        } else if top + height > o.scroll + list.h {
+            o.scroll = top + height - list.h;
         }
         o.scroll = o.scroll.clamp(0.0, max);
         self.glide_pane(ScrollTarget::Outline, before);
@@ -845,13 +924,14 @@ impl App {
         let row = rows.iter().position(|&i| i == at).unwrap_or(0);
         let items = &self.panels.outline.items;
         let depth = items[at].depth;
+        let folding = self.panels.sidebar.view != SidebarView::Outline;
         let target = match key {
             Key::Named(NamedKey::ArrowUp) => rows.get(row.wrapping_sub(1)).copied(),
             Key::Named(NamedKey::ArrowDown) => rows.get(row + 1).copied(),
             Key::Named(NamedKey::Home) => rows.first().copied(),
             Key::Named(NamedKey::End) => rows.last().copied(),
             Key::Named(NamedKey::ArrowLeft) => {
-                if has_children(items, at) && !self.outline_collapsed(at) {
+                if folding && has_children(items, at) && !self.outline_collapsed(at) {
                     self.toggle_outline(at);
                     return;
                 }
@@ -859,7 +939,7 @@ impl App {
                 items[..at].iter().rposition(|s| s.depth < depth)
             }
             Key::Named(NamedKey::ArrowRight) => {
-                if has_children(items, at) && self.outline_collapsed(at) {
+                if folding && has_children(items, at) && self.outline_collapsed(at) {
                     self.toggle_outline(at);
                     return;
                 }

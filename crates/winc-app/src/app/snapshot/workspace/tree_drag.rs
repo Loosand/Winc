@@ -322,7 +322,7 @@ fn files_dragged_over_the_window_mark_where_they_will_land() {
     let lib = row_of(&app, "lib");
     let (x, y) = tree_row_center(&app, lib);
     app.on_mouse_move(x, y);
-    app.hover_file();
+    app.hover_file(&dir.join("notes.md"));
     assert_eq!(app.file_hover(), Some(&DropZone::Tree(path_of(&app, lib))));
     shoot(&mut app, "drop-hover-tree");
 
@@ -344,7 +344,7 @@ fn files_dragged_over_the_window_mark_where_they_will_land() {
     app.end_file_hover();
     assert_eq!(app.file_hover(), None);
     assert_eq!(app.file_hover_tick(Instant::now()), None);
-    app.hover_file();
+    app.hover_file(&dir.join("notes.md"));
     app.drop_file(&dir.join("notes.md"));
     assert_eq!(app.file_hover(), None);
     std::fs::remove_dir_all(&dir).unwrap();

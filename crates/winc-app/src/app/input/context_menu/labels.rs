@@ -8,6 +8,39 @@ impl App {
     /// 返回命令 `command` 的菜单项文字。
     pub(crate) fn menu_label(&self, command: MenuCommand) -> MenuLabel {
         match command {
+            MenuCommand::PropertyOption(i) => {
+                let value = match self.overlays.context_menu.as_ref().map(|m| &m.target) {
+                    Some(MenuTarget::NoteProperty(menu)) => {
+                        menu.options.get(i).map_or("", String::as_str)
+                    }
+                    _ => "",
+                };
+                MenuLabel::plain(value)
+            }
+            MenuCommand::SwitchNotebookWorkspace(i) | MenuCommand::ForgetNotebookWorkspace(i) => {
+                let Some(MenuTarget::NotebookWorkspaces(roots)) =
+                    self.overlays.context_menu.as_ref().map(|menu| &menu.target)
+                else {
+                    return MenuLabel::plain("");
+                };
+                let Some(path) = roots.get(i) else {
+                    return MenuLabel::plain("");
+                };
+                let name = winc_editor::display_name(path);
+                let duplicate = roots
+                    .iter()
+                    .filter(|p| winc_editor::display_name(p) == name)
+                    .count()
+                    > 1;
+                MenuLabel {
+                    title: name.into_owned(),
+                    subtitle: path
+                        .parent()
+                        .filter(|_| duplicate)
+                        .map(|p| winc_editor::display_path(p, None)),
+                    tooltip: Some(winc_editor::display_path(path, None)),
+                }
+            }
             MenuCommand::OpenRecent(i) => self.recent_label(i),
             MenuCommand::GroupFolder(i, j) => self.group_folder_label(i, j),
             MenuCommand::ShowTab(i) => self.tab_list_label(i),

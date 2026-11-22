@@ -15,8 +15,12 @@ pub(super) mod file_work;
 pub(super) mod files;
 pub(super) mod folders;
 pub(super) mod global;
+pub(crate) mod library;
 pub(super) mod loading;
-pub(super) mod outline;
+pub(crate) mod note_links;
+pub(crate) mod note_search;
+pub(crate) mod notebook;
+pub(crate) mod outline;
 pub(crate) mod panes;
 pub(crate) mod picker;
 pub(super) mod recent;
@@ -39,6 +43,11 @@ pub struct Sidebar {
     pub(crate) view: SidebarView,
     /// 切换侧栏视图时，视图切换器中选中的一段从上一个视图滑入：记录上一个视图和动画时钟。
     pub(crate) view_slide: Option<(SidebarView, crate::app::animation::Clock)>,
+    pub(crate) navigation: notebook::Navigation,
+    /// Explicit compatibility mode for the original Winc UI tests.
+    #[cfg(test)]
+    pub(in crate::app) legacy_chrome: bool,
+    pub(in crate::app) documents_closed: bool,
 }
 
 impl Default for Sidebar {
@@ -49,6 +58,10 @@ impl Default for Sidebar {
             motion: None,
             view: SidebarView::Files,
             view_slide: None,
+            navigation: notebook::Navigation::default(),
+            #[cfg(test)]
+            legacy_chrome: false,
+            documents_closed: false,
         }
     }
 }
@@ -100,6 +113,7 @@ pub(crate) struct Panels {
     pub name_input: Option<NameInput>,
     /// 从文件管理器等来源拖动文件经过窗口时的放置位置；未在拖动时为 `None`。
     pub(in crate::app) file_hover: Option<DropZone>,
+    pub(in crate::app) file_hover_directory: bool,
     /// 侧栏搜索面板的状态。
     pub global: GlobalSearch,
     /// 文件视图底部大纲的状态。

@@ -1043,6 +1043,10 @@ impl Default for CommitState {
 impl App {
     /// 当前能用的侧栏视图：文件、搜索，Git 模块开着且目录在仓库里时再加提交。
     pub(crate) fn sidebar_views(&self) -> Vec<crate::layout::SidebarView> {
+        use crate::layout::SidebarView;
+        if self.notebook_sidebar() {
+            return vec![SidebarView::Files, SidebarView::Outline];
+        }
         let mut views = crate::layout::BASE_VIEWS.to_vec();
         if self.git.root.is_some() {
             views.push(crate::layout::SidebarView::Commit);
@@ -1056,7 +1060,10 @@ impl App {
     pub(crate) fn sidebar_tabs(&self) -> Vec<(Rect, crate::layout::SidebarView)> {
         use crate::layout::SidebarView;
         let mut views = self.sidebar_views();
-        if !views.contains(&SidebarView::Commit) && self.view_tab_share(SidebarView::Commit) > 0.0 {
+        if !self.notebook_sidebar()
+            && !views.contains(&SidebarView::Commit)
+            && self.view_tab_share(SidebarView::Commit) > 0.0
+        {
             views.push(SidebarView::Commit);
         }
         let views: Vec<_> = views

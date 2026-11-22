@@ -47,6 +47,8 @@ pub(crate) enum ScrollArea {
     Settings,
     /// 终端面板的回滚缓冲。
     Terminal,
+    /// Notebook or Reading cards.
+    CardGrid,
     /// Markdown 预览。
     Markdown,
     /// Markdown 预览中比正文宽的表格的水平滚动条。
@@ -67,7 +69,7 @@ pub(crate) enum ScrollArea {
 
 impl ScrollArea {
     /// 全部区域，遍历时用。
-    const ALL: [ScrollArea; 20] = [
+    const ALL: [ScrollArea; 21] = [
         ScrollArea::Editor,
         ScrollArea::EditorHorizontal,
         ScrollArea::DiffLeftHorizontal,
@@ -80,6 +82,7 @@ impl ScrollArea {
         ScrollArea::LogBranches,
         ScrollArea::Settings,
         ScrollArea::Terminal,
+        ScrollArea::CardGrid,
         ScrollArea::Markdown,
         ScrollArea::MarkdownTable,
         ScrollArea::Pdf,
@@ -105,6 +108,7 @@ impl ScrollArea {
             ScrollArea::LogBranches => Some(Scrollbar::LogBranches),
             ScrollArea::Settings => Some(Scrollbar::Settings),
             ScrollArea::Terminal => Some(Scrollbar::Terminal),
+            ScrollArea::CardGrid => Some(Scrollbar::CardGrid),
             ScrollArea::Markdown => Some(Scrollbar::Markdown),
             ScrollArea::MarkdownTable => Some(Scrollbar::MarkdownTable),
             ScrollArea::Pdf => Some(Scrollbar::Pdf),
@@ -169,11 +173,12 @@ struct Reveal {
 }
 
 /// 编辑区窗格里的滚动条：拆分后每个窗格各有一份显示状态。
-pub(crate) const PANE_AREAS: [ScrollArea; 11] = [
+pub(crate) const PANE_AREAS: [ScrollArea; 12] = [
     ScrollArea::Editor,
     ScrollArea::EditorHorizontal,
     ScrollArea::DiffLeftHorizontal,
     ScrollArea::DiffRightHorizontal,
+    ScrollArea::CardGrid,
     ScrollArea::Markdown,
     ScrollArea::MarkdownTable,
     ScrollArea::Pdf,

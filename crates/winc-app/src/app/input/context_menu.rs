@@ -102,6 +102,10 @@ pub enum MenuCommand {
     NewFolder,
     /// 把一个目录加为窗口的附加目录。
     AddFolder,
+    AddNotebookWorkspace,
+    NotebookWorkspaceList,
+    SwitchNotebookWorkspace(usize),
+    ForgetNotebookWorkspace(usize),
     /// 从窗口中移除附加的目录，不改动磁盘上的内容。
     RemoveFolder,
     /// 给窗口中的这组目录起名。
@@ -120,6 +124,8 @@ pub enum MenuCommand {
     /// 编辑区：复制 `路径:行`。
     CopyReference,
     Rename,
+    /// Open a note’s local relationship graph.
+    ViewNoteGraph,
     Delete,
     /// 文件树里多选时：在编辑区打开选中的各个文件（目录跳过）；搜索结果里：打开这一行所在的
     /// 文件，匹配行还选中这一处。
@@ -468,7 +474,6 @@ pub enum MenuCommand {
     TreeLocate,
     SelectAll,
     /// Markdown 预览：把光标放到右键点中的字在原文中的位置，切回文字（只看预览时改为分栏）。
-    RevealSource,
     /// Markdown 预览：显示行号（显示时打勾）。
     MarkdownLineNumbers,
     /// 终端：查找。
@@ -508,6 +513,11 @@ pub enum MenuCommand {
     ImageWidth(u32),
     /// 可编辑的预览：粘贴为纯文本。
     PastePlain,
+    CopyMarkdown,
+    EditProperty,
+    PropertyType(winc_preview::markdown::properties::Kind),
+    PropertyCheck(bool),
+    PropertyOption(usize),
     /// 在新标签中打开右键点击的本地图片。
     OpenImage,
 }
@@ -530,6 +540,9 @@ impl MenuCommand {
             MenuCommand::NewFile => t!("menu-new-file"),
             MenuCommand::NewFolder => t!("menu-new-folder"),
             MenuCommand::AddFolder => t!("cmd-add-folder"),
+            MenuCommand::AddNotebookWorkspace => t!("workspace-add-notebook"),
+            MenuCommand::NotebookWorkspaceList => t!("workspace-switch-notebook"),
+            MenuCommand::SwitchNotebookWorkspace(_) | MenuCommand::ForgetNotebookWorkspace(_) => "",
             MenuCommand::RemoveFolder => t!("menu-remove-folder"),
             MenuCommand::RenameGroup => t!("menu-rename-group"),
             MenuCommand::OpenGroup(_) => t!("menu-open-group"),
@@ -541,6 +554,7 @@ impl MenuCommand {
             MenuCommand::CopyRelativePath => t!("cmd-copy-relative-path"),
             MenuCommand::CopyReference => t!("cmd-copy-reference"),
             MenuCommand::Rename => t!("cmd-rename-file"),
+            MenuCommand::ViewNoteGraph => t!("workspace-note-view-graph"),
             MenuCommand::Delete => t!("cmd-delete-file"),
             MenuCommand::Download => t!("menu-download"),
             MenuCommand::Close => t!("common-close"),
@@ -664,7 +678,6 @@ impl MenuCommand {
             MenuCommand::TreeCollapseAll => t!("menu-tree-collapse-all"),
             MenuCommand::TreeLocate => t!("menu-tree-locate"),
             MenuCommand::SelectAll => t!("cmd-select-all"),
-            MenuCommand::RevealSource => t!("menu-reveal-source"),
             MenuCommand::MarkdownLineNumbers => t!("menu-markdown-line-numbers"),
             MenuCommand::TerminalFind => t!("cmd-find"),
             MenuCommand::TerminalClear => t!("menu-terminal-clear"),
@@ -739,6 +752,12 @@ impl MenuCommand {
             MenuCommand::BackgroundChoose => t!("settings-background-choose"),
             MenuCommand::BackgroundNone => t!("settings-background-none"),
             MenuCommand::PastePlain => t!("menu-paste-plain"),
+            MenuCommand::CopyMarkdown => t!("cmd-markdown-copy"),
+            MenuCommand::EditProperty => t!("properties-edit"),
+            MenuCommand::PropertyType(kind) => kind.label(),
+            MenuCommand::PropertyCheck(true) => t!("properties-check"),
+            MenuCommand::PropertyCheck(false) => t!("properties-uncheck"),
+            MenuCommand::PropertyOption(_) => t!("properties-options"),
             MenuCommand::OpenImage => t!("menu-open-image"),
             MenuCommand::ImageWidth(percent) => match percent {
                 25 => "25%",
@@ -813,6 +832,7 @@ impl MenuCommand {
             MenuCommand::CopyRelativePath => Action::CopyRelativePath,
             MenuCommand::CopyReference => Action::CopyReference,
             MenuCommand::Rename => Action::RenameFile,
+            MenuCommand::CopyMarkdown => Action::MarkdownCopy,
             MenuCommand::Delete => Action::DeleteFile,
             MenuCommand::Close => Action::CloseTab,
             MenuCommand::CloseOthers => Action::CloseOtherTabs,
@@ -888,12 +908,16 @@ impl MenuCommand {
 pub enum MenuTarget {
     /// 文件树中的一项；`None` 表示空白处，即根目录。
     Tree(Option<PathBuf>),
+    /// Workspace roots captured when the My Documents menu opens; the current one comes first.
+    NotebookWorkspaces(Vec<PathBuf>),
     /// 标签栏中的一个标签。
     Tab(DocumentId),
     /// 编辑区中当前标签的文字。
     Editor(DocumentId),
     /// Markdown 预览（分栏右边，或只看预览时整个编辑区）。
     Markdown,
+    /// The document and revision the property menu belongs to, plus the row (if any).
+    NoteProperty(crate::app::preview::markdown::properties::PropertyMenu),
     /// 差异标签里的文字：`true` 是右侧（工作区，可以编辑），`false` 是左侧。
     Diff(DocumentId, bool),
     /// 侧栏顶部的项目名。

@@ -102,6 +102,7 @@ impl App {
 
         match self.pointer.drag {
             Drag::Picture { at } => self.drag_picture(x, y, at),
+            Drag::NoteGraph { at } => self.drag_note_graph((x, y), at),
             Drag::Json { at } => self.drag_json((x, y), at),
             Drag::TerminalSelect | Drag::TerminalMouse(_) => self.terminal_mouse_drag(x, y),
             Drag::None if self.layout.terminal.contains(x, y) => self.terminal_mouse_hover(x, y),
@@ -314,6 +315,20 @@ impl App {
                 bar: Scrollbar::Terminal,
                 grab,
             } => self.drag_terminal_scrollbar(y, grab),
+            Drag::Scrollbar {
+                bar: Scrollbar::CardGrid,
+                grab,
+            } => {
+                if let Some((target, track, _, content)) = self.card_grid_scrollbar()
+                    && let Some(thumb) = scrollbar_thumb(track, 0.0, content)
+                {
+                    self.settle_glide_of(target);
+                    let scroll =
+                        scroll_for_thumb(track.y, track.h, thumb.h, y, grab, content - track.h);
+                    self.set_pane_scroll(target, scroll);
+                    self.request_redraw();
+                }
+            }
             Drag::Scrollbar {
                 bar: Scrollbar::Markdown,
                 grab,

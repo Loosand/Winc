@@ -44,6 +44,12 @@ impl App {
         self.pointer.drag_scrolled_at = None;
         if button == MouseButton::Left {
             self.diagram_view_mouse_up();
+            if let Some(pressed) = self.take_pressed_folder()
+                && let Target::Library(crate::app::workspace::library::LibraryTarget::Card(index)) =
+                    self.target_at(self.pointer.mouse.0, self.pointer.mouse.1)
+            {
+                self.release_library_folder(index, &pressed);
+            }
         }
         if button == MouseButton::Left {
             self.release_tree_item();
@@ -106,7 +112,10 @@ impl App {
     pub(in crate::app) fn on_wheel_event(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
         let fresh = self.note_wheel_gesture(delta, phase);
         let wheel = move |app: &mut App| {
-            if !app.wheel_json(delta) && !app.wheel_zoom(delta, fresh) {
+            if !app.wheel_note_graph(delta)
+                && !app.wheel_json(delta)
+                && !app.wheel_zoom(delta, fresh)
+            {
                 app.scroll_by_wheel(delta, true);
             }
         };

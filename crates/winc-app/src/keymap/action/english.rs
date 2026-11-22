@@ -84,6 +84,7 @@ impl Action {
             MarkdownFocusMode => "Markdown: Toggle Focus Mode",
             MarkdownTypewriterMode => "Markdown: Toggle Typewriter Mode",
             MarkdownPastePlain => "Markdown: Paste as Plain Text",
+            MarkdownCopy => "Copy as Markdown",
             DeleteLine => "Delete Line",
             DeleteAllLeft => "Delete All Left",
             IndentLines => "Indent Line",

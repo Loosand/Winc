@@ -371,15 +371,12 @@ fn svg_opens_as_source_and_toggles_to_a_preview() {
             .any(|(_, a)| *a == crate::app::PlaceholderAction::ShowSource)
     );
 
-    // 其他类型的文件不能预览。
+    // 笔记已经在排版视图中，不提供模式切换。
     app.new_file();
     paint(&mut app);
-    assert_eq!(app.layout.preview.w, 0.0, "不能预览的文件没有这个按钮");
-    app.run_action(Action::TogglePreview);
-    assert_eq!(
-        app.status.message.as_deref(),
-        Some("仅支持预览 SVG、Markdown、CSV 和 TSV 文件")
-    );
+    assert_eq!(app.layout.preview.w, 0.0);
+    assert!(!app.run_action(Action::TogglePreview));
+    assert!(app.markdown_live());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

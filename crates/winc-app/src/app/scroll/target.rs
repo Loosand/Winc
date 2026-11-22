@@ -5,7 +5,7 @@
 
 use super::*;
 
-use crate::app::workspace::picker::picker_span;
+use crate::app::workspace::picker::picker_parts;
 
 /// 滚轮、触控板和触摸惯性滚动的区域。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +44,8 @@ pub(crate) enum ScrollTarget {
     TerminalStrip,
     /// 终端的回滚缓冲，或终端中接收滚轮的程序。
     Terminal,
+    /// 笔记库主页的卡片网格。
+    Library,
     /// Markdown 预览。
     Markdown,
     /// PDF 预览的缩略图栏。
@@ -74,6 +76,7 @@ impl ScrollTarget {
                 | Self::Outline
                 | Self::Results
                 | Self::Tree
+                | Self::Library
                 | Self::TerminalStrip
         )
     }
@@ -110,6 +113,13 @@ impl App {
         {
             return ScrollTarget::TerminalFind(self.field_at(x, y) == Some(Focus::TerminalFind));
         }
+        if self.overlays.picker.open && self.overlays.picker.notebook.is_some() {
+            return if picker_parts(self, l.picker).list.contains(x, y) {
+                ScrollTarget::Picker
+            } else {
+                ScrollTarget::Blocked
+            };
+        }
         let in_list =
             |app: &App| app.commit_parts().list.contains(x, y) || app.in_commit_overflow(x, y);
         let terminal_header = l.terminal.y + crate::app::terminal::header_height(l.terminal);
@@ -141,6 +151,8 @@ impl App {
             ScrollTarget::TerminalStrip
         } else if l.terminal.contains(x, y) {
             ScrollTarget::Terminal
+        } else if self.library_shown() && l.editor.contains(x, y) {
+            ScrollTarget::Library
         } else if self.preview.markdown.area.contains(x, y) {
             ScrollTarget::Markdown
         } else if self.preview.pdf.strip.contains(x, y) {
@@ -244,6 +256,7 @@ impl App {
             ScrollTarget::Json(id) => self.pan_json(id, sx, sy),
             ScrollTarget::Editor(id) => self.scroll_editor_by_pixels(id, sx, sy),
             ScrollTarget::Picker
+            | ScrollTarget::Library
             | ScrollTarget::Commit
             | ScrollTarget::Outline
             | ScrollTarget::Results
@@ -254,6 +267,66 @@ impl App {
             self.set_hover(self.hover_at(self.pointer.mouse.0, self.pointer.mouse.1));
         }
         self.request_redraw();
+    }
+
+    pub(crate) fn card_grid_scrollbar(&self) -> Option<(ScrollTarget, Rect, f32, f32)> {
+        use crate::app::workspace::library::Grid;
+        let editor = self.layout.editor;
+        let (target, grid, count, scroll) = if self.library_shown() {
+            (
+                ScrollTarget::Library,
+                Grid::new(editor, &self.library.cards),
+                self.library.cards.len(),
+                self.library.scroll,
+            )
+        } else {
+            return None;
+        };
+        let track = grid.scroll_track(editor);
+        let content = grid.content_height(count);
+        let max = content - track.h;
+        (max > 0.0 && track.w > 0.0 && track.h > 0.0)
+            .then(|| (target, track, scroll.min(max), content))
+    }
+
+    pub(in crate::app) fn card_grid_key(&mut self, key: &winit::keyboard::Key, cmd: bool) -> bool {
+        use winit::keyboard::{Key, NamedKey};
+        let Some((target, track, from, content)) = self.card_grid_scrollbar() else {
+            return false;
+        };
+        let line = self.fonts.line_height * 2.0;
+        let page = track.h * 0.9;
+        let to = match key {
+            Key::Named(NamedKey::Home) => 0.0,
+            Key::Named(NamedKey::End) => content,
+            Key::Named(NamedKey::ArrowUp) => {
+                if cmd {
+                    0.0
+                } else {
+                    from - line
+                }
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                if cmd {
+                    content
+                } else {
+                    from + line
+                }
+            }
+            Key::Named(NamedKey::PageUp) => from - page,
+            Key::Named(NamedKey::PageDown) => from + page,
+            key if *key == Key::Named(NamedKey::Space) || key == &Key::Character(" ".into()) => {
+                if self.pointer.modifiers.shift_key() {
+                    from - page
+                } else {
+                    from + page
+                }
+            }
+            _ => return false,
+        };
+        self.set_pane_scroll(target, to);
+        self.request_redraw();
+        true
     }
 
     /// 位置浮窗按整行滚动 `dy`（逻辑像素），始终只显示完整的行。
@@ -285,6 +358,7 @@ impl App {
             ScrollTarget::Outline => Some(self.panels.outline.scroll),
             ScrollTarget::Results => Some(self.panels.global.scroll),
             ScrollTarget::Tree => Some(self.panels.tree.scroll),
+            ScrollTarget::Library if self.library_shown() => Some(self.library.scroll),
             ScrollTarget::LogDetails => {
                 let view = self.editor.active().and_then(|d| d.log.as_deref());
                 view.map(|view| view.details_scroll)
@@ -305,7 +379,8 @@ impl App {
         let max = match target {
             ScrollTarget::Picker => {
                 let rows = self.overlays.picker.hits.len() as f32;
-                rows * PICKER_ROW - picker_span(self)
+                let parts = picker_parts(self, self.picker_rect());
+                rows * parts.row_height - parts.list.h
             }
             ScrollTarget::Tabs => self.tabs.max_scroll(),
             ScrollTarget::Commit => self.commit_max_scroll(),
@@ -314,6 +389,13 @@ impl App {
             ScrollTarget::Tree => {
                 let rows = self.editor.workspace.as_ref().map_or(0, |w| w.rows().len());
                 tree_max_scroll(self.layout.tree, rows)
+            }
+            ScrollTarget::Library if self.library_shown() => {
+                let grid = crate::app::workspace::library::Grid::new(
+                    self.layout.editor,
+                    &self.library.cards,
+                );
+                grid.max_scroll(self.library.cards.len())
             }
             ScrollTarget::LogDetails => self.git.log.details_max,
             ScrollTarget::LogBranches => self.git.log.branches_max,
@@ -347,6 +429,7 @@ impl App {
             ScrollTarget::Outline => self.panels.outline.scroll = scroll,
             ScrollTarget::Results => self.panels.global.scroll = scroll,
             ScrollTarget::Tree => self.panels.tree.scroll = scroll,
+            ScrollTarget::Library => self.library.scroll = scroll,
             ScrollTarget::LogDetails => {
                 let view = self.editor.active_mut().and_then(|d| d.log.as_deref_mut());
                 if let Some(view) = view {

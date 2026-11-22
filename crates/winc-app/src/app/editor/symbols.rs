@@ -40,6 +40,7 @@ impl App {
         self.overlays.picker.languages = false;
         self.overlays.picker.vim_list = None;
         self.overlays.picker.remote = None;
+        self.overlays.picker.notebook = None;
         self.overlays.picker.open = true;
         self.overlays.picker.doc = self.editor.active().map(|d| d.id);
         self.overlays.picker.input.set_text("@");
@@ -54,6 +55,7 @@ impl App {
     /// 是否正在列出符号，即输入框以 `@` 开头且不在「位置」列表中。
     pub(crate) fn picker_lists_symbols(&self) -> bool {
         self.overlays.picker.places.is_none()
+            && self.overlays.picker.property.is_none()
             && !self.picker_lists_branches()
             && !self.picker_lists_locations()
             && !self.overlays.picker.folders

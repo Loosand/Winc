@@ -4,7 +4,9 @@
 use super::*;
 
 pub(super) mod folders;
+mod library;
 pub(super) mod loading;
+mod notebook;
 pub(super) mod outline;
 mod panes;
 pub(super) mod picker;

@@ -3,12 +3,12 @@
 use super::*;
 
 #[test]
-fn markdown_files_get_the_three_way_switch() {
+fn markdown_can_render_across_the_editing_area() {
     let (mut app, dir) = readme("md-modes", false, PreviewMode::Split);
     let doc = app.editor.active().unwrap();
     assert_eq!(doc.preview_mode(), PreviewMode::Split);
     assert!(doc.shows_text() && !doc.readonly);
-    assert!(app.layout.preview.w > 0.0);
+    assert_eq!(app.layout.preview.w, 0.0);
     // 右边是预览：绘制在分栏的右半边，已完成排版并记录链接。
     assert_eq!(app.preview.markdown.area, app.layout.split);
     assert!(app.preview.markdown.height > app.preview.markdown.area.h);
@@ -61,24 +61,39 @@ fn tab_nests_list_items_in_the_preview() {
 }
 
 #[test]
-fn arrows_skip_the_blank_lines_between_blocks() {
+fn horizontal_arrows_stop_on_each_blank_line() {
+    use winc_editor::Command;
     use winit::keyboard::{Key, NamedKey};
 
-    let (mut app, dir) = live_doc("md-gap", "甲\n\n\n乙\n");
+    let (mut app, dir) = live_doc("md-gap", "甲\r\n\r\n\r\n乙\n");
     put_caret(&mut app, "甲", true);
-    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowRight), false));
-    assert_eq!(with_caret(&app), "甲\n\n\n|乙\n");
-    settle(&mut app);
-    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowLeft), false));
-    assert_eq!(with_caret(&app), "甲|\n\n\n乙\n");
-    settle(&mut app);
-    // 块内的逐字移动交给编辑区。
-    assert!(!app.markdown_key(&Key::Named(NamedKey::ArrowLeft), false));
-    // 文末之后没有块：停在空行上（交给编辑区）。
-    put_caret(&mut app, "乙", true);
-    assert!(!app.markdown_key(&Key::Named(NamedKey::ArrowRight), false));
-
-    let _ = std::fs::remove_dir_all(&dir);
+    for (key, cmd, carets) in [
+        (
+            NamedKey::ArrowRight,
+            Command::MoveRight {
+                word: false,
+                extend: false,
+            },
+            [5, 7, 9],
+        ),
+        (
+            NamedKey::ArrowLeft,
+            Command::MoveLeft {
+                word: false,
+                extend: false,
+            },
+            [7, 5, 3],
+        ),
+    ] {
+        for at in carets {
+            if !app.markdown_key(&Key::Named(key), false) {
+                app.run(cmd.clone());
+            }
+            settle(&mut app);
+            assert_eq!(app.live_caret_source(), Some(at));
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -172,6 +187,293 @@ fn pasting_web_content_writes_markdown() {
     assert!(app.run_action(crate::keymap::Action::MarkdownPastePlain));
     assert!(doc_text(&app).ends_with("(https://winc.si)纯\n"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn copy_in_a_note_offers_text_and_html_or_explicit_markdown() {
+    use crate::keymap::Action;
+    use winc_core::Selection;
+    let source = "A **重点** 和 [资料](https://example.com)。\n\n```\n**代码原样**\n```\n";
+    let (mut app, dir) = live_doc("md-clipboard-copy", source);
+    let select = |app: &mut App, needle: &str| {
+        let doc = app.editor.active_mut().unwrap();
+        let rope = doc.text().rope().unwrap();
+        let start = source.find(needle).unwrap();
+        doc.selection = Selection::new(
+            rope.byte_to_char(start),
+            rope.byte_to_char(start + needle.len()),
+        );
+    };
+    select(&mut app, "重点");
+    let selection = app.editor.active().unwrap().selection;
+    assert!(app.run_action(Action::Copy));
+    assert_eq!(app.clipboard.copied.as_deref(), Some("重点"));
+    assert!(
+        app.clipboard
+            .copied_html
+            .as_deref()
+            .unwrap()
+            .contains("<strong>重点</strong>")
+    );
+    assert!(app.run_action(Action::MarkdownCopy));
+    assert_eq!(app.clipboard.copied.as_deref(), Some("**重点**"));
+    assert!(app.clipboard.copied_html.is_none());
+    assert_eq!(app.editor.active().unwrap().selection, selection);
+    assert_eq!(doc_text(&app), source);
+    select(&mut app, "点");
+    assert!(app.run_action(Action::Copy));
+    assert_eq!(app.clipboard.copied.as_deref(), Some("点"));
+    assert_eq!(
+        app.clipboard.copied_html.as_deref(),
+        Some("<strong>点</strong>")
+    );
+    select(&mut app, "资料");
+    assert!(app.run_action(Action::MarkdownCopy));
+    assert_eq!(
+        app.clipboard.copied.as_deref(),
+        Some("[资料](https://example.com)")
+    );
+    select(&mut app, "**代码原样**");
+    assert!(app.run_action(Action::Copy));
+    assert_eq!(app.clipboard.copied.as_deref(), Some("**代码原样**"));
+    assert!(app.clipboard.copied_html.is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn pasting_a_web_table_preserves_cells_even_when_text_is_absent_or_tabular() {
+    use winc_editor::Command;
+    for (name, plain) in [
+        ("html-only", None),
+        ("html-and-tsv", Some("名称\t说明\n重点\t甲乙")),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-web-table-{name}"), "前后\n");
+        put_caret(&mut app, "前", true);
+        app.clipboard.copied = plain.map(str::to_owned);
+        app.clipboard.copied_html = Some("<table><tr><th>名称</th><th>说明</th></tr><tr><td><strong>重点</strong></td><td>甲<br>乙</td></tr></table>".into());
+        app.paste();
+        let expected = "前\n\n| 名称 | 说明 |\n| --- | --- |\n| **重点** | 甲<br>乙 |\n\n后\n";
+        assert_eq!(doc_text(&app), expected);
+        app.run(Command::Undo);
+        assert_eq!(doc_text(&app), "前后\n");
+        app.run(Command::Redo);
+        settle(&mut app);
+        let id = app.editor.active().unwrap().id;
+        assert!(app.save_document(id, None));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("LIVE.md")).unwrap(),
+            expected
+        );
+        assert!(
+            app.preview
+                .markdown
+                .parsed
+                .as_ref()
+                .unwrap()
+                .blocks
+                .iter()
+                .any(|b| matches!(b, winc_preview::markdown::Block::Table(..)))
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn notebook_properties_panel_edits_one_field_and_saves_portable_yaml() {
+    use crate::app::input::context_menu::{MenuCommand, MenuTarget};
+    use winc_preview::markdown::properties::{Kind, PROPERTY};
+    let source = "---\nkind: 文章 # 原注释\nauthor:\n  - Dan Abramov\ntags:\n  - 技术\ncomplex: {a: 2}\n---\n\n正文 **保留**\n";
+    let (mut app, dir) = live_doc("md-properties-form", source);
+    let root = app.library_root().unwrap().to_path_buf();
+    std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+    std::fs::write(
+        root.join(".obsidian/types.json"),
+        r#"{"types":{"kind":"select"}}"#,
+    )
+    .unwrap();
+    app.property_types_changed(false, &[root.join(".obsidian/types.json")]);
+    let hit = app
+        .hits
+        .markdown_links
+        .iter()
+        .find(|(_, target)| target == &format!("{PROPERTY}name:0"))
+        .unwrap()
+        .0;
+    super::click(&mut app, (hit.x + hit.w * 0.5, hit.y + hit.h * 0.5));
+    assert!(matches!(
+        app.overlays.context_menu.as_ref().map(|m| &m.target),
+        Some(MenuTarget::NoteProperty(menu)) if menu.index == Some(0)
+    ));
+    app.run_menu_command(MenuCommand::EditProperty);
+    let dialog = app.overlays.form_dialog.as_mut().unwrap();
+    assert!(
+        matches!(&dialog.kind, crate::app::git::form::FormKind::Property(edit) if edit.kind == Kind::Select)
+    );
+    dialog.name.set_text("教程");
+    dialog.second.set_text("文章，教程，工具");
+    app.submit_form_dialog();
+    assert!(app.overlays.form_dialog.is_none());
+    let expected = source.replace("kind: 文章", "kind: \"教程\"");
+    assert_eq!(doc_text(&app), expected);
+    app.run(winc_editor::Command::Undo);
+    assert_eq!(doc_text(&app), source);
+    app.run(winc_editor::Command::Redo);
+    let id = app.editor.active().unwrap().id;
+    assert!(app.save_document(id, None));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("LIVE.md")).unwrap(),
+        expected
+    );
+    let spec = app
+        .state
+        .note_property_schema
+        .get(root.to_str().unwrap())
+        .unwrap()
+        .as_object()
+        .unwrap()["kind"]
+        .as_object()
+        .unwrap();
+    assert_eq!(spec["kind"].as_str(), Some("select"));
+    assert_eq!(spec["options"].as_array().unwrap().len(), 3);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn property_values_open_anchored_editors_and_calendar_keeps_iso_yaml() {
+    use crate::app::git::branch::picker::PickerPart;
+    use crate::app::preview::markdown::properties::popup::CalendarPart;
+    use winc_preview::markdown::properties::{Kind, PROPERTY};
+
+    let source = "---\nkind: 文章 # 注释\ntags: [学习]\ndate: 2026-11-05\nstarred:\n---\n\n正文\n";
+    let (mut app, dir) = live_doc("md-properties-popover", source);
+    let root = app.library_root().unwrap().to_owned();
+    app.state.note_property_schema.insert(
+        root.to_string_lossy().into_owned(),
+        winc_config::Json::parse(r#"{"kind":{"kind":"select","options":["文章","工具","随笔"]},"starred":{"kind":"checkbox"}}"#)
+            .unwrap(),
+    );
+    let obsidian = root.join(".obsidian");
+    std::fs::create_dir_all(&obsidian).unwrap();
+    std::fs::write(
+        obsidian.join("types.json"),
+        r#"{"types":{"kind":"select","tags":"multiselect"}}"#,
+    )
+    .unwrap();
+    app.property_types_changed(false, &[obsidian.join("types.json")]);
+    let center = |r: winc_render::Rect| (r.x + r.w * 0.5, r.y + r.h * 0.5);
+    let value = |app: &App, index| {
+        app.hits
+            .markdown_links
+            .iter()
+            .find(|(_, link)| link == &format!("{PROPERTY}{index}"))
+            .unwrap()
+            .0
+    };
+    let click_part = |app: &mut App, part| {
+        let rect = app
+            .hits
+            .picker_parts
+            .iter()
+            .find(|(_, p)| *p == part)
+            .unwrap()
+            .0;
+        super::click(app, center(rect));
+    };
+    settle(&mut app);
+    let hit = value(&app, 0);
+    super::click(&mut app, center(hit));
+    assert!(app.overlays.context_menu.is_none());
+    assert_eq!(
+        app.overlays.picker.property.as_ref().unwrap().kind(),
+        Kind::Select
+    );
+    assert_eq!(app.layout.picker.x, hit.x);
+    assert!(app.layout.picker.y >= hit.bottom());
+    let screenshots = std::env::var_os("WINC_SNAPSHOT_DIR").is_some();
+    if screenshots {
+        super::shoot(&mut app, "minc-property-choice");
+    }
+    app.edit_field(|f| f.insert("教程"));
+    assert_eq!(app.overlays.picker.hits.len(), 1);
+    app.picker_accept();
+    assert!(!app.overlays.picker.open);
+    assert!(doc_text(&app).contains("kind: \"教程\" # 注释"));
+    settle(&mut app);
+
+    let hit = value(&app, 1);
+    super::click(&mut app, center(hit));
+    assert_eq!(
+        app.overlays.picker.property.as_ref().unwrap().kind(),
+        Kind::MultiSelect
+    );
+    app.edit_field(|f| f.insert("技术"));
+    app.picker_accept();
+    assert!(app.overlays.picker.open);
+    assert!(doc_text(&app).contains("tags: [\"学习\", \"技术\"]"));
+    app.picker_accept();
+    assert!(app.overlays.picker.open);
+    assert!(doc_text(&app).contains("tags: [\"技术\"]"));
+    app.close_picker();
+    settle(&mut app);
+
+    let hit = value(&app, 2);
+    super::click(&mut app, center(hit));
+    settle(&mut app);
+    assert_eq!(
+        app.overlays.picker.property.as_ref().unwrap().month,
+        (2026, 11)
+    );
+    if screenshots {
+        super::shoot(&mut app, "minc-property-calendar");
+    }
+    click_part(&mut app, PickerPart::PropertyCalendar(CalendarPart::Next));
+    settle(&mut app);
+    assert_eq!(
+        app.overlays.picker.property.as_ref().unwrap().month,
+        (2026, 12)
+    );
+    click_part(&mut app, PickerPart::PropertyCalendar(CalendarPart::Day(2)));
+    assert!(!app.overlays.picker.open);
+    assert!(doc_text(&app).contains("date: \"2026-12-02\""));
+    settle(&mut app);
+
+    let hit = value(&app, 3);
+    super::click(&mut app, center(hit));
+    assert!(!app.overlays.picker.open);
+    assert!(doc_text(&app).contains("starred: true"));
+    app.run(winc_editor::Command::Undo);
+    assert!(doc_text(&app).contains("starred:\n---\n\n正文\n"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn adding_properties_to_a_note_without_yaml_does_not_change_the_body() {
+    use crate::app::input::context_menu::MenuCommand;
+    use winc_preview::markdown::properties::Kind;
+    let (mut app, dir) = live_doc("md-properties-add", "正文\n");
+    let doc = app.editor.active().unwrap();
+    app.run_property_menu(
+        doc.id,
+        doc.revision,
+        None,
+        MenuCommand::PropertyType(Kind::Number),
+    );
+    let dialog = app.overlays.form_dialog.as_mut().unwrap();
+    dialog.name.set_text("评分");
+    dialog.second.set_text("4.5");
+    app.submit_form_dialog();
+    assert_eq!(doc_text(&app), "---\n\"评分\": 4.5\n---\n\n正文\n");
+    settle(&mut app);
+    assert!(
+        app.preview
+            .markdown
+            .parsed
+            .as_ref()
+            .unwrap()
+            .properties
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -1028,7 +1330,7 @@ fn arrows_skip_the_hidden_block_markers() {
     for (needle, before, after) in [
         ("二", "- 一|\n- 二\n", "- 一\n- |二\n"),
         ("三", "- 二|\n  - 三\n", "- 二\n  - |三\n"),
-        ("引", "  - 三|\n\n> 引\n", "  - 三\n\n> |引\n"),
+        ("引", "  - 三\n|\n> 引\n", "  - 三\n\n> |引\n"),
     ] {
         put_caret(&mut app, needle, false);
         assert!(app.markdown_key(&left, false), "{needle}");

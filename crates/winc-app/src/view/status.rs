@@ -345,22 +345,23 @@ pub(super) fn draw_status(app: &mut App, frame: &mut Frame<'_>) {
     let mut right = bar.right() - 14.0;
     let mut status_hits = Vec::new();
 
-    // 最右边始终是设置按钮，不随模块和当前文档变化：悬停时与其他可点击项一样铺按钮底色。
-    let item = StatusItem::Settings;
-    let slot = right - icons::SIDEBAR_WIDTH;
-    right -= icons::SIDEBAR_WIDTH + STATUS_GAP;
-    let pill = Rect::new(
-        slot - CRUMB_PAD,
-        bar.y + 4.0,
-        icons::SIDEBAR_WIDTH + 2.0 * CRUMB_PAD,
-        bar.h - 8.0,
-    );
-    let hovered = app.pointer.hover == Hover::Status(item);
-    draw_button(frame, p, pill, bar, hovered, false);
-    let center = (slot + icons::SIDEBAR_WIDTH / 2.0, bar.y + bar.h / 2.0);
-    let color = if hovered { p.text } else { p.text_muted };
-    icons::gear(frame, center, color, bar);
-    status_hits.push((pill, item));
+    if !app.writing_workspace() {
+        let item = StatusItem::Settings;
+        let slot = right - icons::SIDEBAR_WIDTH;
+        right -= icons::SIDEBAR_WIDTH + STATUS_GAP;
+        let pill = Rect::new(
+            slot - CRUMB_PAD,
+            bar.y + 4.0,
+            icons::SIDEBAR_WIDTH + 2.0 * CRUMB_PAD,
+            bar.h - 8.0,
+        );
+        let hovered = app.pointer.hover == Hover::Status(item);
+        draw_button(frame, p, pill, bar, hovered, false);
+        let center = (slot + icons::SIDEBAR_WIDTH / 2.0, bar.y + bar.h / 2.0);
+        let color = if hovered { p.text } else { p.text_muted };
+        icons::gear(frame, center, color, bar);
+        status_hits.push((pill, item));
+    }
 
     // 终端模块开着时左边是终端面板的开关：悬停时与其他可点击项一样铺按钮底色，面板开着时
     // 图标亮、收着时灰。面板收着、后台有命令结束了时右上角一个小点（失败了是红的），和标签上的
@@ -702,70 +703,8 @@ pub(super) fn draw_status(app: &mut App, frame: &mut Frame<'_>) {
 
     let left = Rect::new(bar.x, bar.y, (right - 16.0 - bar.x).max(0.0), bar.h);
     let mut x = bar.x + 14.0;
-    let mut hits = Vec::new();
-
-    if doc.is_some() {
-        let crumbs = app.crumbs();
-        // 工作区以外的文件只有一段完整路径，最多占左侧的一半，放不下时从中间截短并保留完整
-        // 文件名：长路径能占满大半个状态栏，把临时消息挤掉。
-        let half = left.w / 2.0;
-
-        for (i, crumb) in crumbs.iter().enumerate() {
-            let name = if crumbs.len() == 1 && crumb.path.is_some() {
-                shorten_path(frame, &crumb.name, app.fonts.ui_small, half)
-            } else {
-                Cow::Borrowed(crumb.name.as_str())
-            };
-            if i > 0 {
-                let arrow = (
-                    x + CRUMB_GAP / 2.0,
-                    icon_center_y(app, bar, app.fonts.ui_small),
-                );
-                icons::chevron(frame, arrow, 6.5, Direction::Right, p.text_dim, left);
-                x += CRUMB_GAP;
-            }
-
-            // 有路径的段可点击：悬停时铺按钮底色，其目录菜单打开时显示为按下状态。
-            if crumb.path.is_some() {
-                let w = frame.measure(FontKind::Ui, app.fonts.ui_small, &name);
-                let pill = Rect::new(x - CRUMB_PAD, bar.y + 4.0, w + 2.0 * CRUMB_PAD, bar.h - 8.0);
-                let hovered = app.pointer.hover == Hover::Crumb(i);
-                draw_button(
-                    frame,
-                    p,
-                    pill,
-                    left,
-                    hovered,
-                    app.overlays.menu_button == Some(MenuButton::Crumb(i)),
-                );
-                if pill.x < left.right() {
-                    let visible = pill.w.min(left.right() - pill.x);
-                    hits.push((Rect::new(pill.x, pill.y, visible, pill.h), i));
-                }
-            }
-
-            let color = if i + 1 == crumbs.len() {
-                p.text
-            } else {
-                p.text_muted
-            };
-            x = ui_text_small(frame, app, x, bar, &name, color, left);
-        }
-
-        // 配置文件中光标所在的键路径：接在文件名之后，颜色较淡，放不下时从中间截短。
-        if let Some(path) = app.key_path() {
-            let arrow = (
-                x + CRUMB_GAP / 2.0,
-                icon_center_y(app, bar, app.fonts.ui_small),
-            );
-            icons::chevron(frame, arrow, 6.5, Direction::Right, p.text_dim, left);
-            x += CRUMB_GAP;
-            let room = (left.right() - x).max(0.0);
-            let path = ellipsize(frame, &path, app.fonts.ui_small, room);
-            x = ui_text_small(frame, app, x, bar, &path, p.text_muted, left);
-        }
-
-        x += 24.0;
+    if !app.writing_workspace() && doc.is_some() {
+        x = draw_crumbs(app, frame, left, left.w / 2.0) + 24.0;
     }
 
     // Vim 模式的状态（模式、未完成的按键）排在消息之前。
@@ -788,8 +727,68 @@ pub(super) fn draw_status(app: &mut App, frame: &mut Frame<'_>) {
     }
 
     app.status.motion = motion;
-    app.hits.crumbs = hits;
     app.hits.status = status_hits;
+}
+
+/// Draw the current path in its own row and register its clickable segments.
+pub(super) fn draw_crumbs(app: &mut App, frame: &mut Frame<'_>, bar: Rect, path_width: f32) -> f32 {
+    let p = app.palette;
+    let mut x = bar.x + 14.0;
+    let mut hits = Vec::new();
+    let crumbs = app.crumbs();
+    for (i, crumb) in crumbs.iter().enumerate() {
+        let name = if crumbs.len() == 1 && crumb.path.is_some() {
+            shorten_path(frame, &crumb.name, app.fonts.ui_small, path_width)
+        } else {
+            Cow::Borrowed(crumb.name.as_str())
+        };
+        if i > 0 {
+            let arrow = (
+                x + CRUMB_GAP / 2.0,
+                icon_center_y(app, bar, app.fonts.ui_small),
+            );
+            icons::chevron(frame, arrow, 6.5, Direction::Right, p.text_dim, bar);
+            x += CRUMB_GAP;
+        }
+
+        if crumb.path.is_some() {
+            let w = frame.measure(FontKind::Ui, app.fonts.ui_small, &name);
+            let pill = Rect::new(x - CRUMB_PAD, bar.y + 4.0, w + 2.0 * CRUMB_PAD, bar.h - 8.0)
+                .intersect(bar);
+            if pill.w > 0.0 && pill.h > 0.0 {
+                draw_button(
+                    frame,
+                    p,
+                    pill,
+                    bar,
+                    app.pointer.hover == Hover::Crumb(i),
+                    app.overlays.menu_button == Some(MenuButton::Crumb(i)),
+                );
+                hits.push((pill, i));
+            }
+        }
+
+        let color = if i + 1 == crumbs.len() {
+            p.text
+        } else {
+            p.text_muted
+        };
+        x = ui_text_small(frame, app, x, bar, &name, color, bar);
+    }
+
+    if let Some(path) = app.key_path() {
+        let arrow = (
+            x + CRUMB_GAP / 2.0,
+            icon_center_y(app, bar, app.fonts.ui_small),
+        );
+        icons::chevron(frame, arrow, 6.5, Direction::Right, p.text_dim, bar);
+        x += CRUMB_GAP;
+        let room = (bar.right() - x).max(0.0);
+        let path = ellipsize(frame, &path, app.fonts.ui_small, room);
+        x = ui_text_small(frame, app, x, bar, &path, p.text_muted, bar);
+    }
+    app.hits.crumbs = hits;
+    x
 }
 
 /// 在状态栏所在的一行绘制 Vim 模式的命令行或查找：开头是 `:`、`/` 或 `?`，其后是输入框。
@@ -813,7 +812,6 @@ fn draw_command_line(app: &mut App, frame: &mut Frame<'_>) {
         app.ime.cursor = caret;
     }
     // 状态栏的各项没有绘制，不可点击。
-    app.hits.crumbs = Vec::new();
     app.hits.status = Vec::new();
 }
 

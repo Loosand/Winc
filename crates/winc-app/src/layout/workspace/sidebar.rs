@@ -129,6 +129,8 @@ pub enum SidebarView {
     /// 文件树。
     #[default]
     Files,
+    /// 笔记的全文大纲。
+    Outline,
     /// 全局搜索面板。
     Search,
     /// Git 的提交视图：改动列表、提交信息。
@@ -142,6 +144,9 @@ impl SidebarView {
     pub fn label(self) -> String {
         match self {
             SidebarView::Files => with_key(t!("workspace-sidebar-files"), Some(Action::ShowFiles)),
+            SidebarView::Outline => {
+                with_key(t!("workspace-outline-title"), Some(Action::ShowOutline))
+            }
             SidebarView::Search => {
                 with_key(t!("workspace-sidebar-search"), Some(Action::FindInFiles))
             }
