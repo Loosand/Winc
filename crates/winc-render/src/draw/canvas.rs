@@ -135,7 +135,9 @@ fn lerp(d: u32, s: u32, a: u32) -> u32 {
 /// 返回 `x / 255` 四舍五入后的整数，对 `0..=65025` 精确（见测试 `div255_exact`）。
 #[inline(always)]
 fn div255(x: u32) -> u32 {
-    (x + 128 + ((x + 128) >> 8)) >> 8
+    // The input bound guarantees these adds fit; spell it out so checked builds can vectorize.
+    let rounded = x.wrapping_add(128);
+    rounded.wrapping_add(rounded >> 8) >> 8
 }
 
 /// 返回按覆盖率 `cov`（0 至 255）把 `src` 叠加到 `dst` 上得到的不透明像素。
@@ -166,8 +168,10 @@ fn blend(dst: u32, src: u32, cov: u32) -> u32 {
 #[inline(always)]
 fn mix(dst: u32, src: u32, sa: u32) -> u32 {
     let da = 255 - sa;
-    let rb = (src & 0x00ff_00ff) * sa + (dst & 0x00ff_00ff) * da + 0x0080_0080;
-    let rb = ((rb + ((rb >> 8) & 0x00ff_00ff)) >> 8) & 0x00ff_00ff;
+    let rb = ((src & 0x00ff_00ff) * sa)
+        .wrapping_add((dst & 0x00ff_00ff) * da)
+        .wrapping_add(0x0080_0080);
+    let rb = (rb.wrapping_add((rb >> 8) & 0x00ff_00ff) >> 8) & 0x00ff_00ff;
     let g = div255(((src >> 8) & 0xff) * sa + ((dst >> 8) & 0xff) * da);
     0xff00_0000 | rb | (g << 8)
 }
@@ -1013,20 +1017,40 @@ impl Canvas<'_> {
             .max(0.0);
         let alpha = ((color >> 24) & 0xff) as f32;
 
-        // 每个像素都参与计算、不提前跳过，使循环没有分支、便于向量化：距边缘超过 `blur`
-        // 的像素透明度为 0，[`mix`] 按 0 叠加后像素不变。
+        let half_w = (area.x1 - area.x0) as f32 / 2.0;
+        let half_h = (area.y1 - area.y0) as f32 / 2.0;
+        let (cx, cy) = (area.x0 as f32 + half_w, area.y0 as f32 + half_h);
+        let opacity = |distance: f32| {
+            let u = ((distance / blur + 1.0) / 2.0).clamp(0.0, 1.0);
+            (alpha * (1.0 - u * u * (3.0 - 2.0 * u))) as u32
+        };
         for y in v.y0..v.y1 {
             let py = y as f32 + 0.5;
-
+            // The nearest edge across the middle of a row is horizontal, so these pixels
+            // share one opacity. Only the shorter side spans need per-pixel distance.
+            let qy = (py - cy).abs() - (half_h - r);
+            let middle = (half_w - r) + qy.min(0.0);
+            let left = (cx - middle - 0.5).ceil() as i32;
+            let right = (cx + middle + 0.5).floor() as i32;
+            let middle_alpha = opacity(qy - r);
             for (start, end) in uncovered(v, covered, y) {
-                for (i, p) in self.span(y, start, end).iter_mut().enumerate() {
-                    let d = rounded_distance(area, r, (start + i as i32) as f32 + 0.5, py);
-
-                    // smoothstep 曲线：边缘处为一半浓度，向内 `blur` 处浓度最高，
-                    // 向外 `blur` 处降为 0。
-                    let u = ((d / blur + 1.0) / 2.0).clamp(0.0, 1.0);
-                    let a = (alpha * (1.0 - u * u * (3.0 - 2.0 * u))) as u32;
-                    *p = mix(*p, color, a);
+                let left = left.clamp(start, end);
+                let right = right.clamp(left, end);
+                if middle_alpha != 0 {
+                    wide::mix_span(self.span(y, left, right), color, middle_alpha);
+                }
+                for (start, end) in [(start, left), (right, end)] {
+                    for (i, pixel) in self.span(y, start, end).iter_mut().enumerate() {
+                        let px = (start + i as i32) as f32 + 0.5;
+                        let qx = (px - cx).abs() - (half_w - r);
+                        let distance = if qy <= 0.0 {
+                            qx.max(qy)
+                        } else {
+                            let qx = qx.max(0.0);
+                            (qx * qx + qy * qy).sqrt()
+                        } - r;
+                        *pixel = mix(*pixel, color, opacity(distance));
+                    }
                 }
             }
         }
@@ -1051,6 +1075,56 @@ impl Canvas<'_> {
                 let p = &mut row[(x - v.x0) as usize];
                 *p = blend(*p, color, cov);
             });
+        }
+    }
+
+    /// Rasterize one moving segment by touching only the pixels near it on each row.
+    pub(crate) fn line(
+        &mut self,
+        (x0, y0): (f32, f32),
+        (x1, y1): (f32, f32),
+        width: f32,
+        scale: f32,
+        color: u32,
+        clip: IRect,
+    ) {
+        let half = width * scale / 2.0;
+        let stroke = Stroke::Line(x0, y0, x1, y1);
+        let Some(v) = self.visible(stroke.pixel_area(half, scale), clip) else {
+            return;
+        };
+        let (x0, y0, x1, y1) = (x0 * scale, y0 * scale, x1 * scale, y1 * scale);
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let len2 = dx * dx + dy * dy;
+        let inverse = if len2 > 0.0 { 1.0 / len2 } else { 0.0 };
+        let reach = half + 1.0;
+        for row in v.y0..v.y1 {
+            let y = row as f32 + 0.5 - y0;
+            let (lo, hi) = if dy.abs() < 1e-3 {
+                (0.0, 1.0)
+            } else {
+                let (t0, t1) = ((y - reach) / dy, (y + reach) / dy);
+                (t0.min(t1).max(0.0), t0.max(t1).min(1.0))
+            };
+            if lo > hi {
+                continue;
+            }
+            let (a, b) = (x0 + dx * lo, x0 + dx * hi);
+            let start = ((a.min(b) - reach - 0.5).floor() as i32).max(v.x0);
+            let end = ((a.max(b) + reach + 0.5).ceil() as i32).min(v.x1);
+            if start >= end {
+                continue;
+            }
+            for (i, pixel) in self.span(row, start, end).iter_mut().enumerate() {
+                let x = (start + i as i32) as f32 + 0.5 - x0;
+                let t = ((x * dx + y * dy) * inverse).clamp(0.0, 1.0);
+                let (rx, ry) = (x - t * dx, y - t * dy);
+                let coverage =
+                    ((half + 0.5 - (rx * rx + ry * ry).sqrt()).clamp(0.0, 1.0) * 255.0) as u32;
+                if coverage > 0 {
+                    *pixel = blend(*pixel, color, coverage);
+                }
+            }
         }
     }
 
@@ -1182,6 +1256,16 @@ impl Canvas<'_> {
     /// 边缘按覆盖率抗锯齿：每行取四条扫描线，分别计算多边形在各扫描线上的左右端点，按横向
     /// 覆盖的长度累加。
     pub fn polygon(&mut self, points: &[(f32, f32)], color: u32, clip: IRect) {
+        self.polygon_rows(points, clip, |_| color);
+    }
+
+    /// Fill a polygon with one color per physical row and coverage only at its edges.
+    pub(crate) fn polygon_rows(
+        &mut self,
+        points: &[(f32, f32)],
+        clip: IRect,
+        color_at: impl Fn(i32) -> u32,
+    ) {
         if points.len() < 3 {
             return;
         }
@@ -1198,34 +1282,60 @@ impl Canvas<'_> {
         let Some(v) = self.visible(area, clip) else {
             return;
         };
-        let mut cover = vec![0f32; v.width()];
-        for y in v.y0..v.y1 {
-            cover.fill(0.0);
-            for k in 0..4 {
-                let sy = y as f32 + 0.125 + k as f32 * 0.25;
-                // 凸多边形与扫描线的交点中，最左和最右的交点之间即为多边形在该扫描线上的范围。
-                let (mut l, mut r) = (f32::MAX, f32::MIN);
-                for (i, &(ax, ay)) in points.iter().enumerate() {
-                    let (bx, by) = points[(i + 1) % points.len()];
-                    if (ay <= sy) == (by <= sy) {
-                        continue;
-                    }
-                    let x = ax + (sy - ay) / (by - ay) * (bx - ax);
-                    (l, r) = (l.min(x), r.max(x));
-                }
-                if l >= r {
-                    continue;
-                }
-                let (from, to) = ((l.floor() as i32).max(v.x0), (r.ceil() as i32).min(v.x1));
-                for x in from..to {
-                    let part = (r.min(x as f32 + 1.0) - l.max(x as f32)).clamp(0.0, 1.0);
-                    cover[(x - v.x0) as usize] += part * 0.25;
+        let count = (v.y1 - v.y0) as usize * 4;
+        let mut intersections = vec![(f32::MAX, f32::MIN); count];
+        let origin = v.y0 as f32;
+        let first = |y: f32| (((y - origin) * 4.0 - 0.5).ceil() as usize).min(count);
+        // Visit only the subpixel rows that each edge crosses. Long flat spans do not
+        // repeatedly test all the short edges around the rounded corners.
+        for (&(ax, ay), &(bx, by)) in points.iter().zip(points.iter().cycle().skip(1)) {
+            let start = first(ay.min(by));
+            let end = first(ay.max(by));
+            for (i, (l, r)) in intersections[start..end].iter_mut().enumerate() {
+                let sy = origin + 0.125 + (start + i) as f32 * 0.25;
+                let x = ax + (sy - ay) / (by - ay) * (bx - ax);
+                (*l, *r) = (l.min(x), r.max(x));
+            }
+        }
+        for (offset, samples) in intersections.as_chunks::<4>().0.iter().enumerate() {
+            let y = v.y0 + offset as i32;
+            let color = color_at(y);
+            let alpha = color >> 24;
+            if alpha == 0 {
+                continue;
+            }
+            let (mut min, mut max) = (v.x1, v.x0);
+            let (mut solid_l, mut solid_r) = (v.x0, v.x1);
+            for &(l, r) in samples {
+                if l < r {
+                    min = min.min((l.floor() as i32).max(v.x0));
+                    max = max.max((r.ceil() as i32).min(v.x1));
+                    solid_l = solid_l.max(l.ceil() as i32);
+                    solid_r = solid_r.min(r.floor() as i32);
+                } else {
+                    solid_r = v.x0;
                 }
             }
-            for (p, &c) in self.row(y, v).iter_mut().zip(&cover) {
-                let cov = (c.min(1.0) * 255.0).round() as u32;
-                if cov > 0 {
-                    *p = blend(*p, color, cov);
+            if min >= max {
+                continue;
+            }
+            // Pixels between the common edges of all four samples are fully covered.
+            let left = solid_l.clamp(min, max);
+            let right = solid_r.clamp(left, max);
+            let fill = self.span(y, left, right);
+            if alpha == 255 {
+                fill.fill(color);
+            } else {
+                wide::mix_span(fill, color, alpha);
+            }
+            for (start, end) in [(min, left), (right, max)] {
+                for (i, pixel) in self.span(y, start, end).iter_mut().enumerate() {
+                    let x = (start + i as i32) as f32;
+                    let coverage: f32 = samples
+                        .iter()
+                        .map(|&(l, r)| (r.min(x + 1.0) - l.max(x)).clamp(0.0, 1.0) * 0.25)
+                        .sum();
+                    *pixel = blend(*pixel, color, (coverage * 255.0).round() as u32);
                 }
             }
         }

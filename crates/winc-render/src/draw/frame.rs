@@ -377,6 +377,16 @@ impl Frame<'_> {
         }
     }
 
+    /// Draw a changing line segment without populating the icon mask cache.
+    pub fn line(&mut self, from: (f32, f32), to: (f32, f32), width: f32, color: Color, clip: Rect) {
+        let color = self.faded(color);
+        if color.a > 0.0 {
+            let clip = clip.intersect(self.limit).to_pixels_outer(self.scale);
+            self.canvas
+                .line(from, to, width, self.scale, color.argb(), clip);
+        }
+    }
+
     /// 填充凸多边形 `points`（逻辑像素），边缘抗锯齿。
     ///
     /// 用于 Markdown 预览中的图表（菱形、箭头）。
@@ -389,6 +399,36 @@ impl Frame<'_> {
         let scaled: Vec<(f32, f32)> = points.iter().map(|&(x, y)| (x * s, y * s)).collect();
         let clip = clip.intersect(self.limit).to_pixels_outer(s);
         self.canvas.polygon(&scaled, color.argb(), clip);
+    }
+
+    /// Fill a polygon with a vertical gradient between two color stops, clamped outside the stops.
+    pub fn polygon_gradient(
+        &mut self,
+        points: &[(f32, f32)],
+        (top, from): (f32, Color),
+        (bottom, to): (f32, Color),
+        clip: Rect,
+    ) {
+        let (from, to) = (self.faded(from), self.faded(to));
+        if from.a <= 0.0 && to.a <= 0.0 {
+            return;
+        }
+        let s = self.scale;
+        let scaled: Vec<_> = points.iter().map(|&(x, y)| (x * s, y * s)).collect();
+        let clip = clip.intersect(self.limit).to_pixels_outer(s);
+        let start = top * s;
+        let length = ((bottom - top) * s).max(f32::EPSILON);
+        self.canvas.polygon_rows(&scaled, clip, |row| {
+            let t = ((row as f32 + 0.5 - start) / length).clamp(0.0, 1.0);
+            let lerp = |a, b| a + (b - a) * t;
+            Color {
+                r: lerp(from.r, to.r),
+                g: lerp(from.g, to.g),
+                b: lerp(from.b, to.b),
+                a: lerp(from.a, to.a),
+            }
+            .argb()
+        });
     }
 
     /// 返回字符 `c` 的墨迹在基线上方、下方的高度（逻辑像素，下方为正）。

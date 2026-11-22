@@ -385,6 +385,141 @@ fn strokes_blend_once_where_they_cross() {
     assert_eq!(px[16 * 20 + 10], 0xff00_0000);
 }
 
+#[test]
+fn shadow_row_spans_match_pixel_distances() {
+    let background = 0xffc0_90e0;
+    let color = 0x9917_2391;
+    let clip = IRect::new(2, 2, 29, 33);
+    for (area, radius, blur) in [
+        (IRect::new(4, 8, 28, 16), 3.5_f32, 6.5_f32),
+        (IRect::new(8, 5, 17, 31), 5.0, 6.0),
+        (IRect::new(8, 5, 25, 28), 0.0, 4.0),
+    ] {
+        for covered in [None, Some(Covered::new(IRect::new(10, 10, 18, 23), 2.0))] {
+            let mut pixels = vec![background; 34 * 34];
+            canvas(&mut pixels, 34, 34).shadow(area, radius, blur, color, clip, covered);
+            let radius = radius.min(area.width().min((area.y1 - area.y0) as usize) as f32 / 2.0);
+            let spread = blur.ceil() as i32;
+            for y in 0..34 {
+                for x in 0..34 {
+                    let in_clip =
+                        (clip.x0..clip.x1).contains(&x) && (clip.y0..clip.y1).contains(&y);
+                    let in_shadow = (area.x0 - spread..area.x1 + spread).contains(&x)
+                        && (area.y0 - spread..area.y1 + spread).contains(&y);
+                    let want = if in_clip
+                        && in_shadow
+                        && !covered.is_some_and(|c| {
+                            let (left, right) = c.span(y);
+                            (left..right).contains(&x)
+                        }) {
+                        let d = rounded_distance(area, radius, x as f32 + 0.5, y as f32 + 0.5);
+                        let u = ((d / blur + 1.0) / 2.0).clamp(0.0, 1.0);
+                        let alpha = ((color >> 24) as f32 * (1.0 - u * u * (3.0 - 2.0 * u))) as u32;
+                        mix(background, color, alpha)
+                    } else {
+                        background
+                    };
+                    assert_eq!(pixels[(y * 34 + x) as usize], want, "shadow pixel {x}, {y}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn polygon_rows_match_four_subpixel_samples_with_clipping() {
+    let polygons: &[&[(f32, f32)]] = &[
+        &[(2.1, 1.2), (15.6, 1.2), (15.6, 12.8), (2.1, 12.8)],
+        &[
+            (-3.0, 3.25),
+            (10.2, 1.15),
+            (16.1, 6.8),
+            (12.3, 13.8),
+            (1.4, 11.7),
+        ],
+        &[(4.5, 2.38), (5.13, 15.0), (4.32, 15.0)],
+    ];
+    let clip = IRect::new(2, 2, 15, 13);
+    for &polygon in polygons {
+        for gradient in [false, true] {
+            let color = |row: i32| {
+                if gradient {
+                    ((row as u32 * 16) << 24) | 0x0030_b0d0
+                } else {
+                    0xff30_b0d0
+                }
+            };
+            let background = 0xffe0_c080;
+            let mut pixels = vec![background; 18 * 16];
+            let mut c = canvas(&mut pixels, 18, 16);
+            if gradient {
+                c.polygon_rows(polygon, clip, color);
+            } else {
+                c.polygon(polygon, color(0), clip);
+            }
+            for y in 0..16 {
+                for x in 0..18 {
+                    let mut want = background;
+                    if (clip.x0..clip.x1).contains(&x) && (clip.y0..clip.y1).contains(&y) {
+                        let coverage: f32 = (0..4)
+                            .map(|k| {
+                                let sy = y as f32 + 0.125 + k as f32 * 0.25;
+                                let (mut left, mut right) = (f32::MAX, f32::MIN);
+                                for (&(ax, ay), &(bx, by)) in
+                                    polygon.iter().zip(polygon.iter().cycle().skip(1))
+                                {
+                                    if (ay <= sy) != (by <= sy) {
+                                        let at = ax + (sy - ay) / (by - ay) * (bx - ax);
+                                        (left, right) = (left.min(at), right.max(at));
+                                    }
+                                }
+                                (right.min(x as f32 + 1.0) - left.max(x as f32)).clamp(0.0, 1.0)
+                                    * 0.25
+                            })
+                            .sum();
+                        want = blend(want, color(y), (coverage * 255.0).round() as u32);
+                    }
+                    assert_eq!(
+                        pixels[(y * 18 + x) as usize],
+                        want,
+                        "pixel {x}, {y}, gradient {gradient}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn single_moving_line_matches_stroke_and_respects_clip() {
+    let segments = [
+        ((-5.0, 5.1), (34.3, 24.5)),
+        ((30.3, 4.2), (14.0, 30.7)),
+        ((4.5, 9.1), (24.0, 9.1)),
+        ((12.7, 4.2), (12.7, 20.0)),
+        ((7.7, 5.9), (7.7, 5.9)),
+    ];
+    let clip = IRect::new(4, 3, 31, 29);
+    for (a, b) in segments {
+        for scale in [1.0, 1.5, 2.0] {
+            let mut pixels = vec![0xff00_0000u32; 40 * 40];
+            let mut expected = pixels.clone();
+            canvas(&mut pixels, 40, 40).line(a, b, 1.25, scale, 0xff00_00ff, clip);
+            canvas(&mut expected, 40, 40).stroke(
+                &[Stroke::Line(a.0, a.1, b.0, b.1)],
+                1.25,
+                scale,
+                0xff00_00ff,
+                clip,
+            );
+            for (actual, wanted) in pixels.into_iter().zip(expected) {
+                // Pixel-space and logical-space arithmetic can round coverage one level apart.
+                assert!((actual & 0xff).abs_diff(wanted & 0xff) <= 1);
+            }
+        }
+    }
+}
+
 /// 返回作为参照的覆盖率：逐像素求到每个形状的距离，不筛选形状，每个像素都计算三角函数。
 fn reference_coverage(shapes: &[Stroke], width: f32, scale: f32, x: i32, y: i32) -> u32 {
     let (px, py) = ((x as f32 + 0.5) / scale, (y as f32 + 0.5) / scale);
