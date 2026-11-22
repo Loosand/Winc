@@ -28,7 +28,7 @@ pub(crate) fn command(program: &str) -> Command {
 /// 时不算失败，证书链、主机名和有效期照常验证。
 pub(crate) fn curl() -> Command {
     let mut curl = command("curl");
-    curl.arg("--proxy-anyauth");
+    curl.args(["-q", "--proxy-anyauth"]);
     #[cfg(windows)]
     if revoke_best_effort() {
         curl.arg("--ssl-revoke-best-effort");
@@ -189,6 +189,154 @@ pub(crate) fn fetch(url: &str, timeout: u64, limit: Option<u64>) -> Result<Vec<u
     }
     let fits = limit.is_none_or(|limit| output.stdout.len() as u64 <= limit);
     fits.then_some(output.stdout).ok_or(Failure::Invalid)
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) enum HttpFailure {
+    Status(u16),
+    Curl(i32, bool),
+    MissingCurl,
+    ProxyAuth,
+    Invalid,
+    NoArticle,
+}
+
+impl HttpFailure {
+    pub(crate) fn message(self) -> String {
+        match self {
+            Self::Status(code @ (401 | 403 | 429)) => {
+                t!("reader-site-blocked", code = code)
+            }
+            Self::Status(code) => t!("reader-http-status", code = code),
+            Self::Curl(code, proxied) => Failure::from_curl(Some(code), "", proxied).message(),
+            Self::MissingCurl => t!("reader-curl-unavailable").to_owned(),
+            Self::ProxyAuth => Failure::ProxyAuth.message(),
+            Self::Invalid => t!("net-invalid").to_owned(),
+            Self::NoArticle => t!("reader-no-article").to_owned(),
+        }
+    }
+}
+
+/// Bounded HTTP(S) download for user-supplied reading URLs. Resolve relative article
+/// links against the final URL rather than the address before redirects.
+pub(crate) fn fetch_http(
+    url: &url::Url,
+    seconds: u64,
+    limit: u64,
+) -> Result<(url::Url, Vec<u8>), HttpFailure> {
+    fetch_http_with_referer(url, seconds, limit, None)
+}
+
+/// Like `fetch_http`, but image hosts may need to know the origin of the article.
+pub(crate) fn fetch_http_with_referer(
+    url: &url::Url,
+    seconds: u64,
+    limit: u64,
+    referer: Option<&str>,
+) -> Result<(url::Url, Vec<u8>), HttpFailure> {
+    use std::io::Read;
+
+    let mut curl = curl();
+    #[cfg(test)]
+    if url.host_str() == Some("127.0.0.1") {
+        curl.args(["--noproxy", "127.0.0.1"]);
+    }
+    if let Some(referer) = referer {
+        curl.args(["--referer", referer]);
+    }
+    let proxied = winc_editor::proxy::configured(&curl);
+    let mut child = curl
+        .args(["--fail", "--silent", "--location", "--globoff"])
+        .args([
+            "--proto",
+            "=http,https",
+            "--proto-redir",
+            image_redirect_protocols(referer),
+        ])
+        .args(["--max-redirs", "5", "--max-time", &seconds.to_string()])
+        .args([
+            "--max-filesize",
+            &limit.to_string(),
+            "--write-out",
+            "\n%{http_code} %{http_connect} %{url_effective}",
+        ])
+        .args(["--", url.as_str()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                HttpFailure::MissingCurl
+            } else {
+                HttpFailure::Invalid
+            }
+        })?;
+    let mut output = Vec::new();
+    let cap = limit + 8192;
+    let read = child
+        .stdout
+        .take()
+        .expect("piped stdout")
+        .take(cap)
+        .read_to_end(&mut output);
+    if read.is_err() || output.len() as u64 >= cap {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(HttpFailure::Invalid);
+    }
+    let status = child.wait().map_err(|_| HttpFailure::Invalid)?;
+    let trailer = output.iter().rposition(|&b| b == b'\n');
+    let mut meta = trailer
+        .and_then(|i| std::str::from_utf8(&output[i + 1..]).ok())
+        .unwrap_or_default()
+        .splitn(3, ' ');
+    let http = meta.next().and_then(|s| s.parse::<u16>().ok()).unwrap_or(0);
+    let connect = meta.next().and_then(|s| s.parse::<u16>().ok()).unwrap_or(0);
+    if !status.success() {
+        return Err(if connect == 407 || http == 407 {
+            HttpFailure::ProxyAuth
+        } else if connect >= 400 {
+            HttpFailure::Curl(97, true)
+        } else if http >= 400 {
+            HttpFailure::Status(http)
+        } else if status.code() == Some(63) {
+            HttpFailure::Invalid
+        } else {
+            HttpFailure::Curl(status.code().unwrap_or(-1), proxied)
+        });
+    }
+    let split = trailer
+        .filter(|&i| i as u64 <= limit)
+        .ok_or(HttpFailure::Invalid)?;
+    let effective = meta
+        .next()
+        .and_then(|url| url::Url::parse(url).ok())
+        .ok_or(HttpFailure::Invalid)?;
+    output.truncate(split);
+    Ok((effective, output))
+}
+
+/// Use only the article's origin, never its path or query. Do not send it to an
+/// unencrypted subresource when it came from an HTTPS page.
+pub(crate) fn image_referer(page: &url::Url, image: &url::Url) -> Option<String> {
+    if !matches!(image.scheme(), "http" | "https")
+        || !matches!(page.scheme(), "http" | "https")
+        || (page.scheme() == "https" && image.scheme() != "https")
+    {
+        return None;
+    }
+    Some(format!("{}/", page.origin().ascii_serialization()))
+}
+
+/// curl forwards an explicit referer across redirects; keep HTTPS image
+/// requests with that header from ever downgrading to HTTP.
+pub(crate) fn image_redirect_protocols(referer: Option<&str>) -> &'static str {
+    if referer.is_some_and(|r| r.starts_with("https://")) {
+        "=https"
+    } else {
+        "=http,https"
+    }
 }
 
 /// 下载命令（`wget` 为真时是 `wget`，否则是 `curl`）失败的原因；`proxied` 见

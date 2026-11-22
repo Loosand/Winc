@@ -135,6 +135,11 @@ impl App {
                 }
             }
             MenuTarget::Editor(id) => self.run_editor_command(command, id),
+            MenuTarget::ReaderQuote(quote) => {
+                if let MenuCommand::ReaderDraft(id) = command {
+                    self.append_reader_quote(id, quote);
+                }
+            }
             MenuTarget::Markdown => match command {
                 MenuCommand::Cut => self.copy(true),
                 MenuCommand::Copy => self.copy(false),

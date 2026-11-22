@@ -98,6 +98,18 @@ impl Grid {
     }
 
     /// In a single-column shelf, show a full card and part of the next one on short screens.
+    pub(crate) fn fit_single_column(mut self, folders: bool) -> Self {
+        if self.cols == 1 {
+            self.paper = self.paper.min((self.body.h * 0.54).clamp(144.0, 255.0));
+            self.height = if folders {
+                self.paper / 0.94
+            } else {
+                self.paper
+            };
+        }
+        self
+    }
+
     pub(crate) fn content_height(&self, count: usize) -> f32 {
         count.div_ceil(self.cols) as f32 * (self.height + self.gap)
     }

@@ -303,7 +303,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     app.preview.markdown.layout = Some(laid);
     app.follow_live_caret();
     // 分栏时右边跟着左边滚；刚换成只看预览时对齐一次。
-    let split = area != app.layout.editor;
+    let split = area != app.layout.editor && !app.reader_story();
     if split {
         app.sync_markdown_scroll();
     } else {
@@ -312,6 +312,11 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     app.scroll_to_pending_anchor();
     note_footer::follow_citation(app);
     app.hold_book_place();
+    if app.reader_key().is_some()
+        && let Some(place) = app.preview.markdown.book_place()
+    {
+        app.track_reader_place(place);
+    }
     // `layout` 刚在上面放进去，取出时一定存在。
     let mut laid = app.preview.markdown.layout.take().expect("刚放进去");
 

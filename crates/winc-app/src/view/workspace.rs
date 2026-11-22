@@ -7,6 +7,7 @@ pub(super) mod note_graph;
 mod notebook;
 pub(super) mod outline;
 pub(super) mod panel;
+pub(super) mod reader;
 pub(super) mod sidebar;
 pub(super) mod start;
 pub(super) mod top_bar;

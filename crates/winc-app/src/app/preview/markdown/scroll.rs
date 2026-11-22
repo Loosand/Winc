@@ -218,7 +218,7 @@ impl App {
     pub(crate) fn scroll_markdown_to(&mut self, y: f32) {
         self.preview.markdown.scroll_to(y);
         self.request_redraw();
-        if shown_area(self).is_none_or(|a| a == self.layout.editor) {
+        if self.reader_story() || shown_area(self) != Some(self.layout.split) {
             return;
         }
         let max = self.max_scroll_line();

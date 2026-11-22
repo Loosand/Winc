@@ -520,6 +520,7 @@ pub enum MenuCommand {
     PropertyOption(usize),
     /// 在新标签中打开右键点击的本地图片。
     OpenImage,
+    ReaderDraft(Option<DocumentId>),
 }
 
 /// 行尾菜单中可列出的行尾；CR 只在文件本来就是 CR 时才列出。
@@ -759,6 +760,7 @@ impl MenuCommand {
             MenuCommand::PropertyCheck(false) => t!("properties-uncheck"),
             MenuCommand::PropertyOption(_) => t!("properties-options"),
             MenuCommand::OpenImage => t!("menu-open-image"),
+            MenuCommand::ReaderDraft(_) => t!("reader-new-draft"),
             MenuCommand::ImageWidth(percent) => match percent {
                 25 => "25%",
                 50 => "50%",
@@ -906,6 +908,7 @@ impl MenuCommand {
 /// 菜单所作用的目标：右键点击的位置，或弹出菜单的按钮。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuTarget {
+    ReaderQuote(String),
     /// 文件树中的一项；`None` 表示空白处，即根目录。
     Tree(Option<PathBuf>),
     /// Workspace roots captured when the My Documents menu opens; the current one comes first.

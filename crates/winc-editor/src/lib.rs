@@ -331,6 +331,12 @@ impl Editor {
         self.show_readonly(title, |id| Document::reading(id, title, reading))
     }
 
+    /// Open a distinct reading tab even if another tab has the same title.
+    pub fn open_reading(&mut self, title: &str, reading: Reading) -> usize {
+        let id = self.allocate_id();
+        self.insert_tab(Document::reading(id, title, reading))
+    }
+
     /// 把阅读标签 `id` 的内容换成 `reading`，标题不变，不切换标签；返回是否有这个标签。
     ///
     /// 用于后台取回的内容到达时：标签在此期间已经关闭时不再打开。

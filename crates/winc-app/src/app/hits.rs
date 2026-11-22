@@ -13,6 +13,7 @@ pub struct Hits {
     pub(crate) start: Vec<(Rect, StartAction)>,
     /// 笔记库主页上当前可见的卡片和按钮。
     pub(crate) library: Vec<(Rect, workspace::library::LibraryTarget)>,
+    pub(crate) reader: Vec<(Rect, super::reader::Target)>,
     /// 无法打开的文件的占位页上，各按钮的位置。
     pub(crate) placeholder: Vec<(Rect, PlaceholderAction)>,
     /// 已折叠行末尾 `⋯` 的可点击区域和行号，绘制时记录，点击后展开。
@@ -120,6 +121,7 @@ impl Hits {
         let Hits {
             start,
             library,
+            reader,
             placeholder,
             folded,
             long_lines,
@@ -165,6 +167,7 @@ impl Hits {
         } = self;
         start.clear();
         library.clear();
+        reader.clear();
         *suggest_card = None;
         *selection_card = None;
         selection_tools.clear();

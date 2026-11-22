@@ -16,6 +16,7 @@ pub(crate) enum SidebarTarget {
 
 #[derive(Default)]
 pub(crate) struct Navigation {
+    pub(crate) reader: Rect,
     pub(crate) search: Rect,
     pub(crate) graph: Rect,
     pub(crate) folder_menu: Rect,
@@ -77,7 +78,8 @@ impl App {
             return;
         }
         let row = |y, h| Rect::new(home.x, y, home.w, h).intersect(sidebar);
-        let search = row(home.bottom() + 2.0, ROW);
+        let reader = row(home.bottom() + 2.0, ROW);
+        let search = row(reader.bottom() + 2.0, ROW);
         let graph = row(search.bottom() + 2.0, ROW);
         let documents = row(graph.bottom() + 8.0, HEADING);
         let tree = &mut self.layout.tree;
@@ -97,6 +99,7 @@ impl App {
         )
         .intersect(documents);
         self.panels.sidebar.navigation = Navigation {
+            reader,
             search,
             graph,
             folder_menu,

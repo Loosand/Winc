@@ -24,6 +24,7 @@ catalog![
     "git",
     "terminal",
     "preview",
+    "reader",
     "settings",
     "config",
     "format",

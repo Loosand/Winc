@@ -315,6 +315,14 @@ impl App {
             self.gutter_width(),
             status_height,
         );
+        if self.library_root().is_none() {
+            let l = &mut self.layout;
+            let width = 76.0_f32.min(l.tabs.w);
+            l.reader = Rect::new(l.tabs.x, l.sidebar_button.y, width, BUTTON);
+            let space = (width + TAB_GAP).min(l.tabs.w);
+            l.tabs.x += space;
+            l.tabs.w -= space;
+        }
         // 差异标签：查找条放在差异的标题栏下面，不盖住标题栏右端的按钮。
         if self.layout.search.h > 0.0 && self.editor.active().is_some_and(|d| d.diff.is_some()) {
             self.layout.search.y += crate::app::diff::DIFF_HEADER;
@@ -337,6 +345,7 @@ impl App {
         self.place_notebook_sidebar();
         self.place_outline();
         self.sync_library();
+        self.clamp_reader_scroll();
         // 搜索和历史差异各有自己的列表，不能命中工作区文件树原来的区域。
         if self.panels.sidebar.view == SidebarView::Search || self.log_diff_tree().is_some() {
             let tree = self.layout.tree;

@@ -15,6 +15,7 @@ mod options;
 mod pdf;
 #[cfg(any(target_os = "macos", windows))]
 mod pdf_places;
+mod reader;
 mod reading;
 mod tables;
 mod writing;

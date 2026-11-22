@@ -133,6 +133,12 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) {
         match reading {
             // 本地笔记库关闭后，旧主页不再指向任何目录。
             winc_editor::Reading::Library => {}
+            winc_editor::Reading::Reader => workspace::reader::home(app, frame),
+            winc_editor::Reading::Article { .. } | winc_editor::Reading::FeedEntry { .. } => {
+                let area = app.reader_body_area();
+                super::preview::markdown::draw(app, frame, area);
+                workspace::reader::article(app, frame);
+            }
             winc_editor::Reading::NoteGraph => workspace::note_graph::draw(app, frame),
             winc_editor::Reading::Loading => {
                 let name = app.editor.documents[index].name().into_owned();

@@ -183,18 +183,66 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
 }
 
 pub(super) fn draw_grid_scrollbar(app: &mut App, frame: &mut Frame<'_>) {
-    let Some((_, track, scroll, content)) = app.card_grid_scrollbar() else {
+    let Some((target, track, scroll, content)) = app.card_grid_scrollbar() else {
         return;
+    };
+    let owner = match target {
+        crate::app::scroll::ScrollTarget::Reader(generation) => generation.wrapping_add(1),
+        _ => 0,
     };
     super::draw_scrollbar(
         app,
         frame,
         crate::app::ScrollArea::CardGrid,
-        0,
+        owner,
         track,
         scroll,
         content,
     );
+}
+
+pub(super) enum ShelfCard<'a> {
+    Paper(&'a [PreviewLine], Option<&'a str>),
+    Folder(FolderPreview),
+}
+
+pub(super) fn draw_virtual_card(
+    app: &App,
+    frame: &mut Frame<'_>,
+    rect: Rect,
+    clip: Rect,
+    title: &str,
+    content: ShelfCard<'_>,
+    hot: bool,
+) {
+    let brush = CardBrush {
+        p: &app.palette,
+        clip,
+        shadow_clip: clip,
+        hot,
+    };
+    match content {
+        ShelfCard::Paper(lines, hint) => {
+            brush.sheet(frame, rect, brush.edge(), 16.0);
+            let preview = CardBrush {
+                clip: clip.intersect(Rect::new(rect.x, rect.y, rect.w, (rect.h - 37.0).max(0.0))),
+                ..brush
+            };
+            let fallback = hint
+                .filter(|_| lines.is_empty())
+                .map(|hint| [PreviewLine::Text(hint.to_owned())]);
+            preview.page(
+                frame,
+                rect,
+                title,
+                fallback.as_ref().map_or(lines, |line| &line[..]),
+                true,
+            );
+        }
+        ShelfCard::Folder(info) => {
+            brush.folder(frame, rect, title, Some(&info), FolderPose::default());
+        }
+    }
 }
 
 const BOLD: Faux = Faux {

@@ -346,6 +346,7 @@ impl App {
     /// 内容包括：有路径且仍在磁盘上的标签、有备份的未保存内容、书签、折叠的块、大纲里收起的
     /// 符号、各 PDF 文件的阅读位置，以及当前标签。
     pub(in crate::app) fn remember_session(&mut self) {
+        self.flush_reader_positions();
         let Some(folder) = self.editor.root().map(Path::to_path_buf) else {
             return;
         };

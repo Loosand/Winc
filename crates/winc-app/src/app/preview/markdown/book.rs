@@ -60,11 +60,12 @@ impl App {
 
     /// 正在预览一本书时，保持对齐到滚动位置 `y` 处的内容，直到用户滚动；返回是否在预览书。
     pub(in crate::app) fn hold_book_at(&mut self, y: f32) -> bool {
+        let reader = self.reader_full();
         let md = &mut self.preview.markdown;
         let Some(place) = md.layout.as_ref().and_then(|laid| place_at(laid, y)) else {
             return false;
         };
-        if md.book.path.is_none() {
+        if !reader && md.book.path.is_none() {
             return false;
         }
         md.book.hold = Some((place, None));
@@ -126,8 +127,12 @@ impl App {
 }
 
 impl crate::app::preview::markdown::MarkdownPreview {
+    pub(super) fn restore_reader_place(&mut self, place: Option<Place>) {
+        self.book.hold = place.filter(|p| !at_start(*p)).map(|p| (p, None));
+    }
+
     /// 正在预览的书当前的阅读位置；还在对齐时为待对齐的位置，尚未排版时为 `None`。
-    fn book_place(&self) -> Option<Place> {
+    pub(crate) fn book_place(&self) -> Option<Place> {
         if let Some((place, _)) = self.book.hold {
             return Some(place);
         }

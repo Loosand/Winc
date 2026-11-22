@@ -44,6 +44,18 @@ impl App {
             MenuCommand::OpenRecent(i) => self.recent_label(i),
             MenuCommand::GroupFolder(i, j) => self.group_folder_label(i, j),
             MenuCommand::ShowTab(i) => self.tab_list_label(i),
+            MenuCommand::ReaderDraft(Some(id)) => {
+                let name = self
+                    .editor
+                    .index_of(id)
+                    .map(|i| self.editor.documents[i].name().into_owned())
+                    .unwrap_or_default();
+                MenuLabel {
+                    title: name,
+                    subtitle: Some(t!("reader-append-draft").to_owned()),
+                    tooltip: None,
+                }
+            }
             MenuCommand::ImportKeymap(i) => {
                 let source = self.settings.import_sources.get(i);
                 let name = source.map_or("", |s| s.name.as_str());

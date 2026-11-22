@@ -578,6 +578,20 @@ impl App {
                 ]);
                 menu
             }
+            MenuTarget::ReaderQuote(_) => {
+                let mut menu = vec![MenuEntry::Item(
+                    MenuCommand::ReaderDraft(None),
+                    !self.editor.all_locked(),
+                )];
+                menu.extend(
+                    self.editor
+                        .documents
+                        .iter()
+                        .filter(|doc| crate::app::reader::draft_target(doc))
+                        .map(|doc| MenuEntry::Item(MenuCommand::ReaderDraft(Some(doc.id)), true)),
+                );
+                menu
+            }
             MenuTarget::Markdown => {
                 let mut menu = vec![
                     MenuEntry::Item(MenuCommand::Copy, self.markdown_selected_text().is_some()),

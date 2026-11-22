@@ -86,6 +86,7 @@ impl App {
         );
         client.extend(self.sidebar_tabs().iter().map(|(r, _)| *r));
         client.extend(self.hits.tree_tools.iter().map(|(r, _)| *r));
+        client.extend(self.hits.reader.iter().map(|(r, _)| *r));
         client.extend(self.hits.terminal.iter().map(|(r, _)| *r));
         client.extend(self.hits.merge.iter().map(|(r, _)| *r));
         client.extend(self.hits.crumbs.iter().map(|(r, _)| *r));
@@ -241,6 +242,7 @@ impl App {
             Target::ProjectName => Hover::ProjectName,
             Target::SidebarButton => Hover::SidebarButton,
             Target::Library(target) => Hover::Library(target),
+            Target::Reader(target) => Hover::Reader(target),
             Target::NoteGraph(target) => Hover::NoteGraph(target),
             Target::Json(target) => Hover::Json(target),
             Target::NewTab => Hover::NewTab,
@@ -400,6 +402,9 @@ impl App {
         if l.sidebar_button.contains(x, y) {
             return Target::SidebarButton;
         }
+        if let Some(target) = hit(&self.hits.reader, x, y) {
+            return Target::Reader(target);
+        }
         if self.tabs.new_tab.contains(x, y) {
             return Target::NewTab;
         }
@@ -490,6 +495,9 @@ impl App {
         }
         if self.library_shown() && l.editor.contains(x, y) {
             return hit(&self.hits.library, x, y).map_or(Target::Blocked, Target::Library);
+        }
+        if self.reader_home() && l.editor.contains(x, y) {
+            return Target::Blocked;
         }
         if let Some(target) = self.json_at(x, y) {
             return Target::Json(target);
@@ -972,6 +980,7 @@ impl App {
                 | Hover::Diff(crate::app::DiffTarget::Sticky(..))
                 | Hover::MarkdownLink(_)
                 | Hover::Library(_)
+                | Hover::Reader(_)
                 | Hover::NoteGraph(
                     crate::app::workspace::note_links::graph::Target::Search
                         | crate::app::workspace::note_links::graph::Target::Fit
@@ -1041,6 +1050,7 @@ pub(super) enum Target {
     ProjectName,
     SidebarButton,
     Library(crate::app::workspace::library::LibraryTarget),
+    Reader(crate::app::reader::Target),
     NoteGraph(crate::app::workspace::note_links::graph::Target),
     Json(crate::app::preview::json::Target),
     NewTab,

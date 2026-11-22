@@ -56,6 +56,8 @@ pub struct Layout {
     pub controls: Rect,
     /// 顶栏中放置标签和新建按钮的区域。
     pub tabs: Rect,
+    /// Fallback Reading entry for windows that have no notebook sidebar.
+    pub reader: Rect,
     /// 标签栏右端切换「源代码 / 分栏 / 预览」的三个按钮（仅 SVG 等可预览的文件有，见
     /// [`preview_segments`]）；没有时为空矩形，由 `App::relayout` 放置。
     pub preview: Rect,
@@ -211,6 +213,7 @@ impl Layout {
             top_bar,
             controls: Rect::default(),
             tabs,
+            reader: Rect::default(),
             preview: Rect::default(),
             browser: Rect::default(),
             split: Rect::default(),

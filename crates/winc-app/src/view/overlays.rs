@@ -235,6 +235,10 @@ pub(super) fn draw_goto(app: &mut App, frame: &mut Frame<'_>) {
                     t!("workspace-goto-total", count = total),
                 )
             }
+            crate::app::PromptKind::ReaderUrl => (t!("reader-add"), "https://…", String::new()),
+            crate::app::PromptKind::ReaderFeedUrl => {
+                (t!("reader-subscribe"), "https://…/feed.xml", String::new())
+            }
             crate::app::PromptKind::GoToOffset => {
                 let view = app.editor.active().and_then(|d| d.hex.as_deref());
                 let size = winc_editor::size_text(view.map_or(0, |v| v.size()));

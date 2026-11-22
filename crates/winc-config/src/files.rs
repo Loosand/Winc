@@ -163,6 +163,14 @@ fn simplify_verbatim(path: PathBuf) -> PathBuf {
 ///
 /// 目录创建失败、临时文件写入或落盘失败、改名失败时返回对应的 `std::io::Error`。
 pub(crate) fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    write_atomic_bytes(path, text.as_bytes())
+}
+
+/// Atomically replace a local data file, creating its parent directory if needed.
+///
+/// # Errors
+/// Returns an I/O error if the temporary file or replacement cannot be written.
+pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 
     let path = canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -174,7 +182,7 @@ pub(crate) fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     let existing = std::fs::metadata(&path).ok();
     let (temp, mut file) = create_temporary(dir, &name, existing.is_some())?;
     let result = (|| {
-        file.write_all(text.as_bytes())?;
+        file.write_all(bytes)?;
         sync_file(&file)?;
         if let Some(metadata) = &existing {
             file.set_permissions(metadata.permissions())?;

@@ -94,6 +94,7 @@ impl App {
             tabs: TabBar::default(),
             panes: Default::default(),
             library: Default::default(),
+            reader: Default::default(),
             note_links: Default::default(),
             diff: Default::default(),
             status: Default::default(),

@@ -187,6 +187,7 @@ impl App {
         let keeps_preview = matches!(
             target,
             Target::MarkdownText(_)
+                | Target::Reader(crate::app::reader::Target::Quote)
                 | Target::Scrollbar(Scrollbar::Markdown | Scrollbar::MarkdownTable, _)
         );
         if !keeps_preview && self.preview.markdown.focused {
@@ -245,6 +246,7 @@ impl App {
             Target::ProjectName => self.open_project_menu(),
             Target::SidebarButton => self.toggle_sidebar(),
             Target::Library(target) => self.press_library(target),
+            Target::Reader(target) => self.press_reader(target, (x, y)),
             Target::NoteGraph(target) => self.press_note_graph(target, x, y),
             Target::Json(target) => self.click_json(target, x, y),
             Target::NewTab => self.new_file(),
