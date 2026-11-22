@@ -1,4 +1,5 @@
 /target/
+/fixtures/quiet-md/
 samples/
 .DS_Store
 release/out/
