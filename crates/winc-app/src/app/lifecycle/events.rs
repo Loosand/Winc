@@ -421,9 +421,11 @@ impl ApplicationHandler<UserEvent> for App {
             } => self.on_mouse_up(button),
             WindowEvent::MouseWheel { delta, phase, .. } => self.on_wheel_event(delta, phase),
             WindowEvent::PinchGesture { delta, .. } => {
-                self.diagram_view_pinch(delta as f32);
-                self.pdf_pinch(delta as f32);
-                self.picture_pinch(delta as f32);
+                if !self.json_pinch(delta as f32) {
+                    self.diagram_view_pinch(delta as f32);
+                    self.pdf_pinch(delta as f32);
+                    self.picture_pinch(delta as f32);
+                }
             }
             WindowEvent::HoveredFile(_) => self.hover_file(),
             WindowEvent::HoveredFileCancelled => self.end_file_hover(),

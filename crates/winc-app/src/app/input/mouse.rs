@@ -106,7 +106,7 @@ impl App {
     pub(in crate::app) fn on_wheel_event(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
         let fresh = self.note_wheel_gesture(delta, phase);
         let wheel = move |app: &mut App| {
-            if !app.wheel_zoom(delta, fresh) {
+            if !app.wheel_json(delta) && !app.wheel_zoom(delta, fresh) {
                 app.scroll_by_wheel(delta, true);
             }
         };

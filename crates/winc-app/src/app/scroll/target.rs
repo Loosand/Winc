@@ -54,6 +54,8 @@ pub(crate) enum ScrollTarget {
     Picture,
     /// 表格预览。
     Table,
+    /// JSON 结构图（记下当前文档，防止惯性滚动影响其他标签）。
+    Json(DocumentId),
     /// 编辑区中显示的文档。
     Editor(DocumentId),
     /// 不在任何可滚动的区域上。
@@ -149,6 +151,10 @@ impl App {
             ScrollTarget::Picture
         } else if self.table_at(x, y) {
             ScrollTarget::Table
+        } else if self.json_at(x, y).is_some()
+            && let Some(doc) = self.editor.active()
+        {
+            ScrollTarget::Json(doc.id)
         } else if l.editor.contains(x, y)
             && let Some(doc) = self.editor.active()
         {
@@ -235,6 +241,7 @@ impl App {
             ScrollTarget::Pdf => self.scroll_pdf_by(sx, sy),
             ScrollTarget::Picture => self.scroll_picture_by(sx, sy),
             ScrollTarget::Table => self.scroll_table(sx, sy, origin),
+            ScrollTarget::Json(id) => self.pan_json(id, sx, sy),
             ScrollTarget::Editor(id) => self.scroll_editor_by_pixels(id, sx, sy),
             ScrollTarget::Picker
             | ScrollTarget::Commit

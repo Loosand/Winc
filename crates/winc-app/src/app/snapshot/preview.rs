@@ -7,6 +7,7 @@ use super::*;
 
 mod epub;
 mod images;
+mod json;
 mod live;
 mod markdown;
 mod navigation;
@@ -933,14 +934,15 @@ fn each_kind_of_file_keeps_its_own_preview_mode() {
     assert_eq!(mode(&app), PreviewMode::Preview);
 
     // 新窗口按状态恢复各类的方式。
-    app.editor.preview_defaults = [PreviewMode::Source; 3];
+    app.editor.preview_defaults.fill(PreviewMode::Source);
     app.apply_preview_state();
     assert_eq!(
         app.editor.preview_defaults,
         [
             PreviewMode::Source,
             PreviewMode::Preview,
-            PreviewMode::Source
+            PreviewMode::Source,
+            PreviewMode::Source,
         ]
     );
     let _ = std::fs::remove_dir_all(&dir);

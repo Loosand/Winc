@@ -173,11 +173,13 @@ pub enum PreviewKind {
     Markdown,
     /// csv、tsv：预览为表格（`Document::table`）。
     Table,
+    /// JSON：预览为由界面绘制的结构图。
+    Json,
 }
 
 impl PreviewKind {
     /// 全部种类。
-    pub const ALL: [PreviewKind; 3] = [PreviewKind::Svg, PreviewKind::Markdown, PreviewKind::Table];
+    pub const ALL: [PreviewKind; 4] = [Self::Svg, Self::Markdown, Self::Table, Self::Json];
 
     /// 返回语言 `language` 的文本可以预览成哪一种；不能预览的语言返回 `None`。
     pub fn of(language: &winc_syntax::Language) -> Option<PreviewKind> {
@@ -185,6 +187,7 @@ impl PreviewKind {
             "svg" => Some(PreviewKind::Svg),
             "markdown" => Some(PreviewKind::Markdown),
             "csv" | "tsv" => Some(PreviewKind::Table),
+            "json" => Some(PreviewKind::Json),
             _ => None,
         }
     }
@@ -504,6 +507,8 @@ pub struct Document {
     ///
     /// SVG 的预览使用 `picture`。
     rendered: bool,
+    /// 是否只显示 JSON 结构图；图由界面持有，不替换原文。
+    json_preview: bool,
     /// 不对应文件的只读标签（格式化工具的输出、安装说明）的标题。
     pub title: Option<String>,
     /// 阅读标签的内容：编辑区显示排版后的 Markdown，没有可切换的源代码，文本为空。
@@ -620,6 +625,7 @@ impl Document {
             readonly_before_preview: false,
             split: false,
             rendered: false,
+            json_preview: false,
             title: None,
             reading: None,
             revision: 0,

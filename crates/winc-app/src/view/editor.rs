@@ -60,6 +60,7 @@ const BRACE_SCAN_LIMIT: usize = 20_000;
 pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) {
     // Markdown、PDF 预览绘制时重新填充；预览不显示时若仍保留，滚轮和点击事件会被预览接收。
     app.preview.markdown.area = Rect::default();
+    app.preview.json.clear_hits();
     app.preview.pdf.area = Rect::default();
     app.preview.pdf.page = None;
     app.preview.pdf.strip = Rect::default();
@@ -205,6 +206,13 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) {
     // 分栏预览时缓存中保存的是右半部分的图片（`draw_split`），不清除。
     if app.layout.split.w <= 0.0 {
         app.preview.picture_cache = None;
+    }
+    if doc.preview_kind() == Some(winc_editor::PreviewKind::Json)
+        && doc.preview_mode() == winc_editor::PreviewMode::Preview
+        && !doc.is_pending()
+    {
+        super::preview::json::draw(app, frame, app.layout.editor);
+        return;
     }
     if app.editor.documents[index].diff.is_some() {
         diff::draw_diff(app, frame, index);

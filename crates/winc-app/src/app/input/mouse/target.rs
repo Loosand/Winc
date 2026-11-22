@@ -225,6 +225,7 @@ impl App {
             Target::TreeTool(tool) => Hover::TreeTool(tool),
             Target::ProjectName => Hover::ProjectName,
             Target::SidebarButton => Hover::SidebarButton,
+            Target::Json(target) => Hover::Json(target),
             Target::NewTab => Hover::NewTab,
             Target::TabList => Hover::TabList,
             Target::Preview(mode) => Hover::Preview(mode),
@@ -463,6 +464,9 @@ impl App {
         }
         if l.tree.contains(x, y) || self.in_tree_overflow(x, y) {
             return Target::Tree(self.tree_row_at(y));
+        }
+        if let Some(target) = self.json_at(x, y) {
+            return Target::Json(target);
         }
         if let Some(action) = hit(&self.hits.placeholder, x, y) {
             return Target::Placeholder(action);
@@ -911,6 +915,15 @@ impl App {
                 | Hover::Log(crate::app::git::log::LogTarget::AuthorEdge)
         ) {
             CursorIcon::ColResize
+        } else if matches!(self.pointer.drag, Drag::Json { .. }) {
+            CursorIcon::Grabbing
+        } else if let Hover::Json(hit) = self.pointer.hover {
+            use crate::app::preview::json::Target;
+            match hit {
+                Target::Blank => CursorIcon::Default,
+                Target::Canvas => CursorIcon::Grab,
+                _ => CursorIcon::Pointer,
+            }
         } else if matches!(
             self.pointer.hover,
             Hover::Log(crate::app::git::log::LogTarget::Line(..))
@@ -979,6 +992,7 @@ pub(super) enum Target {
     TreeTool(crate::layout::TreeTool),
     ProjectName,
     SidebarButton,
+    Json(crate::app::preview::json::Target),
     NewTab,
     /// 标签栏无法容纳全部标签时显示在最右端的「⌄」。
     TabList,

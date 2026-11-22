@@ -10,6 +10,7 @@ use winc_i18n::t;
 use crate::app::App;
 
 pub(crate) mod images;
+pub(crate) mod json;
 pub(crate) mod markdown;
 pub(crate) mod pdf;
 pub(crate) mod tables;
@@ -66,6 +67,8 @@ pub(crate) struct PreviewState {
     pub(crate) table_layout: tables::TableLayout,
     /// 分栏预览右侧的图片。
     pub(crate) split: images::SplitPreview,
+    /// JSON 结构图（分栏右侧或仅预览模式）。
+    pub(crate) json: json::JsonView,
     /// Markdown 预览（分栏右侧或仅预览模式）。
     pub(crate) markdown: markdown::MarkdownPreview,
     /// 当前标签的 PDF 预览。
@@ -83,6 +86,7 @@ pub(crate) struct PanePreview {
     picture_view: images::PictureView,
     table_layout: tables::TableLayout,
     split: images::SplitPreview,
+    json: json::JsonView,
     markdown: markdown::MarkdownPreview,
     pdf: pdf::PdfPreview,
 }
@@ -107,6 +111,7 @@ impl PreviewState {
         std::mem::swap(&mut self.picture_view, &mut other.picture_view);
         std::mem::swap(&mut self.table_layout, &mut other.table_layout);
         std::mem::swap(&mut self.split, &mut other.split);
+        std::mem::swap(&mut self.json, &mut other.json);
         std::mem::swap(&mut self.markdown, &mut other.markdown);
         std::mem::swap(&mut self.pdf, &mut other.pdf);
         self.markdown.trade_places(&mut other.markdown);

@@ -228,6 +228,7 @@ impl App {
             Target::TreeMore => self.open_tree_tools_menu(),
             Target::ProjectName => self.open_project_menu(),
             Target::SidebarButton => self.toggle_sidebar(),
+            Target::Json(target) => self.click_json(target, x, y),
             Target::NewTab => self.new_file(),
             Target::TabList => self.open_tab_list_menu(),
             Target::Preview(mode) => self.choose_preview_mode(mode),

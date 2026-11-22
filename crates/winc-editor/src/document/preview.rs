@@ -12,8 +12,7 @@ impl Document {
         }
     }
 
-    /// 是否在编辑区显示文本：不是图片、差异、日志、阅读标签或无法打开的文件，且 SVG 没有切换
-    /// 到预览。
+    /// 是否在编辑区显示文本：不是差异、日志、阅读标签或无法打开的文件，且没有只显示预览。
     ///
     /// 光标、查找、折叠等只对文本有意义。
     pub fn shows_text(&self) -> bool {
@@ -21,6 +20,7 @@ impl Document {
             && self.picture.is_none()
             && (self.table.is_none() || self.split)
             && !self.rendered
+            && !self.json_preview
             && self.diff.is_none()
             && self.log.is_none()
             && self.hex.is_none()
@@ -36,7 +36,7 @@ impl Document {
         self.shows_text() || self.rendered
     }
 
-    /// 是否可以切换到预览：语言是 SVG、Markdown、CSV 或 TSV 的文本，且不是大文件。
+    /// 是否可以切换到预览，见 [`Document::preview_kind`]。
     pub fn can_preview(&self) -> bool {
         self.preview_kind().is_some()
     }
@@ -53,9 +53,12 @@ impl Document {
         (!self.is_large() || kind == PreviewKind::Table).then_some(kind)
     }
 
-    /// 是否正在只看预览（SVG 的图、排好版的 Markdown 或 csv 的表格）。
+    /// 是否正在只看预览。
     pub(super) fn previewing(&self) -> bool {
-        self.picture.is_some() || self.rendered || (self.table.is_some() && !self.split)
+        self.picture.is_some()
+            || self.rendered
+            || self.json_preview
+            || (self.table.is_some() && !self.split)
     }
 
     /// 文本是否可以编辑。
@@ -85,7 +88,7 @@ impl Document {
 
     /// 换成 `mode` 显示。
     ///
-    /// 只看 SVG、表格的预览期间文档只读（看不到文字），离开时恢复原来的只读状态；Markdown 的
+    /// 只看 SVG、表格或 JSON 的预览时文档只读，离开时恢复原来的只读状态；Markdown 的
     /// 预览可以直接编辑，不改只读状态。不满足 [`Document::can_preview`] 时不切换，返回 `false`。
     pub fn set_preview_mode(&mut self, mode: PreviewMode) -> bool {
         let Some(kind) = self.preview_kind() else {
@@ -94,6 +97,7 @@ impl Document {
         if self.previewing() {
             self.picture = None;
             self.rendered = false;
+            self.json_preview = false;
             self.readonly = self.readonly_before_preview;
         }
         // 表格在只看预览和分栏时都有，换显示方式时一律重新读。
@@ -111,6 +115,7 @@ impl Document {
                 PreviewKind::Svg => self.picture = Some(PictureState::Loading),
                 PreviewKind::Markdown => self.rendered = true,
                 PreviewKind::Table => self.table = Some(TableView::loading(self.revision)),
+                PreviewKind::Json => self.json_preview = true,
             }
         }
         true

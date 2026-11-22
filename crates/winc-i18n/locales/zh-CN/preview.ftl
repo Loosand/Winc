@@ -2,7 +2,11 @@
 
 ## 预览模式
 
-preview-mode-unsupported = 仅支持预览 SVG、Markdown、CSV 和 TSV 文件
+preview-mode-unsupported = 仅支持预览 SVG、JSON、Markdown、CSV 和 TSV 文件
+preview-json-loading = 正在生成 JSON 结构图…
+preview-json-syntax = JSON 格式有误：第 { $line } 行，第 { $column } 列
+preview-json-limit = 此 JSON 超出结构图的预览上限，请在源代码视图中查看
+preview-json-fit = 适应窗口
 preview-mode-source = 代码
 preview-mode-split = 分栏
 preview-mode-preview = 预览

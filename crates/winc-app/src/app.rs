@@ -489,6 +489,8 @@ pub enum Hover {
     PickerPart(PickerPart),
     ProjectName,
     SidebarButton,
+    /// JSON 结构图的画布或按钮。
+    Json(preview::json::Target),
     NewTab,
     /// 标签栏无法容纳全部标签时显示在最右端的「⌄」，用于列出全部标签。
     TabList,
@@ -698,6 +700,10 @@ enum Drag {
     Hex,
     /// 在 Markdown 预览中拖选文字（`App::drag_markdown`）。
     MarkdownText,
+    /// 拖动 JSON 结构图的画布。
+    Json {
+        at: (f32, f32),
+    },
     /// 拖动预览中图片的把手调整大小（`App::drag_image_resize`）。
     ImageResize,
     /// 在表格中拖选单元格（`App::drag_table`）。

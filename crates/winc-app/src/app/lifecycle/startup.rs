@@ -113,6 +113,7 @@ impl App {
                 tables: preview::tables::TableJobs::default(),
                 table_layout: Default::default(),
                 split: preview::images::SplitPreview::default(),
+                json: Default::default(),
                 markdown: preview::markdown::MarkdownPreview::default(),
                 pdf: preview::pdf::PdfPreview::default(),
                 split_share: None,

@@ -147,6 +147,7 @@ impl App {
     pub(crate) fn advance_previews(&mut self) {
         self.poll_markdown();
         self.poll_pdf();
+        self.advance_json();
         self.advance_split();
         self.advance_markdown();
         self.advance_pdf();
@@ -314,6 +315,7 @@ impl App {
         }
         self.poll_markdown();
         self.poll_pdf();
+        self.poll_json();
         self.poll_tables();
         self.poll_wallpaper();
     }
@@ -523,6 +525,7 @@ fn preview_key(kind: PreviewKind) -> &'static str {
         PreviewKind::Svg => "svg",
         PreviewKind::Markdown => "markdown",
         PreviewKind::Table => "table",
+        PreviewKind::Json => "json",
     }
 }
 

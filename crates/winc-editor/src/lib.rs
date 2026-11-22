@@ -91,7 +91,7 @@ pub struct Editor {
     pub folds: FoldMap,
     /// 各类可预览的文件读取完成时采用的显示方式（[`Editor::finish_load`]），按
     /// [`PreviewKind::ALL`] 的顺序；默认为源代码。
-    pub preview_defaults: [PreviewMode; 3],
+    pub preview_defaults: [PreviewMode; PreviewKind::ALL.len()],
     next_id: u64,
 }
 
@@ -107,7 +107,7 @@ impl Default for Editor {
             diff_unified: false,
             bookmarks: BookmarkMap::new(),
             folds: FoldMap::new(),
-            preview_defaults: [PreviewMode::Source; 3],
+            preview_defaults: [PreviewMode::Source; PreviewKind::ALL.len()],
             next_id: 0,
         }
     }

@@ -46,6 +46,10 @@ pub(in crate::view) fn draw_split(app: &mut App, frame: &mut Frame<'_>) {
         }
         return;
     }
+    if kind == Some(winc_editor::PreviewKind::Json) && !doc.is_pending() {
+        crate::view::preview::json::draw(app, frame, area);
+        return;
+    }
     if app.preview.split.doc != Some(id) {
         return;
     }

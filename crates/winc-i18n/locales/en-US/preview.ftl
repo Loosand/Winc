@@ -2,7 +2,11 @@
 
 ## Preview mode
 
-preview-mode-unsupported = Only SVG, Markdown, CSV, and TSV files can be previewed
+preview-mode-unsupported = Only SVG, JSON, Markdown, CSV, and TSV files can be previewed
+preview-json-loading = Building JSON graph…
+preview-json-syntax = Expected valid JSON at line { $line }, column { $column }
+preview-json-limit = This JSON exceeds the graph preview limits. Use the source view instead.
+preview-json-fit = Fit to window
 preview-mode-source = Source
 preview-mode-split = Split
 preview-mode-preview = Preview

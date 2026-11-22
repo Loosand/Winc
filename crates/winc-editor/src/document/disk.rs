@@ -872,6 +872,13 @@ impl Document {
     pub(super) fn set_content(&mut self, loaded: Loaded) {
         let overlong = matches!(&loaded.text, Content::Large(large) if large.has_overlong_lines());
         self.readonly = matches!(loaded.encoding, Encoding::Lossy | Encoding::Binary) || overlong;
+        if matches!(&loaded.text, Content::Large(_))
+            && PreviewKind::of(self.highlighter.language()) == Some(PreviewKind::Json)
+        {
+            // 重载成分段读取的大文件后，不再提供 JSON 结构图。
+            self.json_preview = false;
+            self.split = false;
+        }
         // 只读预览继续保持只读；排版后的 Markdown 与新读入的文本一样可编辑。
         if self.previewing() {
             self.readonly_before_preview = self.readonly;

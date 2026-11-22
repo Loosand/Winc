@@ -102,6 +102,7 @@ impl App {
 
         match self.pointer.drag {
             Drag::Picture { at } => self.drag_picture(x, y, at),
+            Drag::Json { at } => self.drag_json((x, y), at),
             Drag::TerminalSelect | Drag::TerminalMouse(_) => self.terminal_mouse_drag(x, y),
             Drag::None if self.layout.terminal.contains(x, y) => self.terminal_mouse_hover(x, y),
             Drag::Select { by_word, origin } => self.drag_select(x, y, by_word, origin),
