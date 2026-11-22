@@ -5,6 +5,9 @@
 
 use crate::convert::destination;
 
+mod article;
+pub use article::{ArticleHtml, extract_article, fragment_to_markdown};
+
 /// 转换结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Converted {
@@ -249,12 +252,7 @@ impl Writer {
             "img" => {
                 let alt = attr(attrs, "alt").unwrap_or_default();
                 match attr(attrs, "src").filter(|s| absolute(s)) {
-                    Some(src) => {
-                        let alt = escape(alt.trim());
-                        self.inline
-                            .push_str(&format!("![{alt}]({})", destination(&src)));
-                        self.rich = true;
-                    }
+                    Some(src) => self.image(&alt, &src),
                     None => self.inline.push_str(&escape(&alt)),
                 }
             }
@@ -390,6 +388,13 @@ impl Writer {
                 }
             }
         }
+    }
+
+    fn image(&mut self, alt: &str, src: &str) {
+        let alt = escape(alt.trim());
+        self.inline
+            .push_str(&format!("![{alt}]({})", destination(src)));
+        self.rich = true;
     }
 
     fn text(&mut self, text: &str) {
