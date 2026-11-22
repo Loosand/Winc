@@ -60,6 +60,28 @@ fn large_unsaved_buffers_are_backed_up_too() {
 }
 
 #[test]
+fn an_untitled_note_keeps_its_editable_view_after_backup_restore() {
+    let dir = scratch("untitled-note");
+    let backups = Backups::new(&dir, None);
+    let mut editor = Editor::default();
+    let index = editor.new_untitled_note();
+    let source = "# 草稿\n\n- 第一条";
+    let doc = &mut editor.documents[index];
+    type_into(doc, 0, source);
+    let draft = backups.snapshot(doc, &untitled_name(), 0).unwrap();
+    draft.write().unwrap();
+
+    let mut next = Editor::default();
+    let (restored, conflict) = next.restore_backup(&backups.read_all()[0]).unwrap();
+    let doc = &next.documents[restored];
+    assert!(!conflict && doc.is_dirty() && doc.path.is_none());
+    assert_eq!(doc.preview_mode(), crate::PreviewMode::Preview);
+    assert_eq!(doc.text_range(0, usize::MAX).unwrap(), source);
+    assert_eq!(doc.selection, Selection::point(source.chars().count()));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn unsaved_files_come_back_as_they_were() {
     let dir = scratch("round");
     let folder = dir.join("项目");

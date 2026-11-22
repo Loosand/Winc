@@ -274,10 +274,16 @@ impl Document {
             self.highlighter.clone(),
             self.editorconfig.clone(),
         );
+        let mode = self.preview_mode();
         self.set_path(path);
         let result = self.save();
-        if result.is_err() {
+        if result.is_ok() {
+            self.show_markdown_after_path_change();
+        } else {
             (self.path, self.highlighter, self.editorconfig) = before;
+            if self.preview_mode() != mode {
+                self.set_preview_mode(mode);
+            }
             self.revision += 1;
             self.columns = None;
         }
@@ -667,6 +673,14 @@ impl Document {
     /// 按新文件名重新识别语言，内容、撤销记录和修改状态保持不变。
     pub fn moved_to(&mut self, path: PathBuf) {
         self.set_path(path);
+        self.show_markdown_after_path_change();
+    }
+
+    /// 改名或另存为 Markdown 后仍在同一个标签里直接编辑排版内容。
+    fn show_markdown_after_path_change(&mut self) {
+        if self.holds_file_text() && self.preview_kind() == Some(PreviewKind::Markdown) {
+            self.set_preview_mode(PreviewMode::Preview);
+        }
     }
 
     /// 创建尚未读取的文档：只记录路径，文本为空，文档只读，不检查磁盘。
@@ -858,10 +872,10 @@ impl Document {
     pub(super) fn set_content(&mut self, loaded: Loaded) {
         let overlong = matches!(&loaded.text, Content::Large(large) if large.has_overlong_lines());
         self.readonly = matches!(loaded.encoding, Encoding::Lossy | Encoding::Binary) || overlong;
-        // 正在预览时仍保持只读；切回源代码时恢复为新读取内容对应的 `readonly`。
+        // 只读预览继续保持只读；排版后的 Markdown 与新读入的文本一样可编辑。
         if self.previewing() {
             self.readonly_before_preview = self.readonly;
-            self.readonly = true;
+            self.readonly |= !self.rendered;
         }
         self.text = loaded.text;
         self.whole.forget();

@@ -82,6 +82,8 @@ pub struct Backup {
     pub file: PathBuf,
     /// 对应的文件；未命名的新文件为 `None`。
     pub path: Option<PathBuf>,
+    /// 没有文件名可识别扩展名时，记住未命名草稿是否为 Markdown。
+    untitled_markdown: bool,
     /// 正文在文件里从第几个字节开始（第一行之后）。
     body: u64,
     /// 写备份时磁盘文件的修改时间。
@@ -227,6 +229,8 @@ impl Backups {
         if let Some(path) = &doc.path {
             let path = path.to_string_lossy().into_owned();
             fields.push(("path".to_owned(), Json::String(path)));
+        } else if doc.preview_kind() == Some(crate::PreviewKind::Markdown) {
+            fields.push(("untitledMarkdown".to_owned(), Json::Bool(true)));
         }
         // 纪元之前的修改时间不记录：读取时只接受非负的秒数。
         if let Some(stamp) = doc.disk_mtime().filter(|stamp| stamp.secs >= 0) {
@@ -420,7 +424,11 @@ impl Editor {
             }
         }
 
-        let index = self.new_untitled();
+        let index = if backup.path.is_none() && backup.untitled_markdown {
+            self.new_untitled_note()
+        } else {
+            self.new_untitled()
+        };
         let doc = &mut self.documents[index];
         doc.restore_unsaved(&text, None, backup.selection, false);
         restore_format(doc, backup);
@@ -478,6 +486,7 @@ fn read_header(file: &Path) -> Option<Backup> {
             .and_then(Json::as_str)
             .filter(|p| !p.is_empty())
             .map(PathBuf::from),
+        untitled_markdown: header.get("untitledMarkdown").and_then(Json::as_bool) == Some(true),
         body: first.len() as u64,
         mtime,
         selection: Selection::new(count("anchor")?, count("head")?),

@@ -483,6 +483,15 @@ impl Editor {
         index
     }
 
+    /// 新建未命名的 Markdown 笔记，直接在排版后的视图里编辑。
+    pub fn new_untitled_note(&mut self) -> usize {
+        let index = self.new_untitled();
+        let doc = &mut self.documents[index];
+        doc.set_language("untitled.md");
+        doc.set_preview_mode(PreviewMode::Preview);
+        index
+    }
+
     /// 关闭第 `index` 个标签并返回其文档；`index` 越界时返回 `None`。
     ///
     /// 关闭活动标签后，活动标签切换到右侧相邻的标签；右侧没有标签时切换到左侧。文档的书签

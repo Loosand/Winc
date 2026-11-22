@@ -448,6 +448,38 @@ fn tidying_keeps_every_cursor_and_its_line() {
 }
 
 #[test]
+fn save_as_and_rename_to_markdown_show_the_editable_view() {
+    let dir = scratch("save-as-markdown");
+    let path = dir.join("note.md");
+    let mut doc = Document::from_text(DocumentId(1), "# 标题\n");
+    doc.save_as(path.clone()).unwrap();
+    assert_eq!(doc.preview_mode(), PreviewMode::Preview);
+    assert!(!doc.readonly);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "# 标题\n");
+
+    let mut text = Document::from_text(DocumentId(2), "## 正文\n");
+    text.moved_to(dir.join("renamed.md"));
+    assert_eq!(text.preview_mode(), PreviewMode::Preview);
+    assert!(!text.readonly);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn reloading_a_rendered_markdown_file_keeps_it_editable() {
+    let dir = scratch("md-reread-live");
+    let path = dir.join("note.md");
+    fs::write(&path, "# 原稿\n").unwrap();
+    let mut doc = Document::open(DocumentId(1), path.clone()).unwrap();
+    doc.set_preview_mode(PreviewMode::Preview);
+    fs::write(&path, "# 新稿\n").unwrap();
+    doc.reopen_with_encoding(Encoding::Utf8).unwrap();
+    assert_eq!(doc.preview_mode(), PreviewMode::Preview);
+    assert!(!doc.readonly);
+    assert_eq!(doc.text_range(0, usize::MAX).unwrap(), "# 新稿\n");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn a_failed_save_as_keeps_the_old_path() {
     let dir = scratch("save-as-fails");
     let path = dir.join("gbk.txt");
