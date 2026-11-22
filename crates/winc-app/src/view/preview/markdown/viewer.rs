@@ -167,6 +167,7 @@ fn lay_diagram(
         dark: p.dark,
         images: &images,
         image_path: &|_| None,
+        missing_image: None,
         wanted: Vec::new(),
         memo: &mut memo,
         toggled: &toggled,

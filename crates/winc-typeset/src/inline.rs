@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use winc_preview::markdown::{Align, IMAGE_MARK, Inline, Length, Style};
-use winc_render::{Color, Faux, FontKind, Rect};
+use winc_render::{Color, Faux, FontKind, Rect, Stroke};
 
 use super::math::MathBox;
 use super::{Cx, Flow, Item, Para, Span};
@@ -55,6 +55,8 @@ enum AtomKind {
     Char(char),
     /// 行内代码两边的留白。
     Pad,
+    /// 网页链接末尾的图标；不属于正文，不参与复制和选区。
+    ExternalLink,
     /// 行内图片。
     Image {
         /// 图片文件的路径。
@@ -184,8 +186,9 @@ impl Cx<'_, '_> {
         let mut runs = Vec::new();
         let mut images = inline.images.iter();
         for (range, style) in inline.runs() {
-            let run = runs.len();
             let st = self.style_of(style, para);
+            end_web_link(&mut atoms, &mut runs, inline, st.link);
+            let run = runs.len();
             runs.push(st);
             if style.has(Style::MATH) {
                 let tex = &inline.text[range.clone()];
@@ -232,7 +235,13 @@ impl Cx<'_, '_> {
                         }),
                         // 无法显示时用替代文字。
                         None => {
-                            let alt = if image.alt.is_empty() {
+                            if let Some(label) = self.missing_image {
+                                for c in label.chars().chain((!image.alt.is_empty()).then_some(' '))
+                                {
+                                    self.push_char(&mut atoms, c, run, st, source);
+                                }
+                            }
+                            let alt = if self.missing_image.is_none() && image.alt.is_empty() {
                                 winc_i18n::t!("preview-markdown-image-alt")
                             } else {
                                 &image.alt
@@ -268,12 +277,15 @@ impl Cx<'_, '_> {
                 });
             }
         }
-        // 图片后面可以换行。
+        end_web_link(&mut atoms, &mut runs, inline, 0);
+        // 图片后面可以换行，但外链图标应跟随链接。
         for i in 1..atoms.len() {
-            if matches!(
-                atoms[i - 1].kind,
-                AtomKind::Image { .. } | AtomKind::Math { .. }
-            ) {
+            if !matches!(atoms[i].kind, AtomKind::ExternalLink)
+                && matches!(
+                    atoms[i - 1].kind,
+                    AtomKind::Image { .. } | AtomKind::Math { .. }
+                )
+            {
                 atoms[i].brk = true;
             }
         }
@@ -509,6 +521,27 @@ impl Cx<'_, '_> {
                         self.text.push_str(tex);
                         self.chars += tex.chars().count();
                     }
+                    AtomKind::ExternalLink => {
+                        let size = st.size * 0.6;
+                        let x = *pen + st.size * 0.23;
+                        let y = at - size;
+                        let right = x + size;
+                        let bottom = y + size;
+                        let mid = size * 0.47;
+                        out.push(Item::path(
+                            vec![
+                                Stroke::Line(x + mid, y, x, y),
+                                Stroke::Line(x, y, x, bottom),
+                                Stroke::Line(x, bottom, right, bottom),
+                                Stroke::Line(right, bottom, right, y + mid),
+                                Stroke::Line(x + mid * 0.8, bottom - mid * 0.8, right, y),
+                                Stroke::Line(right - mid, y, right, y),
+                                Stroke::Line(right, y, right, y + mid * 0.9),
+                            ],
+                            (st.size / 16.0).max(1.0),
+                            st.color,
+                        ));
+                    }
                     AtomKind::Pad | AtomKind::Newline => flush_text(out, &mut text, at, st),
                 }
                 *pen += atom.width;
@@ -615,6 +648,34 @@ impl Cx<'_, '_> {
         }
         (longest_word, longest_line.max(line))
     }
+}
+
+/// 给结束的网页链接留一个可点击的图标，不把图标当成正文字符。
+fn end_web_link(atoms: &mut Vec<Atom>, runs: &mut Vec<RunStyle>, inline: &Inline, next: u16) {
+    let Some(st) = atoms.last().map(|atom| runs[atom.run]) else {
+        return;
+    };
+    if st.link == next
+        || st.link == 0
+        // A linked image already has a click target; don't shift a centered image away from its resize handle.
+        || matches!(atoms.last().map(|atom| &atom.kind), Some(AtomKind::Image { .. }))
+        || !inline
+            .links
+            .get(st.link as usize - 1)
+            .is_some_and(|url| winc_preview::note_links::is_web(url))
+    {
+        return;
+    }
+    let run = runs.len();
+    runs.push(RunStyle { flags: 0, ..st });
+    atoms.push(Atom {
+        kind: AtomKind::ExternalLink,
+        width: st.size * 0.95,
+        run,
+        brk: false,
+        space: false,
+        source: None,
+    });
 }
 
 /// 一行里攒着的一段同样式的文字：文字、每个字的宽度、在块文字里的起点、横坐标。

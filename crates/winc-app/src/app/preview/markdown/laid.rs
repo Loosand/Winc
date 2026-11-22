@@ -457,6 +457,7 @@ pub(crate) fn lay_out(
         dark: p.dark,
         images: &app.preview.markdown.images,
         image_path: &image_path,
+        missing_image: None,
         wanted: Vec::new(),
         memo: &mut app.preview.markdown.memo,
         toggled: &app.preview.markdown.toggled,

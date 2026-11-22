@@ -28,6 +28,7 @@ fn lay(markdown: &str, width: f32) -> Vec<(Out, f32)> {
             dark: false,
             images: &images,
             image_path: &|_| None,
+            missing_image: None,
             wanted: Vec::new(),
             memo: &mut memo,
             toggled: &toggled,
@@ -171,6 +172,30 @@ fn links_cover_their_text() {
     let (rect, url) = link.expect("链接排出一个 `Item::Link`");
     assert_eq!(url, "https://example.com");
     assert!(rect.w > 0.0 && rect.h > 0.0);
+}
+
+#[test]
+fn external_link_icons_are_clickable_but_not_part_of_the_text() {
+    let laid = lay(
+        "[external](https://example.org) [internal](./note.md) [[note|wiki]]\n",
+        600.0,
+    );
+    let out = &laid[0].0;
+    let shown = texts(out);
+    assert_eq!(
+        shown.iter().map(|item| item.3.trim()).collect::<Vec<_>>(),
+        ["external", "internal", "wiki"]
+    );
+    let mut icons = out.items.iter().filter_map(|item| match item {
+        Item::Path { rect, .. } => Some(*rect),
+        _ => None,
+    });
+    let icon = icons.next().expect("the web link has its arrow");
+    assert!(icons.next().is_none());
+    assert!(out.items.iter().any(|item| matches!(item,
+        Item::Link { rect, url } if url.as_ref() == "https://example.org"
+            && rect.contains(icon.x + icon.w / 2.0, icon.y + icon.h / 2.0)
+    )));
 }
 
 #[test]

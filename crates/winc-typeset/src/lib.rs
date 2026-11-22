@@ -50,11 +50,35 @@ mod table;
 pub use memo::Memo;
 pub use memo::{key as memo_key, shift};
 
+/// Stable foreground and background for a select label in either theme.
+pub fn property_chip_colors(label: &str, dark: bool) -> (Color, Color) {
+    const PALETTE: [(u32, u32, u32, u32); 7] = [
+        (0x54351d, 0xf1dfcd, 0xf3cca5, 0x4d382b),
+        (0x253f5e, 0xdce8f6, 0xbad7f5, 0x2c4058),
+        (0x2c4e3f, 0xddece2, 0xc0e2ca, 0x2b463c),
+        (0x4c3863, 0xeae1f2, 0xe0d0f7, 0x443653),
+        (0x61364a, 0xf3e0e9, 0xf1c5d9, 0x4f3243),
+        (0x574721, 0xf2eacb, 0xf1dfaa, 0x4b4029),
+        (0x2b5155, 0xdaecee, 0xbbdee0, 0x2c4549),
+    ];
+    let hash = label.bytes().fold(2_166_136_261_u32, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(16_777_619)
+    });
+    let (fg, bg, night_fg, night_bg) = PALETTE[(hash % PALETTE.len() as u32) as usize];
+    if dark {
+        (Color::hex(night_fg), Color::hex(night_bg))
+    } else {
+        (Color::hex(fg), Color::hex(bg))
+    }
+}
+
 /// 一个排好版的顶层块：要画的项，坐标相对块的左上角。
 #[derive(Default)]
 pub struct LaidBlock {
     /// 块的高度（逻辑像素）。
     pub height: f32,
+    /// Height already added for the editable rows below the content.
+    pub editing_blank_height: f32,
     /// 要画的项，按绘制先后排列。
     pub items: Vec<Item>,
     /// 标题的锚点（小写、空格换成 `-`、去掉标点）和所在高度，`[跳转](#标题)` 用。
@@ -164,6 +188,7 @@ impl LaidBlock {
         short.sort_by(|a, b| a.0.total_cmp(&b.0));
         LaidBlock {
             height,
+            editing_blank_height: 0.0,
             items,
             anchors,
             text,
@@ -193,6 +218,7 @@ impl LaidBlock {
         });
         LaidBlock {
             height: self.height,
+            editing_blank_height: self.editing_blank_height,
             anchors: self.anchors.clone(),
             text: self.text.clone(),
             chars: self.chars,
@@ -625,6 +651,8 @@ pub struct Cx<'a, 'f> {
     pub images: &'a HashMap<PathBuf, ImageSlot>,
     /// 返回图片地址对应的本地文件；不显示该图片时返回 `None`。
     pub image_path: &'a dyn Fn(&str) -> Option<PathBuf>,
+    /// Explicit fallback to show when an expected offline image file cannot be rendered.
+    pub missing_image: Option<&'a str>,
     /// 排版时遇到、还没读过的图片：本地路径和文件里写的地址。
     pub wanted: Vec<(PathBuf, String)>,
     /// 跨次排版留着的排版缓存。
@@ -893,7 +921,9 @@ impl Cx<'_, '_> {
                 let raw = self.raw.take();
                 let mut flow = self.block(&revealed, x, y, width, env, out);
                 self.raw = raw;
-                flow.height += self.blank_lines(&blanks, x, y + flow.height, width, out);
+                let extra = self.blank_lines(&blanks, x, y + flow.height, width, out);
+                out.editing_blank_height += extra;
+                flow.height += extra;
                 return flow;
             }
             RawState::Skip => {
@@ -1135,8 +1165,7 @@ impl Cx<'_, '_> {
     /// 为光标所在的空行排一行，返回排出的总高度；`blanks` 是段落之后直到光标所在行的各空行
     /// （原文起点，相对顶层块）。
     ///
-    /// 光标所在的行高度等于正文的行高，之前的空行合计占一个段落间距：该行的位置与在此输入
-    /// 文字后新段落的位置相同，输入第一个字时内容不移动。
+    /// 只将第一行计入正常段落间距；再按回车要给每个额外空行留下实际高度。
     fn blank_lines(&mut self, blanks: &[usize], x: f32, y: f32, width: f32, out: &mut Out) -> f32 {
         let size = self.base;
         let m = self.frame.metrics(FontKind::Ui, size);
@@ -1152,7 +1181,11 @@ impl Cx<'_, '_> {
         let Some((&source, before)) = blanks.split_last() else {
             return 0.0;
         };
-        let gap = if before.is_empty() { 0.0 } else { size };
+        let gap = if before.is_empty() {
+            0.0
+        } else {
+            size + (before.len() - 1) as f32 * blank_row_height(size)
+        };
         let source = u32::try_from(source).unwrap_or(0);
         let piece = self.code_piece("", source, "markdown", language, &mut state, row);
         self.paste(&piece, x, y + gap, source, &mut out.items);
@@ -1163,6 +1196,8 @@ impl Cx<'_, '_> {
 /// 收集一个块里要画的项和标题锚点。
 #[derive(Default)]
 pub struct Out {
+    /// Height added for the live editing caret's blank rows.
+    pub editing_blank_height: f32,
     /// 要画的项，按绘制先后排列。
     pub items: Vec<Item>,
     /// 锚点（标题、脚注和 HTML 写的锚点）和所在高度（逻辑像素，相对块的左上角）。
@@ -1179,6 +1214,13 @@ const LIST_GAP: f32 = 0.25;
 /// 分隔线的粗细（逻辑像素）：正文字号的四分之一。
 fn rule_height(base: f32) -> f32 {
     (base * 0.25).round()
+}
+
+/// Height of an extra source blank row in the editable Markdown view.
+/// Filling the middle of four line endings with text replaces two extra rows
+/// with a normal paragraph plus its margin, without moving later text.
+pub fn blank_row_height(base: f32) -> f32 {
+    ((base * 1.5).round() + base) / 2.0
 }
 
 /// 块上下的外边距（逻辑像素）。

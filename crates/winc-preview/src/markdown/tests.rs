@@ -2,6 +2,20 @@
 
 use super::*;
 
+#[test]
+fn source_blank_rows_include_separators_but_exclude_hidden_reference_definitions() {
+    let doc = parse("\r\n甲\r\n \r\n\t\r\n\r\n乙\r\n\r\n");
+    assert_eq!(doc.blank_before, [1, 3]);
+    assert_eq!(doc.blank_after, 2);
+    let doc = parse("- 甲\n- 乙\n\n\n下一段\n\n");
+    assert_eq!(doc.blank_before, [0, 2]);
+    assert_eq!(doc.blank_after, 2);
+    let doc = parse("甲\n\n[ref]: https://example.com\n\n\n乙\n");
+    assert_eq!(doc.blank_before, [0, 0]);
+    assert_eq!(doc.blank_after, 1);
+    assert_eq!(parse("甲\n\n乙").blank_before, [0, 1]);
+}
+
 fn paragraph(block: &Block) -> &Inline {
     match block {
         Block::Paragraph(inline) => inline,

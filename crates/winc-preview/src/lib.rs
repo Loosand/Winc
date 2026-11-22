@@ -15,6 +15,7 @@ pub mod epub;
 pub mod image;
 pub mod json;
 pub mod markdown;
+pub mod note_links;
 mod ooxml;
 pub mod pdf;
 pub mod svg;
