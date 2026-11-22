@@ -26,6 +26,11 @@ winit.workspace = true
 ropey.workspace = true
 arboard.workspace = true
 unicode-segmentation.workspace = true
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+sha2 = "0.10"
+url = "2.5"
+roxmltree.workspace = true
 
 # 全局分配器（large_alloc.rs，仅 macOS）的 mmap、munmap，测量（bench.rs）的 getrusage。
 [target.'cfg(unix)'.dependencies]
@@ -101,7 +106,6 @@ windows-sys = { workspace = true, features = [
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 arboard = { workspace = true, features = ["image-data"] }
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
-roxmltree.workspace = true
 
 [dev-dependencies]
 winc-backend = { workspace = true, features = ["test-support"] }
