@@ -44,7 +44,10 @@ Measured on macOS; results vary with hardware and system load.
 | Editing | Multiple cursors, find and replace, native input methods, smooth scrolling in gigabyte-sized files, and an experimental Vim mode |
 | Syntax | Highlighting for common programming, markup, data, and configuration languages, plus lightweight go-to-definition and usages without a language server |
 | Formatting | Whole-file formatting with external tools such as rustfmt, Prettier, Black, Ruff, and gofmt |
-| Preview | Markdown with math and Mermaid diagrams, images, SVG, PDF (macOS and Windows), Word documents (docx), and spreadsheets (xlsx, csv), with the source one click away |
+| Markdown | Edit in a single formatted view, with math and Mermaid diagrams; notes stay plain `.md` files |
+| Note library | Open a local folder and use Home to browse folder cards and miniature Markdown pages |
+| Reading | Saved articles, RSS / Atom subscriptions, offline reading, and quotes in Markdown drafts |
+| Preview | Images, SVG, JSON graphs, PDF (macOS and Windows), Word documents (docx), and spreadsheets (xlsx, csv) |
 | Git | Side-by-side diffs with word-level highlights, staging by hunk, commit and push, a commit graph, and blame |
 | Project | A file tree, quick open, and project search that follows `.gitignore` |
 | Terminal | An integrated terminal with automatic loading of project-local Python environments |
@@ -63,6 +66,21 @@ Window dragging and edge snapping use the same native Windows behavior as mouse 
 Image and SVG previews zoom like the PDF preview: hold Ctrl (⌘ on macOS) and scroll, pinch, or
 press Ctrl/⌘ with `+`, `-` or `0`; the point under the pointer stays in place. Scroll or drag a
 zoomed image to pan, and double-click to fit it again. This also works in the SVG split preview.
+
+JSON files offer Source, Split, and Preview at the right of the tab bar. Split shows a local,
+interactive graph that updates as you edit, even before you save. Click a container row to fold
+or unfold its branch. Drag to pan, use Ctrl/⌘ + scroll or pinch to zoom, and use **Fit to window**
+to see the whole graph. The graph reads standard JSON, not JSONC, JSON5, or JSON Lines.
+
+### Reading and writing
+
+Choose **Read → Paste Article Link** from the sidebar below Home. When no local notebook is open, Read is available in the top bar. Minc saves the extracted body and supported images locally and resumes from your last position. If the body can’t be retrieved, Minc keeps the original link; missing images are marked. Imports don’t run JavaScript or bypass sign-ins or paywalls. Importing and refreshing require system `curl`; reading saved copies does not.
+
+**My Reading** shows feeds as folders and saved articles as note cards. **Saved Articles** and **RSS Subscriptions** show each collection on its own. Add RSS or Atom URLs under **RSS Subscriptions**. Feeds refresh after opening the library and then every 30 minutes, or on demand. Opening an entry marks it read; **Unread Only** filters the list. Cards show a feed excerpt or the start of the supplied article, when available. For excerpt-only or link-only entries, **Read Full Text** tries the original page without bookmarking it. Use **Save Article** to keep an offline copy that survives unsubscribing.
+
+Select article text and choose **Quote to Draft** to create a draft or append the quote and source link to an open Markdown document. Use **Save / Save As** to get a plain `.md` file. Removing a saved article doesn’t change your drafts, and you can still create documents without opening Read.
+
+Home and My Documents show the current folder. Click its name in the sidebar to switch workspaces or open a different folder. Files stay where they are. Manual refreshes on Home and in RSS show a loading state for at least half a second, then show the result.
 
 ## Platforms
 
@@ -128,7 +146,7 @@ The workspace is split into crates by responsibility:
 | `winc-server` | The server process that runs on a remote host and serves file operations over SSH |
 | `winc-watch` | Watches folders on the machine that holds them (WSL distributions, remote hosts) |
 | `winc-render` | Rendering: glyphs, rasterization, and presentation |
-| `winc-preview` | Previews for images, SVG, Markdown, PDF, Word documents, and spreadsheets |
+| `winc-preview` | Previews for images, SVG, JSON, Markdown, PDF, Word documents, and spreadsheets |
 | `winc-typeset` | Layout for the Markdown preview |
 | `winc-pty` | Terminal emulation and the pseudo-terminal helper process |
 | `winc-config` | Configuration and state files |
