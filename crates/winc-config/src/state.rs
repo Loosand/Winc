@@ -45,6 +45,16 @@ pub struct State {
     pub recent: Vec<PathBuf>,
     /// 最近打开的文件，最新的在前，不重复；所有窗口共用。
     pub recent_files: Vec<PathBuf>,
+    /// Legacy recent-note data, preserved on disk but not used by the notebook.
+    pub recent_note_edits: Vec<PathBuf>,
+    /// Legacy favorites data, preserved on disk but not used by the notebook.
+    pub note_favorites: Vec<PathBuf>,
+    /// Legacy order of the removed home tabs.
+    pub home_tab_order: Vec<String>,
+    /// Notebook property definitions by root; note values remain in the Markdown files.
+    pub note_property_schema: BTreeMap<String, Json>,
+    /// Independently switchable local folders, most recently opened first.
+    pub notebook_workspaces: Vec<PathBuf>,
     /// 每个目录上次的现场，最近的在前，每个目录一条，最多 [`MAX_SESSIONS`] 条。
     pub sessions: Vec<Session>,
     /// 上次退出时开着的目录；退出时没有打开目录则为 `None`，下次启动显示开始页。
@@ -89,7 +99,7 @@ pub struct State {
     pub markdown_toc_pinned: bool,
     /// 侧栏宽度（逻辑像素）；`None` 表示没有调整过。所有视图、窗口和仓库共用，下次启动沿用。
     pub panel_width: Option<f32>,
-    /// 各类能预览的文件打开时的显示方式：键为种类（`markdown`、`svg`、`table`），值为
+    /// 各类能预览的文件打开时的显示方式：键为种类（`markdown`、`svg`、`table`、`json`），值为
     /// `"split"`（分栏）或 `"preview"`（只看预览），没有记录的种类显示源代码。记录用户最近一次
     /// 在标签栏右端为该类文件选择的方式，下次启动沿用。
     pub preview_modes: BTreeMap<String, String>,
@@ -281,6 +291,16 @@ impl State {
                 recent_files.push(path);
             }
         }
+
+        let mut recent_note_edits = Vec::new();
+        for path in paths(root.get("recentNoteEdits")) {
+            if !recent_note_edits.contains(&path) && recent_note_edits.len() < MAX_RECENT_FILES {
+                recent_note_edits.push(path);
+            }
+        }
+        let mut note_favorites = paths(root.get("noteFavorites"));
+        let mut seen = std::collections::HashSet::new();
+        note_favorites.retain(|path| seen.insert(path.clone()));
 
         // 已保存的文件写成路径字符串，未保存过的新文件写成 `{"untitled": 备份文件名}`。
         let tab = |value: &Json| -> Option<Tab> {
@@ -499,6 +519,16 @@ impl State {
             })
             .unwrap_or_default();
 
+        let saved_workspaces = root.get("notebookWorkspaces");
+        let mut notebook_workspaces = paths(saved_workspaces);
+        if let Some(groups) = saved_workspaces.and_then(Json::as_object) {
+            // The preview used to group attached folders under a root. Keep every
+            // referenced path as a separate switch target, without touching the files.
+            notebook_workspaces.extend(groups.keys().map(PathBuf::from));
+            notebook_workspaces.extend(groups.values().flat_map(|value| paths(Some(value))));
+        }
+        let mut seen = std::collections::HashSet::new();
+        notebook_workspaces.retain(|p| p.is_absolute() && seen.insert(p.clone()));
         let vim_marks = vim_marks(root);
         let vim_commands = vim_history(root, "vimCommands");
         let vim_searches = vim_history(root, "vimSearches");
@@ -506,6 +536,23 @@ impl State {
         let mut state = State {
             recent,
             recent_files,
+            recent_note_edits,
+            note_favorites,
+            notebook_workspaces,
+            home_tab_order: root
+                .get("homeTabOrder")
+                .and_then(Json::as_array)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(Json::as_str)
+                .take(3)
+                .map(str::to_owned)
+                .collect(),
+            note_property_schema: root
+                .get("notePropertySchema")
+                .and_then(Json::as_object)
+                .cloned()
+                .unwrap_or_default(),
             badges,
             tool_choices,
             trusted_repos,
@@ -618,6 +665,24 @@ impl State {
         self.sessions.iter().find(|s| s.folder == folder)
     }
 
+    /// Remember a folder as an independent workspace. A still older saved session
+    /// may be the only record of its attached folders, so offer those once as well.
+    pub fn register_notebook(&mut self, root: &Path) {
+        if !self.notebook_workspaces.iter().any(|path| path == root) {
+            let older = self
+                .session_for(root)
+                .map(|s| s.folders.clone())
+                .unwrap_or_default();
+            for path in older {
+                if path.is_absolute() && path != root && !self.notebook_workspaces.contains(&path) {
+                    self.notebook_workspaces.push(path);
+                }
+            }
+        }
+        self.notebook_workspaces.retain(|path| path != root);
+        self.notebook_workspaces.insert(0, root.to_owned());
+    }
+
     /// 记录一个目录的现场并移到最前面。
     ///
     /// 同目录的旧记录被替换，超出 [`MAX_SESSIONS`] 的从末尾移除。
@@ -659,6 +724,42 @@ impl State {
         if !self.recent_files.is_empty() {
             let files = self.recent_files.iter().map(path).collect();
             fields.push(("recentFiles", Json::Array(files)));
+        }
+        if !self.recent_note_edits.is_empty() {
+            fields.push((
+                "recentNoteEdits",
+                Json::Array(self.recent_note_edits.iter().map(path).collect()),
+            ));
+        }
+        if !self.note_favorites.is_empty() {
+            fields.push((
+                "noteFavorites",
+                Json::Array(self.note_favorites.iter().map(path).collect()),
+            ));
+        }
+        if !self.home_tab_order.is_empty() {
+            fields.push((
+                "homeTabOrder",
+                Json::Array(
+                    self.home_tab_order
+                        .iter()
+                        .cloned()
+                        .map(Json::String)
+                        .collect(),
+                ),
+            ));
+        }
+        if !self.notebook_workspaces.is_empty() {
+            fields.push((
+                "notebookWorkspaces",
+                Json::Array(self.notebook_workspaces.iter().map(path).collect()),
+            ));
+        }
+        if !self.note_property_schema.is_empty() {
+            fields.push((
+                "notePropertySchema",
+                Json::Object(self.note_property_schema.clone()),
+            ));
         }
         if let Some(last) = &self.last {
             fields.push(("last", path(last)));
@@ -912,9 +1013,12 @@ impl State {
 
     /// 记录打开了一个文件：移到最前面，超出 [`MAX_RECENT_FILES`] 的从末尾移除。
     pub fn remember_file(&mut self, file: &Path) {
-        self.recent_files.retain(|p| p != file);
-        self.recent_files.insert(0, file.to_path_buf());
-        self.recent_files.truncate(MAX_RECENT_FILES);
+        remember_recent_path(&mut self.recent_files, file);
+    }
+
+    /// 记录一次成功保存的笔记修改；打开或浏览笔记时不调用。
+    pub fn remember_note_edit(&mut self, file: &Path) {
+        remember_recent_path(&mut self.recent_note_edits, file);
     }
 
     /// 从最近列表中移除文件 `file`（文件已不存在）。
@@ -1048,6 +1152,12 @@ fn preferred_color(folder: &Path) -> usize {
             (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
         });
     hash as usize % BADGE_COLORS
+}
+
+fn remember_recent_path(paths: &mut Vec<PathBuf>, file: &Path) {
+    paths.retain(|path| path != file);
+    paths.insert(0, file.to_path_buf());
+    paths.truncate(MAX_RECENT_FILES);
 }
 
 /// 返回状态文件的路径；无法确定用户目录时返回 `None`。
@@ -1275,19 +1385,19 @@ fn window_json(frame: &WindowFrame) -> Json {
 }
 
 /// 从 `state.json` 的 `window` 一节读出窗口的大小和位置；缺项或者数值不合理时为 `None`。
-/// 读取 `previewMode`：对象按种类取各自的方式，字符串用于全部种类。
+/// 读取 `previewMode`：对象按种类取各自的方式，旧式字符串用于当时已有的种类。
 fn preview_modes(json: Option<&Json>) -> BTreeMap<String, String> {
-    const KINDS: [&str; 3] = ["markdown", "svg", "table"];
+    const LEGACY: [&str; 3] = ["markdown", "svg", "table"];
     let valid = |mode: &&str| matches!(*mode, "split" | "preview");
     match json {
         Some(Json::Object(modes)) => (modes.iter())
-            .filter(|(kind, _)| KINDS.contains(&kind.as_str()))
+            .filter(|(kind, _)| kind.as_str() == "json" || LEGACY.contains(&kind.as_str()))
             .filter_map(|(kind, mode)| {
                 Some((kind.clone(), mode.as_str().filter(valid)?.to_owned()))
             })
             .collect(),
         Some(Json::String(mode)) if valid(&mode.as_str()) => {
-            KINDS.map(|kind| (kind.to_owned(), mode.clone())).into()
+            LEGACY.map(|kind| (kind.to_owned(), mode.clone())).into()
         }
         _ => BTreeMap::new(),
     }

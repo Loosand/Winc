@@ -33,6 +33,39 @@ fn several_windows_keep_each_others_changes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn notebook_references_survive_without_a_recent_session() {
+    let dir = std::env::temp_dir();
+    let root = dir.join("数字花园");
+    let external = dir.join("引用资料");
+    let another = dir.join("工作日志");
+    let mut state = State::default();
+    state.set_session(Session {
+        folder: root.clone(),
+        folders: vec![external.clone()],
+        ..Session::default()
+    });
+    state.register_notebook(&root);
+    assert_eq!(state.notebook_workspaces, [root.clone(), external.clone()]);
+    state.register_notebook(&another);
+    state.sessions.clear();
+    let restored = State::parse(&state.to_json());
+    assert!(restored.recent.is_empty());
+    assert_eq!(
+        restored.notebook_workspaces,
+        [another, root.clone(), external.clone()]
+    );
+
+    // Migrate the grouped format shipped in the earlier preview without dropping the mounts.
+    let string = |path: &Path| Json::String(path.to_string_lossy().into_owned());
+    let groups = Json::object([(
+        root.to_string_lossy().into_owned(),
+        Json::Array(vec![string(&root), string(&external)]),
+    )]);
+    let migrated = State::parse(&Json::object([("notebookWorkspaces", groups)]).write(0));
+    assert_eq!(migrated.notebook_workspaces, [root, external]);
+}
+
 fn sample() -> State {
     let mut state = State {
         recent: vec![PathBuf::from("/a/项目"), PathBuf::from("/b")],
@@ -40,6 +73,11 @@ fn sample() -> State {
             PathBuf::from("/a/项目/main.rs"),
             PathBuf::from("/c/笔记.md"),
         ],
+        recent_note_edits: vec![PathBuf::from("/b/摘录.md"), PathBuf::from("/c/笔记.md")],
+        note_favorites: vec![PathBuf::from("/c/笔记.md"), PathBuf::from("/b/摘录.md")],
+        home_tab_order: vec!["favorites".into(), "recent".into(), "documents".into()],
+        note_property_schema: BTreeMap::from([("/b".into(), Json::Object(BTreeMap::new()))]),
+        notebook_workspaces: Vec::new(),
         sessions: vec![
             Session {
                 folder: PathBuf::from("/a/项目"),
@@ -141,6 +179,7 @@ fn sample() -> State {
         preview_modes: [
             ("markdown".into(), "preview".into()),
             ("svg".into(), "split".into()),
+            ("json".into(), "preview".into()),
         ]
         .into(),
         version: Some("0.1.626".into()),
@@ -191,7 +230,7 @@ fn preview_modes_are_read_per_kind() {
             .collect::<Vec<_>>()
     };
     let pair = |kind: &str, mode: &str| (kind.to_owned(), mode.to_owned());
-    // 字符串用于全部种类。
+    // 旧式字符串只用于当时已有的种类。
     assert_eq!(
         modes(r#"{"previewMode": "split"}"#),
         [
