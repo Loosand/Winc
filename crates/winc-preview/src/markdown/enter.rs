@@ -457,16 +457,33 @@ pub fn shift<'a>(
     }
 }
 
-/// 返回 ⇧ 回车要插入的文字：段内换行。
-///
-/// 位于列表项或引用中时，下一行继续同一项或同一段引用，行首带引用的 `>` 和与内容对齐的缩进。
-pub fn line_break(before: &str) -> String {
+/// 返回 ⇧ 回车的硬换行。普通换行在 `CommonMark` 中会并回当前段落；行尾两个空格保留可见换行。
+/// 空行不加空格，列表与引用继续使用原来的续行前缀。
+pub fn hard_break(before: &str) -> Edit {
     let p = parse(before);
-    let indent = match &p.marker {
-        Some(m) => format!("{}{}", p.indent, " ".repeat(m.width())),
-        None => String::new(),
+    let spaces = if p.rest.trim().is_empty() {
+        0
+    } else {
+        2_usize.saturating_sub(before.bytes().rev().take_while(|&b| b == b' ').count())
     };
-    format!("\n{}{indent}", p.quote)
+    let mut text = " ".repeat(spaces);
+    text.push('\n');
+    text.push_str(p.quote);
+    let indent = if p.marker.is_none() {
+        p.rest.len() - p.rest.trim_start_matches([' ', '\t']).len()
+    } else {
+        0
+    };
+    text.push_str(&p.rest[..indent]);
+    text.push_str(&list_continuation(&p));
+    Edit::insert(text)
+}
+
+/// 缩进到列表项内容的起点；用于正文续行和围栏闭合。
+fn list_continuation(p: &Prefix<'_>) -> String {
+    p.marker.as_ref().map_or_else(String::new, |m| {
+        format!("{}{}", p.indent, " ".repeat(m.width()))
+    })
 }
 
 /// 返回在开围栏（```` ```rust ````、`~~~`、`$$`）末尾按回车时要插入到光标前后的文字。
@@ -509,7 +526,7 @@ pub fn fence<'a>(
         });
         (!closed).then(|| c.to_string().repeat(n))?
     };
-    let prefix = &line_break(before)[1..];
+    let prefix = format!("{}{}", p.quote, list_continuation(&p));
     Some((format!("\n{prefix}"), format!("\n{prefix}{fence}")))
 }
 

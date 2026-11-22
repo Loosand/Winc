@@ -291,11 +291,7 @@ impl App {
         let rest = line_text(to_line);
         let after = rest[(to - rope.line_to_byte(to_line)).min(rest.len())..].to_owned();
         let edit = if shift {
-            enter::Edit {
-                before: 0,
-                after: 0,
-                text: enter::line_break(&before),
-            }
+            enter::hard_break(&before)
         } else {
             let next = (to_line + 1 < rope.len_lines()).then(|| line_text(to_line + 1));
             let first = line_of(from);
@@ -310,7 +306,13 @@ impl App {
                 above.iter().map(String::as_str),
             )
         };
-        let (a, b) = (from - edit.before, (to + edit.after).min(rope.len_bytes()));
+        let a = from - edit.before;
+        let b = if edit.after > after.len() && to_line + 1 < rope.len_lines() {
+            // `enter` works on logical lines. Consume the whole physical line ending (LF or CRLF).
+            rope.line_to_byte(to_line + 1)
+        } else {
+            (to + edit.after).min(rope.len_bytes())
+        };
         // 有序列表中续出一项：其后同一层各项的序号顺延，与新增的一项在同一次修改中完成，
         // 撤销一步即可恢复。
         let item = edit.text.rsplit('\n').next().unwrap_or_default();

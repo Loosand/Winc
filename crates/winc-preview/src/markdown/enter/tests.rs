@@ -173,11 +173,15 @@ fn tab_nests_list_items() {
 
 #[test]
 fn line_breaks_stay_in_the_block() {
-    assert_eq!(line_break("一段"), "\n");
-    assert_eq!(line_break("- 一"), "\n  ");
-    assert_eq!(line_break("  1. 一"), "\n     ");
-    assert_eq!(line_break("> - [ ] 一"), "\n>       ");
-    assert_eq!(line_break("> 引用"), "\n> ");
+    assert_eq!(hard_break("一段").text, "  \n");
+    assert_eq!(hard_break("一段 ").text, " \n");
+    assert_eq!(hard_break("一段  ").text, "\n");
+    assert_eq!(hard_break("").text, "\n");
+    assert_eq!(hard_break("- 一").text, "  \n  ");
+    assert_eq!(hard_break("  1. 一").text, "  \n     ");
+    assert_eq!(hard_break("> - [ ] 一").text, "  \n>       ");
+    assert_eq!(hard_break("> 引用").text, "  \n> ");
+    assert_eq!(hard_break(">   续行").text, "  \n>   ");
 }
 
 #[test]
