@@ -13,6 +13,7 @@ mod convert;
 pub mod docx;
 pub mod epub;
 pub mod image;
+pub mod json;
 pub mod markdown;
 mod ooxml;
 pub mod pdf;
