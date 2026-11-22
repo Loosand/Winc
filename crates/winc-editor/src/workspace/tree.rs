@@ -137,6 +137,8 @@ pub struct Workspace {
     segment: Option<PathBuf>,
     /// 是否把连续的单子目录合并显示为一行。
     compact: bool,
+    /// Hide dot-prefixed entries in the notebook tree without changing the filesystem.
+    hide_dot_entries: bool,
     /// 已展开的目录（绝对路径）。
     expanded: HashSet<PathBuf>,
     /// 读过的目录内容，已排序。
@@ -277,6 +279,7 @@ impl Workspace {
             anchor: None,
             segment: None,
             compact: true,
+            hide_dot_entries: false,
             expanded: HashSet::from([root]),
             children: HashMap::new(),
             missing: Missing::default(),
@@ -284,6 +287,14 @@ impl Workspace {
         };
         workspace.rebuild();
         Ok(workspace)
+    }
+
+    /// Choose whether the file tree includes dot-prefixed files and directories.
+    pub fn set_hide_dot_entries(&mut self, hide: bool) {
+        if self.hide_dot_entries != hide {
+            self.hide_dot_entries = hide;
+            self.rebuild();
+        }
     }
 
     /// 返回文件树当前可见的行（按显示顺序）。
@@ -367,6 +378,9 @@ impl Workspace {
         }
 
         let mut walk = walker(&path);
+        if self.hide_dot_entries {
+            walk.hidden(true);
+        }
         walk.sort_by_file_name(|a, b| a.cmp(b));
         let (mut expanded, mut seen, mut limited) = (0, 0, false);
         for item in walk.build().filter_map(Result::ok) {
@@ -402,10 +416,10 @@ impl Workspace {
             if !self.children.contains_key(&path) {
                 self.missing.chains.insert(path.clone());
             }
-            let Some(only) = sole_folder(&children) else {
+            let Some(only) = sole_folder(&children, self.hide_dot_entries) else {
                 break;
             };
-            let next = only.path.clone();
+            let next = children[only].path.clone();
             self.expanded.insert(path);
             path = next;
         }
@@ -420,6 +434,13 @@ impl Workspace {
         let Ok(relative) = path.strip_prefix(&folder) else {
             return;
         };
+        if self.hide_dot_entries
+            && relative
+                .components()
+                .any(|part| part.as_os_str().as_encoded_bytes().starts_with(b"."))
+        {
+            return;
+        }
         // 文件夹自己的一行收起着时先展开。
         self.expanded.insert(folder.clone());
         let mut current = folder;
@@ -779,7 +800,7 @@ impl Workspace {
             &mut self.children,
             &mut self.missing,
             &self.expanded,
-            (self.compact, top.1),
+            (self.compact, top.1, self.hide_dot_entries),
             top.0,
             None,
             &mut rows,
@@ -830,24 +851,26 @@ fn cached_children(
 /// 返回可以和所在目录合并显示的子目录：目录的内容 `children` 只有一项，且是目录。
 ///
 /// 指向目录的符号链接不合并，避免链接成环时无限展开。
-fn sole_folder(children: &[DirEntry]) -> Option<&DirEntry> {
-    match children {
-        [only] if only.kind == EntryKind::Dir && !only.symlink => Some(only),
-        _ => None,
-    }
+fn sole_folder(children: &[DirEntry], hide_dot_entries: bool) -> Option<usize> {
+    let mut visible = children
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| !hide_dot_entries || !entry.name.starts_with('.'));
+    let (index, only) = visible.next()?;
+    (only.kind == EntryKind::Dir && !only.symlink && visible.next().is_none()).then_some(index)
 }
 
 /// 把同一目录中的各项 `children` 和其中已展开的部分按显示顺序追加到 `rows`；未缓存的目录先读取
 /// 并写入 `cache`。
 ///
 /// `compact` 的第一项为真时，已展开的目录中唯一的一项也是目录时与它合并为一行；第二项是这一层
-/// 是否合并（各个文件夹自己的行不与其内容合并）。收起的目录不读取内容，因此不会访问磁盘去
-/// 判断能否合并。
+/// 是否合并（各个文件夹自己的行不与其内容合并），第三项为真时跳过以点开头的项。
+/// 收起的目录不读取内容，因此不会访问磁盘去判断能否合并。
 fn flatten(
     cache: &mut HashMap<PathBuf, Rc<[DirEntry]>>,
     missing: &mut Missing,
     expanded: &HashSet<PathBuf>,
-    (compact, merge): (bool, bool),
+    (compact, merge, hide_dot_entries): (bool, bool, bool),
     children: Rc<[DirEntry]>,
     parent: Option<usize>,
     rows: &mut Vec<Entry>,
@@ -855,16 +878,19 @@ fn flatten(
     let depth = parent.map_or(0, |p| rows[p].depth + 1);
 
     for index in 0..children.len() {
+        if hide_dot_entries && children[index].name.starts_with('.') {
+            continue;
+        }
         let (mut siblings, mut at) = (Rc::clone(&children), index);
         let mut chain = vec![];
         while merge && siblings[at].kind == EntryKind::Dir && expanded.contains(&siblings[at].path)
         {
             let inner = cached_children(cache, missing, &siblings[at].path);
-            if sole_folder(&inner).is_none() {
+            let Some(only) = sole_folder(&inner, hide_dot_entries) else {
                 break;
-            }
+            };
             chain.push(siblings[at].path.clone());
-            (siblings, at) = (inner, 0);
+            (siblings, at) = (inner, only);
         }
         let tail = siblings[at].path.clone();
         let kind = siblings[at].kind;
@@ -886,7 +912,7 @@ fn flatten(
 
         if open {
             let inner = cached_children(cache, missing, &tail);
-            let compact = (compact, compact);
+            let compact = (compact, compact, hide_dot_entries);
             flatten(cache, missing, expanded, compact, inner, Some(row), rows);
             rows[row].end = rows.len();
         }

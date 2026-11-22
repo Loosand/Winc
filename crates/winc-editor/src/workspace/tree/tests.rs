@@ -474,6 +474,37 @@ fn single_child_folders_merge_into_one_row_when_expanded() {
 }
 
 #[test]
+fn hiding_dot_entries_preserves_visible_compact_folders() {
+    let root = crate::test_util::scratch("ws-hidden-compact");
+    fs::create_dir_all(root.join("pages/drafts")).unwrap();
+    fs::create_dir_all(root.join("pages/.assets")).unwrap();
+    let root = root.canonicalize().unwrap();
+    let note = root.join("pages/drafts/note.v2.md");
+    let hidden = root.join("pages/.assets/asset.md");
+    let settings = root.join(".settings");
+    for path in [&note, &hidden, &settings] {
+        fs::write(path, "keep").unwrap();
+    }
+    let mut ws = Workspace::open(&root).unwrap();
+    assert!(ws.row_of(&settings).is_some());
+    ws.set_hide_dot_entries(true);
+    ws.toggle(ws.row_of(&root.join("pages")).unwrap());
+    assert_eq!(
+        labels(&ws),
+        [("pages/drafts".into(), 0), ("note.v2.md".into(), 1)]
+    );
+    ws.reveal(&note);
+    ws.reveal(&hidden);
+    assert!(ws.row_of(&settings).is_none() && ws.row_of(&hidden).is_none());
+    assert_eq!(ws.selected_entry().unwrap().path, note);
+    assert_eq!(fs::read_to_string(&hidden).unwrap(), "keep");
+    ws.set_hide_dot_entries(false);
+    assert!(ws.row_of(&settings).is_some());
+    assert!(ws.row_of(&root.join("pages/.assets")).is_some());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn folders_with_files_or_several_children_do_not_merge() {
     let root = crate::test_util::scratch("ws-compact-stop");
     fs::create_dir_all(root.join("a/b/c")).unwrap();
