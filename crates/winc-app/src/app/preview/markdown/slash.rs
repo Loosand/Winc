@@ -284,6 +284,18 @@ impl App {
         let Some(doc) = self.editor.active_mut() else {
             return;
         };
+        let id = doc.id;
+        doc.begin_undo_group();
+        self.apply_slash(command, start);
+        if let Some(doc) = self.editor.document_mut(id) {
+            doc.end_undo_group();
+        }
+    }
+
+    fn apply_slash(&mut self, command: Slash, start: usize) {
+        let Some(doc) = self.editor.active_mut() else {
+            return;
+        };
         let caret = doc.selection.head;
         doc.selection = winc_core::Selection::new(start, caret);
         self.run(winc_editor::Command::Insert(String::new()));

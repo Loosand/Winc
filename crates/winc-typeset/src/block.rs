@@ -3,7 +3,7 @@
 use super::*;
 
 impl Cx<'_, '_> {
-    /// 排一个 `level` 级标题；一、二级标题下方加一道横线，并在 `out` 中记下标题的锚点。
+    /// 排一个 `level` 级标题；一级标题下方加一道横线，并在 `out` 中记下标题的锚点。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn heading(
         &mut self,
@@ -32,7 +32,7 @@ impl Cx<'_, '_> {
         };
         out.anchors.push((slug(&inline.text), y));
         let mut flow = self.flow(inline, x, y, width, para, &mut out.items);
-        if level <= 2 {
+        if level == 1 {
             let line_y = y + flow.height + size * 0.3;
             out.items.push(Item::Fill {
                 rect: Rect::new(x, line_y, width, 1.0),
@@ -511,7 +511,7 @@ impl Cx<'_, '_> {
             size: self.base,
             bold: false,
             color: env.color,
-            line: 1.5,
+            line: BODY_LINE,
             align: Align::None,
         }
     }

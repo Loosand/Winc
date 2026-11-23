@@ -40,6 +40,9 @@ pub(in crate::view) fn draw_selection_toolbar(app: &mut App, frame: &mut Frame<'
     let (left, n) = (laid.left, Tool::ALL.len() as f32);
     let w = n * BUTTON + (n + 1.0) * GAP + groups * (SEPARATOR + GAP);
     let h = BUTTON + GAP * 2.0;
+    if area.w < w + 16.0 {
+        return;
+    }
     let x = if (start.1 - end.1).abs() < 0.5 {
         left + (start.0 + end.0) / 2.0 - w / 2.0
     } else {
@@ -52,7 +55,7 @@ pub(in crate::view) fn draw_selection_toolbar(app: &mut App, frame: &mut Frame<'
     } else {
         top + end.1 + end.2 + OFFSET
     };
-    if y > area.bottom() || y + h < area.y {
+    if y < area.y || y + h > area.bottom() {
         return;
     }
     let card = Rect::new(x, y.round(), w, h);

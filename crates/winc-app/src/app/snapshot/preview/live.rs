@@ -1242,7 +1242,7 @@ fn format_commands_toggle_inline_marks_in_the_live_preview() {
     app.run(winc_editor::Command::Undo);
     put_caret(&mut app, "code", false);
     let before = doc_text(&app);
-    assert!(app.run_action(Action::MarkdownItalic));
+    assert!(!app.run_action(Action::MarkdownItalic));
     assert_eq!(doc_text(&app), before);
     // 源代码中同样可用（`markdown.shortcuts` 默认开着），关闭后同一个键执行其他命令。
     app.set_preview_mode(PreviewMode::Source);

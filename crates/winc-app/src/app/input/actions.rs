@@ -558,6 +558,17 @@ impl App {
                 }
             }
             action if action.markdown_only() && !self.markdown_keys() => return false,
+            Action::MarkdownBold
+            | Action::MarkdownItalic
+            | Action::MarkdownStrikethrough
+            | Action::MarkdownHighlight
+            | Action::MarkdownCode
+            | Action::MarkdownLink
+            | Action::MarkdownImage
+                if !self.inline_format_available() =>
+            {
+                return false;
+            }
             Action::EditRunConfigurations if self.editor.root().is_none() => return false,
             // 窗格的命令只在有东西可拆、可换时可用，否则同一个键执行其他命令或交给终端。
             Action::SplitRight | Action::SplitDown if self.editor.active.is_none() => {

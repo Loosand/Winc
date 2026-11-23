@@ -1151,7 +1151,7 @@ impl Cx<'_, '_> {
             }
             // 空的一项也占一行。
             top += flow.height.max(if item.blocks.is_empty() {
-                base * 1.5
+                (base * BODY_LINE).round()
             } else {
                 0.0
             });
@@ -1172,7 +1172,7 @@ impl Cx<'_, '_> {
         let row = Row {
             room: width.max(size),
             size,
-            line_h: (size * 1.5).round(),
+            line_h: (size * BODY_LINE).round(),
             ascent: m.ascent,
             descent: m.descent,
         };
@@ -1208,7 +1208,9 @@ pub struct Out {
     pub preview: Option<(u32, f32)>,
 }
 
-/// 列表相邻两项之间的间距与正文字号之比。
+/// Vertical rhythm shared by prose, editable blank lines and empty lists.
+const BODY_LINE: f32 = 1.5;
+const PARAGRAPH_GAP: f32 = 1.0;
 const LIST_GAP: f32 = 0.25;
 
 /// 分隔线的粗细（逻辑像素）：正文字号的四分之一。
@@ -1220,7 +1222,7 @@ fn rule_height(base: f32) -> f32 {
 /// Filling the middle of four line endings with text replaces two extra rows
 /// with a normal paragraph plus its margin, without moving later text.
 pub fn blank_row_height(base: f32) -> f32 {
-    ((base * 1.5).round() + base) / 2.0
+    ((base * BODY_LINE).round() + base * PARAGRAPH_GAP) / 2.0
 }
 
 /// 块上下的外边距（逻辑像素）。
@@ -1230,8 +1232,8 @@ pub fn margins(block: &Block, base: f32, tight: bool) -> (f32, f32) {
     match block {
         // 项里的文字之后接嵌套的列表时，间距与相邻两项之间相同（见 [`LIST_GAP`]）。
         Block::List(..) if tight => (base * LIST_GAP, 0.0),
-        Block::Paragraph(_) if tight => (0.0, 0.0),
-        Block::Heading(..) => (base * 1.5, base),
+        Block::Paragraph(_) => (0.0, if tight { 0.0 } else { base * PARAGRAPH_GAP }),
+        Block::Heading(..) => (base * 1.5, base * PARAGRAPH_GAP),
         Block::Rule(_) => (base * 1.5, base * 1.5),
         Block::Footnote(..) => (0.0, base * 0.5),
         _ => (0.0, base),

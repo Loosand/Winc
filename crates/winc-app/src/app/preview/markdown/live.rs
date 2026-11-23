@@ -961,7 +961,7 @@ impl App {
     /// 块中时不修改。
     pub(in crate::app) fn live_format(&mut self, mark: &str) {
         self.parse_markdown_inline();
-        if self.live_leaf().is_some_and(|l| !l.prose && !l.table) {
+        if !self.inline_format_available() {
             return;
         }
         let Some(doc) = self.editor.active() else {

@@ -63,6 +63,32 @@ fn the_text_width_has_three_levels() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+#[ignore = "manual light/dark writing layout comparison"]
+fn shoot_writing_page() {
+    let dir = sample_folder("md-writing-page");
+    let path = dir.join("Writing.md");
+    std::fs::write(&path, "# 写作样稿\n\n一段中英文混排的正文，mixed English and 中文。这里用两句话看折行、字间距与阅读宽度。\n\n第二段包含 **加粗**、*强调* 和 [相对链接](其他笔记.md)。\n\n## 小标题\n\n- [x] 第一项已经完成\n- 第二项继续写\n\n### 更细的说明\n\n> 一段引用，不改变原始 Markdown 的格式。\n\n| 项目 | 数量 |\n| --- | --- |\n| 茶 | 2 |\n").unwrap();
+    for (name, dark, width) in [("light-wide", false, 1100.0), ("dark-narrow", true, 580.0)] {
+        let mut app = app_with(&path, dark);
+        app.frame.renderer = Some(
+            Renderer::offscreen(width, 720.0, SCALE, app.palette.frame_bg, None, None).unwrap(),
+        );
+        paint(&mut app);
+        app.set_preview_mode(PreviewMode::Preview);
+        settle(&mut app);
+        let laid = app.preview.markdown.layout.as_ref().unwrap();
+        let area = app.preview.markdown.area;
+        assert!(
+            laid.key.width <= MAX_WIDTH
+                && laid.left >= area.x
+                && laid.left + laid.key.width <= area.right()
+        );
+        shoot(&mut app, &format!("writing-page-{name}"));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// 点标题列表右上角的图钉后，鼠标离开列表也一直展开，状态随窗口状态保存；再点一次取消。
 /// 左侧留白不足以容纳钉住的列表时，正文右移并变窄，让出一列；
 /// 预览宽度不足以让出时（分栏），列表显示为指示条。

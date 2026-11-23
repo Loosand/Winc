@@ -894,6 +894,24 @@ fn selecting_text_shows_the_format_toolbar() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn unsupported_selections_do_not_offer_inline_tool_buttons() {
+    use crate::keymap::Action;
+    let source =
+        "前文\n\n后文\n\n```text\n代码示例\n```\n\n| 列甲 | 列乙 |\n| --- | --- |\n| 茶 | 纸 |";
+    let (mut app, dir) = live_doc("md-toolbar-disabled", source);
+    for selection in ["前文\n\n后文", "代码", "茶 | 纸"] {
+        select(&mut app, selection);
+        app.offer_selection_toolbar();
+        paint(&mut app);
+        assert!(app.hits.selection_card.is_none(), "{selection}");
+        assert!(!app.action_available(Action::MarkdownBold), "{selection}");
+        assert!(!app.run_action(Action::MarkdownBold), "{selection}");
+        assert_eq!(doc_text(&app), source);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// 可编辑的预览中同样可以用 `/` 呼出写作命令。
 #[test]
 fn slash_commands_work_in_the_editable_preview() {
@@ -907,6 +925,10 @@ fn slash_commands_work_in_the_editable_preview() {
     assert!(!app.preview.markdown.suggest.hits.is_empty());
     paint(&mut app);
     assert!(app.suggest_key(&Key::Named(NamedKey::Enter)));
+    assert_eq!(doc_text(&app), "前文\n\n> ");
+    app.run(winc_editor::Command::Undo);
+    assert_eq!(doc_text(&app), "前文\n\n/yinyong");
+    app.run(winc_editor::Command::Redo);
     assert_eq!(doc_text(&app), "前文\n\n> ");
     let _ = std::fs::remove_dir_all(&dir);
 }
