@@ -3,7 +3,7 @@
 //! 拖动项目见 `tree_drag.rs`，工具栏按钮的收起动画见 `tool_fold.rs`；滚动时固定在顶部的各级目录
 //! 由 [`StickyRow`] 描述。
 
-use winc_editor::{EXPAND_DIRS, Workspace};
+use winc_editor::{EXPAND_DIRS, Workspace, natural_cmp};
 use winc_i18n::t;
 
 use super::*;
@@ -28,6 +28,45 @@ pub struct NameInput {
     pub rename: Option<(PathBuf, bool)>,
     /// 把文本或图片粘贴为新文件时要写入的内容；新建空文件、目录或改名时为 `None`。
     pub contents: Option<Vec<u8>>,
+}
+
+/// Suggest the first unused note name in the destination directory without reserving it.
+fn untitled_note_name(dir: &Path) -> String {
+    let mut name = "Untitled.md".to_owned();
+    let mut suffix = 1;
+    // A directory or dangling symbolic link also occupies the name.
+    while winc_backend::fs::symlink_metadata(dir.join(&name)).is_ok() {
+        name = format!("Untitled {suffix}.md");
+        suffix += 1;
+    }
+    name
+}
+
+fn filename_field(name: &str) -> TextField {
+    let mut field = TextField::default();
+    let stem = name.rfind('.').filter(|&dot| dot > 0).unwrap_or(name.len());
+    field.set_text(name);
+    field.set_caret(0, false);
+    field.set_caret(stem, true);
+    field
+}
+
+/// Return the slot for a file among the visible children of its destination.
+fn new_file_slot(rows: &[Entry], parent: Option<usize>, dir: &Path, name: &str) -> usize {
+    let (mut slot, end) = parent.map_or((0, rows.len()), |i| (i + 1, rows[i].end));
+    // When the target is an intermediate segment of a compacted row, its only child
+    // is the directory represented by the rest of that row and its subtree.
+    if parent.is_some_and(|i| rows[i].path != dir) {
+        return end;
+    }
+    while slot < end {
+        let entry = &rows[slot];
+        if entry.kind == EntryKind::File && !natural_cmp(&entry.name, name).is_lt() {
+            break;
+        }
+        slot = entry.end;
+    }
+    slot
 }
 
 /// 返回文件树的最大滚动位置（逻辑像素）。
@@ -475,10 +514,17 @@ impl App {
             // 露出的是输入名字的那一行时，取它所在的目录；是正在收回的子行时，取被收起的目录。
             let first = match self.tree_slot_at(top) {
                 TreeSlot::Entry(index) => index,
-                TreeSlot::Inserted => match self.panels.name_input.as_ref() {
-                    Some(input) if input.index > 0 => input.index - 1,
-                    _ => break,
-                },
+                TreeSlot::Inserted => {
+                    let Some(parent) = self
+                        .panels
+                        .name_input
+                        .as_ref()
+                        .and_then(|input| ws.row_of(&input.dir))
+                    else {
+                        break;
+                    };
+                    parent
+                }
                 TreeSlot::Removed => match &self.panels.tree.motion {
                     Some(m) => m.parent,
                     None => break,
@@ -645,7 +691,7 @@ impl App {
 
     /// 在文件树中插入一行用于输入名字，`folder` 为 `true` 时新建目录，否则新建文件。
     ///
-    /// 该行插在目标目录子树的第一行，缩进比目标目录深一级；目标目录尚未展开时先展开。
+    /// 有默认文件名时按名称定位输入行，否则放在目标目录子树的第一行。目标目录尚未展开时先展开。
     /// 没有打开目录时在状态栏提示。
     pub(in crate::app) fn start_new_entry(&mut self, folder: bool) {
         let kind = if folder {
@@ -661,24 +707,24 @@ impl App {
     /// 输入框中填好建议的名字 `name`，并选中扩展名之前的部分，直接键入即替换主名；
     /// 按 `↩` 用该名字新建。
     pub(in crate::app) fn start_pasted_entry(&mut self, name: String, contents: Vec<u8>) {
-        let mut field = TextField::default();
-        field.set_text(&name);
-        let stem = name.rfind('.').filter(|&dot| dot > 0).unwrap_or(name.len());
-        field.set_caret(0, false);
-        field.set_caret(stem, true);
-        self.open_new_entry(EntryKind::File, field, Some(contents));
+        self.open_new_entry(EntryKind::File, filename_field(&name), Some(contents));
     }
 
     /// 插入输入名字的那一行：新建 `kind`，输入框为 `field`，新文件的内容为 `contents`。
     fn open_new_entry(&mut self, kind: EntryKind, field: TextField, contents: Option<Vec<u8>>) {
         self.bars.goto_input = None;
+        let notebook = self.notebook_sidebar();
+        if notebook && !self.notebook_documents_open() {
+            self.panels.sidebar.documents_closed = false;
+            self.relayout();
+        }
         let Some(ws) = self.editor.workspace.as_mut() else {
             self.flash(winc_i18n::t!("workspace-open-folder-first"));
             return;
         };
 
         let dir = ws.target_dir();
-        let at = (dir != ws.root).then(|| ws.row_of(&dir)).flatten();
+        let at = ws.row_of(&dir);
         let (index, depth) = match at {
             Some(at) => (at + 1, ws.rows()[at].depth + 1),
             None if dir == ws.root => (0, 0),
@@ -686,11 +732,28 @@ impl App {
             None => return,
         };
 
-        // 目标目录还处于收起状态时先展开：走带动画的路径，使输入行随子行一起露出。
-        if let Some(at) = at.filter(|&at| !ws.rows()[at].expanded) {
-            self.set_dir_expanded(at, Some(true));
-        }
-
+        let collapsed = at.filter(|&at| !ws.rows()[at].expanded);
+        let (index, field) = if notebook
+            && kind == EntryKind::File
+            && contents.is_none()
+            && !winc_backend::is_remote(&dir)
+        {
+            // Reveal the sorted slot immediately so the focused field isn't clipped by the fold animation.
+            if let Some(at) = collapsed {
+                ws.toggle(at);
+            }
+            self.panels.tree.motion = None;
+            let name = untitled_note_name(&dir);
+            (
+                new_file_slot(ws.rows(), at, &dir, &name),
+                filename_field(&name),
+            )
+        } else {
+            if let Some(at) = collapsed {
+                self.set_dir_expanded(at, Some(true));
+            }
+            (index, field)
+        };
         self.panels.tree.scroll_x = 0.0;
         self.panels.name_input = Some(NameInput {
             dir,
@@ -769,7 +832,19 @@ impl App {
             self.request_redraw();
             return;
         };
-        let (dir, name, contents) = (entry.dir.clone(), input.clone(), entry.contents.clone());
+        let (dir, contents) = (entry.dir.clone(), entry.contents.clone());
+        let name = input.trim().trim_matches('/');
+        let basename = name.rsplit('/').next().unwrap_or_default();
+        let name = if self.notebook_sidebar()
+            && entry.kind == EntryKind::File
+            && contents.is_none()
+            && !matches!(basename, "" | "." | "..")
+            && Path::new(basename).extension().is_none()
+        {
+            format!("{name}.md")
+        } else {
+            input.clone()
+        };
         let kind = match contents {
             Some(_) => EntryKind::File,
             None => entry.kind,
@@ -779,17 +854,12 @@ impl App {
         };
         let at = entry.dir.clone();
         self.file_work(&at, create, move |app, created| {
-            app.entry_created(entry, &input, created);
+            app.entry_created(entry, created);
         });
     }
 
     /// 新建完成：成功时更新文件树并打开新建的文件，失败时恢复输入行并显示原因。
-    fn entry_created(
-        &mut self,
-        mut entry: NameInput,
-        input: &str,
-        created: std::io::Result<PathBuf>,
-    ) {
+    fn entry_created(&mut self, mut entry: NameInput, created: std::io::Result<PathBuf>) {
         match created {
             Ok(path) => {
                 if let Some(ws) = &mut self.editor.workspace {
@@ -806,15 +876,19 @@ impl App {
                 };
 
                 if entry.kind == EntryKind::File {
-                    self.open_path(&path);
+                    self.open_path_then(&path, |app| {
+                        if app.markdown_live() {
+                            app.start_live_editing();
+                        }
+                        app.select(0, 0);
+                    });
                 }
 
-                // 一次可能创建多级目录（例如 `a/b/c.rs`），文件表从新建的最上一级开始更新。
-                let top = input
-                    .trim()
-                    .trim_matches('/')
-                    .split('/')
-                    .next()
+                // 一次可能创建多级目录，文件表从新建的最上一级开始更新。
+                let top = path
+                    .strip_prefix(&entry.dir)
+                    .ok()
+                    .and_then(|relative| relative.components().next())
                     .map(|first| entry.dir.join(first));
                 self.picker_touched(top.into_iter().collect());
             }

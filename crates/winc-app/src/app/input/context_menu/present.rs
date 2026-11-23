@@ -138,12 +138,16 @@ impl App {
         let target = if let Some(doc) = document {
             MenuTarget::Tab(doc.id)
         } else if self.panels.sidebar.visible
+            && self.layout.sidebar.contains(x, y)
             && self
                 .notebook_folder_heading()
-                .is_some_and(|r| r.contains(x, y))
+                .is_some_and(|r| y >= r.y && !self.layout.tree.contains(x, y))
         {
-            self.open_notebook_workspaces((x, y));
-            return;
+            if let Some(ws) = &mut self.editor.workspace {
+                ws.select(None);
+            }
+            self.focus = Focus::Tree;
+            MenuTarget::Tree(None)
         } else if self.panels.sidebar.visible
             && self.panels.sidebar.view == SidebarView::Files
             && (self.layout.tree.contains(x, y) || self.in_tree_overflow(x, y))
@@ -454,21 +458,12 @@ impl App {
                 });
                 let can_paste = self.can_paste_into_tree();
                 let remote = path.as_deref().is_some_and(winc_backend::is_remote);
-                let mut menu = tree_menu(kind, can_paste, remote);
-                if self.notebook_sidebar() {
-                    menu.retain(|entry| {
-                        !matches!(
-                            entry,
-                            MenuEntry::Item(
-                                MenuCommand::AddFolder
-                                    | MenuCommand::OpenInTerminal
-                                    | MenuCommand::FindInFolder,
-                                _
-                            )
-                        )
-                    });
-                }
-                if kind.is_none() {
+                let mut menu = if self.notebook_sidebar() && !remote {
+                    notebook_tree_menu(kind, can_paste)
+                } else {
+                    tree_menu(kind, can_paste, remote)
+                };
+                if kind.is_none() && !self.notebook_sidebar() {
                     menu.extend(self.folder_items(folder));
                 }
                 // Git 模块开着、文件在仓库里：最后加「显示文件历史」，有更改的文件再加暂存与回滚。

@@ -178,6 +178,29 @@ pub fn tree_menu(kind: Option<EntryKind>, can_paste: bool, remote: bool) -> Vec<
     menu
 }
 
+/// The notebook sidebar shows only applicable clipboard commands and keeps item actions separate.
+pub(super) fn notebook_tree_menu(kind: Option<EntryKind>, can_paste: bool) -> Vec<MenuEntry> {
+    use MenuCommand::*;
+    use MenuEntry::{Item, Separator};
+
+    let mut menu = vec![Item(NewFile, true), Item(NewFolder, true), Separator];
+    if can_paste {
+        menu.extend([Item(Paste, true), Separator]);
+    }
+    menu.extend([Item(CopyPath, true), Item(Reveal, true)]);
+    if kind.is_some() {
+        menu.extend([
+            Separator,
+            Item(Cut, true),
+            Item(Copy, true),
+            Item(CopyRelativePath, true),
+            Item(Rename, true),
+            Item(Delete, true),
+        ]);
+    }
+    menu
+}
+
 /// 返回文件树里选中了多项、右键点在其中一项上时的菜单项：打开（`files`：选中的文件数，没有
 /// 文件时灰显）、比较所选文件（正好两个文件时才有）、剪切、复制、复制路径、复制相对路径和删除，
 /// 都作用于选中的各项。

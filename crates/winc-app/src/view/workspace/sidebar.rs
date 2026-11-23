@@ -429,7 +429,7 @@ fn draw_tree(app: &mut App, frame: &mut Frame<'_>) {
         draw_empty_state(app, frame, span, title, Some(hint));
     }
 
-    // 新建文件、目录时，在目标目录子树的第一行插入一行输入名称的输入行；重命名时输入框
+    // 新建文件、目录时在目标目录子树中插入一行输入名称的输入行；重命名时输入框
     // 绘制在原条目所在的行上，不另插一行。输入框先从 `app` 中取出，绘制后放回，
     // 这样循环中读取 `app` 时不需要复制整棵文件树。
     let mut name_input = app.panels.name_input.take();

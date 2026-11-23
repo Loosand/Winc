@@ -154,6 +154,164 @@ fn tree_context_menu_targets_the_clicked_row() {
 }
 
 #[test]
+fn notebook_sidebar_context_menu_creates_markdown_and_only_offers_available_paste() {
+    use crate::app::input::context_menu::MenuEntry::{Item, Separator};
+
+    let dir = sample_folder("notebook-sidebar-menu");
+    let root = winc_config::files::canonicalize(&dir).unwrap();
+    let mut app = blank_app(false);
+    app.panels.sidebar.legacy_chrome = false;
+    App::apply_preview_state(&mut app.editor, &app.state);
+    app.open_path(&root);
+    app.panels.sidebar.documents_closed = true;
+    paint(&mut app);
+
+    let items = |app: &App| {
+        app.overlays
+            .context_menu
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                Item(command, true) => Some(*command),
+                Separator => None,
+                _ => panic!("unexpected menu entry"),
+            })
+            .collect::<Vec<_>>()
+    };
+    let heading = app.notebook_folder_heading().unwrap();
+    right_click(&mut app, (heading.x + 12.0, heading.y + heading.h / 2.0));
+    assert_eq!(
+        items(&app),
+        [
+            Some(MenuCommand::NewFile),
+            Some(MenuCommand::NewFolder),
+            None,
+            Some(MenuCommand::CopyPath),
+            Some(MenuCommand::Reveal)
+        ]
+    );
+    app.run_menu_command(MenuCommand::NewFile);
+    assert!(app.notebook_documents_open());
+    let input = app.panels.name_input.as_mut().unwrap();
+    assert_eq!(input.dir, root);
+    assert_eq!(input.field.text(), "Untitled.md");
+    assert_eq!(input.field.selected_text(), "Untitled");
+    assert!(!root.join("Untitled.md").exists());
+    input.field.insert("新笔记");
+    assert_eq!(input.field.text(), "新笔记.md");
+    app.submit_name_input();
+    paint(&mut app);
+    let doc = app.editor.active().unwrap();
+    let note = root.join("新笔记.md");
+    assert_eq!(doc.path.as_deref(), Some(note.as_path()));
+    assert_eq!(doc.selection.head, 0);
+    assert!(doc.selection.is_empty());
+    assert_eq!(app.focus, Focus::Editor);
+    assert!(app.live_caret_shown());
+    assert_eq!(std::fs::read_to_string(note).unwrap(), "");
+
+    app.set_clipboard("clipboard text".into(), false);
+    let blank = (app.layout.tree.x + 20.0, app.layout.tree.bottom() - 10.0);
+    right_click(&mut app, blank);
+    assert_eq!(
+        items(&app),
+        [
+            Some(MenuCommand::NewFile),
+            Some(MenuCommand::NewFolder),
+            None,
+            Some(MenuCommand::Paste),
+            None,
+            Some(MenuCommand::CopyPath),
+            Some(MenuCommand::Reveal)
+        ]
+    );
+    app.run_menu_command(MenuCommand::NewFolder);
+    app.panels
+        .name_input
+        .as_mut()
+        .unwrap()
+        .field
+        .set_text("folder");
+    app.submit_name_input();
+    assert!(root.join("folder").is_dir());
+    assert!(!root.join("folder.md").exists());
+
+    paint(&mut app);
+    let folder = tree_row_center(&app, row_of(&app, "folder"));
+    right_click(&mut app, folder);
+    assert!(menu_commands(&app).contains(&(MenuCommand::Rename, true)));
+    app.run_menu_command(MenuCommand::NewFile);
+    let input = app.panels.name_input.as_mut().unwrap();
+    assert_eq!(input.dir, root.join("folder"));
+    input.field.set_text("explicit.txt");
+    app.submit_name_input();
+    assert!(root.join("folder/explicit.txt").is_file());
+    assert!(!root.join("folder/explicit.txt.md").exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn notebook_new_file_suggests_the_next_unused_name_without_creating_it() {
+    let dir = sample_folder("notebook-untitled-name");
+    std::fs::write(dir.join("Untitled.md"), "Keep this note.").unwrap();
+    std::fs::create_dir(dir.join("Untitled 1.md")).unwrap();
+    std::fs::write(dir.join("Untitled 3.md"), "").unwrap();
+    std::fs::write(dir.join("src/Zebra.md"), "").unwrap();
+    let mut app = blank_app(false);
+    app.panels.sidebar.legacy_chrome = false;
+    app.open_path(&dir);
+    app.open_path(&dir.join("Untitled.md"));
+    paint(&mut app);
+    let active = app.editor.active().unwrap().id;
+    let pending = dir.join("Untitled 2.md");
+    let next = row_of(&app, "Untitled 3.md");
+
+    for confirm in [false, true] {
+        let blank = (app.layout.tree.x + 20.0, app.layout.tree.bottom() - 10.0);
+        right_click(&mut app, blank);
+        app.run_menu_command(MenuCommand::NewFile);
+        let input = app.panels.name_input.as_ref().unwrap();
+        assert_eq!(
+            input.index, next,
+            "the input belongs immediately before Untitled 3.md"
+        );
+        let field = &input.field;
+        assert_eq!(field.text(), "Untitled 2.md");
+        assert_eq!(field.selected_text(), "Untitled 2");
+        assert!(!pending.exists());
+        assert_eq!(app.editor.active().unwrap().id, active);
+        if confirm {
+            app.submit_name_input();
+        } else {
+            app.close_name_input();
+            assert!(!pending.exists());
+        }
+    }
+
+    let current = app.editor.active().unwrap().path.as_deref().unwrap();
+    assert_eq!(current, winc_config::files::canonicalize(&pending).unwrap());
+    assert_eq!(row_of(&app, "Untitled 2.md"), next);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("Untitled.md")).unwrap(),
+        "Keep this note."
+    );
+
+    paint(&mut app);
+    let src = row_of(&app, "src");
+    let at = tree_row_center(&app, src);
+    right_click(&mut app, at);
+    app.run_menu_command(MenuCommand::NewFile);
+    let input = app.panels.name_input.as_ref().unwrap();
+    assert_eq!(input.field.text(), "Untitled.md");
+    let ws = app.editor.workspace.as_ref().unwrap();
+    assert!(ws.rows()[src].expanded);
+    assert_eq!(Some(input.index), ws.row_of(&input.dir.join("Zebra.md")));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn rename_in_the_tree_moves_open_documents() {
     let dir = search_folder("ctx-rename");
     let mut app = app_with(&dir, false);
