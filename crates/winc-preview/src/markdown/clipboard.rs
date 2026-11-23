@@ -86,12 +86,57 @@ pub fn formatted_run(line: &str, selection: Range<usize>) -> Option<(String, Str
     None
 }
 
+/// Render a selection that cuts through an inline format in its original context.
+/// Return `None` if the excerpt does not need its context or an endpoint cannot
+/// be mapped exactly (for example, a partial decoded entity).
+pub fn formatted_range(source: &str, selection: Range<usize>) -> Option<(String, String)> {
+    if source.get(selection.clone())?.is_empty() {
+        return None;
+    }
+    let mut boundary = false;
+    let mut exact = true;
+    let events = Parser::new_ext(source, super::options())
+        .into_offset_iter()
+        .filter_map(|(event, range)| {
+            let from = range.start.max(selection.start);
+            let to = range.end.min(selection.end);
+            if from >= to {
+                return None;
+            }
+            if from == range.start && to == range.end {
+                return Some(event);
+            }
+            match event {
+                Event::Start(
+                    Tag::Strong | Tag::Emphasis | Tag::Strikethrough | Tag::Link { .. },
+                ) => {
+                    boundary = true;
+                    Some(event)
+                }
+                Event::Text(text) if source.get(range) == Some(text.as_ref()) => {
+                    Some(Event::Text(source.get(from..to)?.into()))
+                }
+                Event::Text(_) | Event::Code(_) | Event::InlineMath(_) | Event::DisplayMath(_) => {
+                    exact = false;
+                    None
+                }
+                _ => Some(event),
+            }
+        });
+    let output = copy_events(events);
+    (boundary && exact && !output.0.is_empty()).then_some(output)
+}
+
 /// Clipboard fallback text plus HTML for targets that support formatting.
 /// Source HTML never becomes active clipboard HTML; only safe parser events are emitted.
 pub fn formatted(markdown: &str) -> (String, String) {
+    copy_events(Parser::new_ext(markdown, super::options()))
+}
+
+fn copy_events<'a>(events: impl Iterator<Item = Event<'a>>) -> (String, String) {
     let mut plain = String::new();
     let mut rich = String::new();
-    let events = Parser::new_ext(markdown, super::options()).filter_map(|mut event| {
+    let events = events.filter_map(|mut event| {
         match &mut event {
             Event::Html(_) | Event::InlineHtml(_) => return None,
             Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
@@ -172,6 +217,29 @@ mod tests {
         let (plain, rich) = formatted_run(line, start..start + '点'.len_utf8()).unwrap();
         assert_eq!(plain, "点");
         assert_eq!(rich, "<strong>点</strong>");
+    }
+
+    #[test]
+    fn clipping_a_multiline_span_uses_its_opening_and_closing_context() {
+        let text = "**prefix\n保留**\n\n**终点**";
+        let start = text.find("保留").unwrap();
+        let end = text.find('点').unwrap();
+        let (plain, html) = formatted_range(text, start..end).unwrap();
+        assert_eq!(plain, "保留\n终");
+        assert_eq!(
+            html,
+            "<p><strong>保留</strong></p>\n<p><strong>终</strong></p>\n"
+        );
+    }
+
+    #[test]
+    fn a_clipped_link_is_filtered_like_any_other_clipboard_html() {
+        let text = "链接 [甲乙](javascript:alert%281%29)\n\n后文";
+        let start = text.find('乙').unwrap();
+        let end = text.find('文').unwrap();
+        let (plain, html) = formatted_range(text, start..end).unwrap();
+        assert_eq!(plain, "乙\n后");
+        assert!(!html.contains("javascript:") && !html.contains(['甲', '文']));
     }
 
     #[test]

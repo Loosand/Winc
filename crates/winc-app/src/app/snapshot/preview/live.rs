@@ -365,6 +365,80 @@ fn leaving_a_task_list_and_joining_paragraphs_preserves_the_crlf_note() {
 }
 
 #[test]
+fn shift_arrows_cross_a_blank_row_and_ime_replaces_only_the_selection() {
+    use winc_core::Selection;
+    use winc_editor::Command;
+    use winit::{
+        event::Ime,
+        keyboard::{Key, ModifiersState, NamedKey},
+    };
+    let source = "# 标题\n\n前段👩‍💻\n\n后段e\u{301}\n";
+    let at = |text| source[..source.find(text).unwrap()].chars().count();
+    let (a, b) = (at("前段"), at("后段"));
+    for reverse in [false, true] {
+        let (mut app, dir) = live_doc(&format!("md-extend-ime-{reverse}"), source);
+        let (from, expected, key) = if reverse {
+            ("后段", Selection::new(b, a), NamedKey::ArrowUp)
+        } else {
+            ("前段", Selection::new(a, b), NamedKey::ArrowDown)
+        };
+        put_caret(&mut app, from, false);
+        app.pointer.modifiers = ModifiersState::SHIFT;
+        for _ in 0..2 {
+            assert!(app.markdown_key(&Key::Named(key), false));
+            paint(&mut app);
+        }
+        app.pointer.modifiers = ModifiersState::empty();
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        app.on_ime(Ime::Preedit("ni".into(), Some((2, 2))));
+        paint(&mut app);
+        assert_eq!(doc_text(&app), source);
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        app.on_ime(Ime::Commit("你".into()));
+        assert_eq!(doc_text(&app), "# 标题\n\n你后段e\u{301}\n");
+        app.run(Command::Undo);
+        assert_eq!(doc_text(&app), source);
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        // Replay multiple commits without allowing a frame or background parse between them.
+        for text in ["你好", "👩‍💻", "e\u{301}"] {
+            app.on_ime(Ime::Commit(text.into()));
+        }
+        settle(&mut app);
+        assert_eq!(doc_text(&app), "# 标题\n\n你好👩‍💻e\u{301}后段e\u{301}\n");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn shift_down_selects_a_wrapped_row_for_paste_and_undo() {
+    use winc_core::Selection;
+    use winc_editor::Command;
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
+    let first = "甲乙丙丁".repeat(40);
+    let source = format!("{first}\n\n下一段");
+    let (mut app, dir) = live_doc("md-select-wrapped-paste", &source);
+    let y = caret_screen_y(&app);
+    app.pointer.modifiers = ModifiersState::SHIFT;
+    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
+    app.pointer.modifiers = ModifiersState::empty();
+    settle(&mut app);
+    let selected = app.editor.active().unwrap().selection;
+    assert_eq!(selected.anchor, 0);
+    assert!((1..first.chars().count()).contains(&selected.head));
+    assert!(caret_screen_y(&app) > y);
+    let rest = source.char_indices().nth(selected.head).unwrap().0;
+    app.clipboard.copied = Some("替换".into());
+    app.paste();
+    assert_eq!(doc_text(&app), format!("替换{}", &source[rest..]));
+    let doc = app.editor.active().unwrap();
+    assert_eq!(doc.selection, Selection::point(2));
+    app.run(Command::Undo);
+    assert_eq!(doc_text(&app), source);
+    assert_eq!(app.editor.active().unwrap().selection, selected);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn repeated_enter_moves_the_visible_caret_down_one_row_at_a_time() {
     use winit::keyboard::{Key, NamedKey};
     for (name, source) in [

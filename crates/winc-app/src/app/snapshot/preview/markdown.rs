@@ -241,6 +241,44 @@ fn copy_in_a_note_offers_text_and_html_or_explicit_markdown() {
 }
 
 #[test]
+fn copying_across_blocks_keeps_only_the_visible_selection() {
+    use crate::keymap::Action;
+    use winc_core::Selection;
+    let source = "前 **甲乙**\n\n## 丙丁\n\n后文";
+    let char_at = |word| source[..source.find(word).unwrap()].chars().count();
+    let (a, b) = (char_at('乙'), char_at('丁'));
+    for reverse in [false, true] {
+        let (mut app, dir) = live_doc(&format!("md-copy-across-{reverse}"), source);
+        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let point = |ch| point_of(&app, shown[..shown.find(ch).unwrap()].chars().count());
+        let (from, to) = (point('乙'), point('丁'));
+        let ((x, y), (x2, y2), expected) = if reverse {
+            (to, from, Selection::new(b, a))
+        } else {
+            (from, to, Selection::new(a, b))
+        };
+        app.on_mouse_move(x, y);
+        app.on_mouse_down(MouseButton::Left);
+        paint(&mut app);
+        app.on_mouse_move(x2, y2);
+        app.on_mouse_up(MouseButton::Left);
+        settle(&mut app);
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        assert!(app.run_action(Action::Copy));
+        assert_eq!(app.clipboard.copied.as_deref(), Some("乙\n丙"));
+        let html = app.clipboard.copied_html.as_deref().unwrap();
+        assert!(
+            html.contains("<strong>乙</strong>") && html.contains("<h2>丙</h2>"),
+            "{html}"
+        );
+        assert!(!html.contains(['甲', '丁']));
+        assert_eq!(doc_text(&app), source);
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
 fn pasting_a_web_table_preserves_cells_even_when_text_is_absent_or_tabular() {
     use winc_editor::Command;
     for (name, plain) in [

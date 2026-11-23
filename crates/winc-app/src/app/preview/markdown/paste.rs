@@ -123,23 +123,30 @@ impl App {
             return false;
         }
         use winc_preview::markdown::clipboard;
+        const HTML_BUDGET: usize = 512 * 1024;
         let mut start = sel.from();
         let mut end = sel.to();
         let line = rope.char_to_line(start);
-        let literal = self.preview.markdown.checked == Some(doc.revision)
-            && self.preview.markdown.parsed.as_ref().is_some_and(|parsed| {
-                let from = rope.char_to_byte(start);
-                let to = rope.char_to_byte(end);
-                let i = parsed
-                    .leaves
-                    .partition_point(|leaf| leaf.range.start <= from);
-                i.checked_sub(1).is_some_and(|i| {
-                    let leaf = &parsed.leaves[i];
-                    !leaf.prose && !leaf.table && from < leaf.range.end && to <= leaf.range.end
-                })
-            });
+        let end_line = rope.char_to_line(end);
+        let parsed = self
+            .preview
+            .markdown
+            .parsed
+            .as_ref()
+            .filter(|_| self.preview.markdown.checked == Some(doc.revision));
+        let literal = parsed.is_some_and(|parsed| {
+            let from = rope.char_to_byte(start);
+            let to = rope.char_to_byte(end);
+            let i = parsed
+                .leaves
+                .partition_point(|leaf| leaf.range.start <= from);
+            i.checked_sub(1).is_some_and(|i| {
+                let leaf = &parsed.leaves[i];
+                !leaf.prose && !leaf.table && from < leaf.range.end && to <= leaf.range.end
+            })
+        });
         let mut copied_run = None;
-        if !literal && rope.char_to_line(end) == line && rope.line(line).len_bytes() <= 32 * 1024 {
+        if !literal && end_line == line && rope.line(line).len_bytes() <= 32 * 1024 {
             let offset = rope.line_to_byte(line);
             let source = rope.line(line).to_string();
             let range = rope.char_to_byte(start) - offset..rope.char_to_byte(end) - offset;
@@ -149,6 +156,24 @@ impl App {
             }
             start = rope.byte_to_char(offset + expanded.start);
             end = rope.byte_to_char(offset + expanded.end);
+        } else if !literal && !markdown && end_line != line {
+            let (a, b) = (rope.char_to_byte(start), rope.char_to_byte(end));
+            // Include the endpoint paragraphs so a delimiter outside the
+            // selection can still balance a style that crosses a source line.
+            let leaf_at = |at| {
+                let leaves = &parsed?.leaves;
+                let index = leaves.partition_point(|leaf| leaf.range.start <= at);
+                let leaf = leaves.get(index.checked_sub(1)?)?;
+                (leaf.prose && at <= leaf.range.end).then_some(&leaf.range)
+            };
+            let first = leaf_at(a).map_or(line, |r| rope.byte_to_line(r.start));
+            let last = leaf_at(b).map_or(end_line, |r| rope.byte_to_line(r.end));
+            let from = rope.line_to_byte(first);
+            let to = rope.line_to_byte(last + 1);
+            if to - from <= HTML_BUDGET {
+                let context = std::borrow::Cow::<str>::from(rope.byte_slice(from..to));
+                copied_run = clipboard::formatted_range(&context, a - from..b - from);
+            }
         }
         let Some(source) = doc.text_range(start, end) else {
             self.flash(winc_i18n::t!(
@@ -158,7 +183,7 @@ impl App {
             return true;
         };
         // Bound synchronous HTML conversion; large selections still copy the original source.
-        let written = if markdown || literal || source.len() > 512 * 1024 {
+        let written = if markdown || literal || source.len() > HTML_BUDGET {
             self.clipboard.set_text(source, false)
         } else {
             let (plain, html) = copied_run.unwrap_or_else(|| clipboard::formatted(&source));
