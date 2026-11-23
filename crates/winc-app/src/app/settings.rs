@@ -707,7 +707,8 @@ impl App {
             | SettingControl::Search
             | SettingControl::Product
             | SettingControl::Link
-            | SettingControl::Button => {}
+            | SettingControl::Button
+            | SettingControl::Beta => {}
         }
     }
 
@@ -765,6 +766,7 @@ impl App {
                 self.settings_step(true)
             }
             SettingControl::Search => self.focus = Focus::KeySearch,
+            SettingControl::Beta => {}
         }
     }
 

@@ -435,6 +435,50 @@ fn settings_mouse_controls_use_the_same_geometry_as_drawing() {
 }
 
 #[test]
+fn writing_and_markdown_settings_distinguish_beta_from_live_controls() {
+    use crate::layout::BetaSetting;
+    let mut app = blank_app(false);
+    app.open_settings();
+    for (page, beta, live) in [
+        (
+            SettingsPage::Writing,
+            BetaSetting::Spellcheck,
+            Setting::MarkdownShortcuts,
+        ),
+        (
+            SettingsPage::Markdown,
+            BetaSetting::Strict,
+            Setting::RemoteImages,
+        ),
+    ] {
+        click_part(&mut app, SettingsPart::Page(page));
+        let settings = app.settings_layout();
+        assert_eq!(settings.page, page);
+        let beta = Setting::Beta(beta);
+        let beta_row = settings.row(beta).unwrap();
+        let (x, y) = (beta_row.control.x + 12.0, beta_row.control.y + 8.0);
+        assert!(settings.body.contains(x, y));
+        assert_eq!(settings.part_at(x, y), None);
+        assert_eq!(beta.control(), SettingControl::Beta);
+        let revision = app.store.config_rev;
+        click(&mut app, (x, y));
+        app.settings.selected = beta;
+        app.settings_activate();
+        app.settings_step(true);
+        assert_eq!(app.store.config_rev, revision);
+        assert_eq!(live.control(), SettingControl::Switch);
+        let row = app.settings_layout().row(live).unwrap().row;
+        let body = app.settings_layout().body;
+        if row.bottom() > body.bottom() {
+            app.settings_scroll_by(body.y - row.y);
+        }
+        let before = app.switch_on(live);
+        click_part(&mut app, SettingsPart::Switch(live));
+        assert_ne!(app.switch_on(live), before);
+    }
+}
+
+#[test]
 fn settings_pages_are_listed_on_the_left() {
     let dir = search_folder("settings-pages");
     let mut app = app_with(&dir, false);

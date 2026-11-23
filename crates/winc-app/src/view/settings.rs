@@ -229,6 +229,20 @@ fn draw_nav_row(
     match page {
         SettingsPage::Appearance => icons::appearance(frame, icon, p.text_muted, layout.nav),
         SettingsPage::Editor => icons::code(frame, icon, p.text_muted, layout.nav),
+        SettingsPage::Writing => icons::writing(
+            frame,
+            icon,
+            icons::WritingGlyph::Italic,
+            p.text_muted,
+            layout.nav,
+        ),
+        SettingsPage::Markdown => icons::writing(
+            frame,
+            icon,
+            icons::WritingGlyph::Heading(1),
+            p.text_muted,
+            layout.nav,
+        ),
         SettingsPage::Format => icons::format(frame, icon, p.text_muted, layout.nav),
         SettingsPage::Git => icons::git(frame, icon, 1.0, p.text_muted, layout.nav),
         SettingsPage::Terminal => icons::console(frame, icon, p.text_muted, layout.nav),
@@ -543,6 +557,22 @@ fn draw_row(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
             None
         }
         SettingControl::Action | SettingControl::Search => None,
+        SettingControl::Beta => {
+            let text = t!("settings-status-beta");
+            let width = frame.measure(FontKind::Ui, app.fonts.ui_small, text);
+            let badge = crate::layout::value_area(row.control, width).inset(0.0, 3.0);
+            frame.rect_clipped(badge, p.hover, RADIUS_ROW, clip);
+            ui_text_small(
+                frame,
+                app,
+                badge.x + (badge.w - width) / 2.0,
+                badge,
+                text,
+                p.text_muted,
+                clip,
+            );
+            None
+        }
         SettingControl::Link => {
             draw_link(app, frame, row, clip);
             None

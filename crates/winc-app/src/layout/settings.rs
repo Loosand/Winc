@@ -9,10 +9,12 @@ use winc_i18n::t;
 mod about;
 mod controls;
 mod keys;
+mod writing;
 
 pub use about::*;
 pub use controls::*;
 pub use keys::*;
+pub use writing::BetaSetting;
 
 /// 设置的一个分类，对应左侧分类栏中的一项和右侧的一页。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -22,6 +24,10 @@ pub enum SettingsPage {
     Appearance,
     /// 编辑器：编辑区字体和字号、Tab 宽度、保存与滚动相关的选项。
     Editor,
+    /// 输入和写作模式。
+    Writing,
+    /// Markdown 语法、公式、代码块和显示。
+    Markdown,
     /// 格式化：保存时的格式化和修复，以及各语言的工具命令。
     Format,
     /// Git：Git 模块的选项；模块关闭时不列出。
@@ -45,9 +51,11 @@ pub struct Modules {
 
 impl SettingsPage {
     /// 全部分类，顺序与分类栏从上到下的顺序一致。
-    pub const ALL: [SettingsPage; 8] = [
+    pub const ALL: [SettingsPage; 10] = [
         SettingsPage::Appearance,
         SettingsPage::Editor,
+        SettingsPage::Writing,
+        SettingsPage::Markdown,
         SettingsPage::Format,
         SettingsPage::Git,
         SettingsPage::Terminal,
@@ -70,6 +78,8 @@ impl SettingsPage {
         match self {
             SettingsPage::Appearance => t!("settings-page-appearance"),
             SettingsPage::Editor => t!("settings-page-editor"),
+            SettingsPage::Writing => t!("settings-page-writing"),
+            SettingsPage::Markdown => t!("settings-page-markdown"),
             SettingsPage::Format => t!("settings-page-format"),
             SettingsPage::Git => t!("settings-page-git"),
             SettingsPage::Terminal => t!("settings-page-terminal"),
@@ -139,21 +149,14 @@ impl SettingsPage {
                 ]),
                 plain(vec![Setting::Outline, Setting::CompactFolders]),
                 plain(vec![
-                    Setting::RemoteImages,
-                    Setting::TextWidth,
-                    Setting::MarkdownLineNumbers,
-                    Setting::MarkdownShortcuts,
-                    Setting::MarkdownFocus,
-                    Setting::MarkdownTypewriter,
-                    Setting::MarkdownSelectionToolbar,
-                ]),
-                plain(vec![
                     Setting::VimMode,
                     Setting::VimClipboard,
                     Setting::VimRelativeNumber,
                     Setting::VimYankHighlight,
                 ]),
             ],
+            SettingsPage::Writing => writing::writing_sections(),
+            SettingsPage::Markdown => writing::markdown_sections(),
             SettingsPage::Terminal => {
                 let mut behavior =
                     vec![Setting::TerminalCopyOnSelect, Setting::TerminalConfirmClose];
@@ -349,6 +352,8 @@ pub enum Setting {
     MarkdownTypewriter,
     /// 选中文字后显示格式工具栏（`markdown.selectionToolbar`）。
     MarkdownSelectionToolbar,
+    /// 尚未接入的设置，仅展示名称、说明和 Beta 标记。
+    Beta(BetaSetting),
     /// 定时检查更新。
     CheckUpdates,
     /// 联网的命令跟随系统的代理设置（`network.systemProxy`）。
@@ -515,14 +520,15 @@ impl Setting {
             | Setting::Minimap
             | Setting::Outline
             | Setting::LineNumbers
-            | Setting::RenderWhitespace
-            | Setting::RemoteImages
-            | Setting::TextWidth
-            | Setting::MarkdownLineNumbers
-            | Setting::MarkdownShortcuts
+            | Setting::RenderWhitespace => SettingsPage::Editor,
+            Setting::MarkdownShortcuts
             | Setting::MarkdownFocus
             | Setting::MarkdownTypewriter
-            | Setting::MarkdownSelectionToolbar => SettingsPage::Editor,
+            | Setting::MarkdownSelectionToolbar => SettingsPage::Writing,
+            Setting::RemoteImages | Setting::TextWidth | Setting::MarkdownLineNumbers => {
+                SettingsPage::Markdown
+            }
+            Setting::Beta(option) => option.page(),
             Setting::Version
             | Setting::Updates
             | Setting::CheckUpdates
@@ -614,6 +620,7 @@ impl Setting {
             Setting::MarkdownFocus => t!("settings-markdown-focus"),
             Setting::MarkdownTypewriter => t!("settings-markdown-typewriter"),
             Setting::MarkdownSelectionToolbar => t!("settings-markdown-selection-toolbar"),
+            Setting::Beta(option) => option.label(),
             Setting::CheckUpdates => t!("settings-check-updates"),
             Setting::Version => t!("settings-version"),
             Setting::Website => t!("settings-website"),
@@ -705,6 +712,7 @@ impl Setting {
             Setting::MarkdownSelectionToolbar => {
                 Some(t!("settings-markdown-selection-toolbar-desc"))
             }
+            Setting::Beta(option) => option.description(),
             Setting::CheckUpdates => Some(t!("settings-check-updates-desc")),
             // 绘制时换成当前的更新状态（`UpdateState`）。
             Setting::Updates => Some(t!("settings-updates-off")),
@@ -821,6 +829,7 @@ impl Setting {
             | Setting::Community
             | Setting::License => SettingControl::Link,
             Setting::Updates => SettingControl::Button,
+            Setting::Beta(_) => SettingControl::Beta,
         }
     }
 }
@@ -854,6 +863,8 @@ pub enum SettingControl {
     Link,
     /// 右侧的按钮（「检查更新」）。
     Button,
+    /// 尚未实现的选项：只有状态标记，不是可点击控件。
+    Beta,
 }
 
 /// 返回「语言」中选项 `choice` 的名称。
@@ -1403,7 +1414,7 @@ impl SettingsLayout {
             SettingControl::Product => (ProductParts::new(row.row).version.contains(x, y))
                 .then_some(SettingsPart::Copy(row.setting)),
             SettingControl::Link => Some(SettingsPart::Link(row.setting)),
-            SettingControl::Search => None,
+            SettingControl::Search | SettingControl::Beta => None,
         }
     }
 }

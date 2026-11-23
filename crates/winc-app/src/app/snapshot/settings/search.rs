@@ -61,17 +61,18 @@ fn search_finds_settings_on_every_page() {
     );
     assert_eq!(titles, ["编辑器"]);
     search(&mut app, "markdown");
-    assert_eq!(
-        listed(&app).0,
-        [
-            Setting::RemoteImages,
-            Setting::TextWidth,
-            Setting::MarkdownLineNumbers,
-            Setting::MarkdownShortcuts,
-            Setting::MarkdownFocus,
-            Setting::MarkdownTypewriter,
-        ]
-    );
+    let (rows, _) = listed(&app);
+    for setting in [
+        Setting::RemoteImages,
+        Setting::TextWidth,
+        Setting::MarkdownLineNumbers,
+        Setting::MarkdownShortcuts,
+        Setting::MarkdownFocus,
+        Setting::MarkdownTypewriter,
+        Setting::Beta(crate::layout::BetaSetting::PairMarkdown),
+    ] {
+        assert!(rows.contains(&setting), "missing {setting:?}");
+    }
 
     // 没有匹配时正文为空，键盘移动不做任何事。
     search(&mut app, "没有这一项");

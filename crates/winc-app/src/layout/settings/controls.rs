@@ -37,6 +37,7 @@ pub(super) fn control_rect(setting: Setting, row: Rect, editing: bool) -> Rect {
         // 产品信息铺满整行。
         SettingControl::Product => return row,
         SettingControl::Button => (SETTINGS_BUTTON_W, SETTINGS_CONTROL_H),
+        SettingControl::Beta => (52.0, SETTINGS_CONTROL_H),
         SettingControl::Switch => (SETTINGS_SWITCH_W, SETTINGS_SWITCH_H),
         SettingControl::Stepper => (SETTINGS_STEP_W * 2.0 + SETTINGS_VALUE_W, SETTINGS_CONTROL_H),
         // 没有名称（组标题就是名称），缩略图排满整行。
