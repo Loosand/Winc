@@ -294,7 +294,10 @@ impl App {
         }
     }
 
-    /// 处理焦点在编辑区时的按键：移动光标、翻页、换行、缩进、删除和键入。
+    /// 编辑器核心 · 输入入口：方向键、换行、缩进、删除和键入。
+    ///
+    /// Markdown 先经 `markdown_key` 处理结构键和屏幕行移动；没被接管的按键才走通用
+    /// `Command`。排查同一个键在正文、列表和表格中的差异，从这个分流点往下看。
     pub(in crate::app) fn on_key_editor(&mut self, event: &KeyEvent, cmd: bool) {
         if self.card_grid_key(&event.logical_key, cmd) {
             return;
@@ -1102,7 +1105,7 @@ impl App {
     /// 处理输入法事件 `ime`。
     ///
     /// 组字中的文本（`Preedit`）暂存起来用于显示；提交的文本（`Commit`）插入焦点所在的
-    /// 编辑区或输入框。
+    /// 编辑区或输入框。文档里只有 `Commit` 进入编辑命令和撤销历史；组字不是文件内容。
     pub(in crate::app) fn on_ime(&mut self, ime: Ime) {
         match ime {
             // 组字文字只属于焦点所在的一处，另一处的清空。

@@ -11,7 +11,8 @@ use pulldown_cmark::{Event, Parser, Tag};
 
 use super::{Block, Inline, Run, SourceMap, Style, options, parse};
 
-/// 返回光标所在的段落或标题按原文 `text` 生成的块。
+/// 编辑器核心 · 行内标记显隐：从当前段落或标题的原文 `text` 生成可编辑的排版块。
+/// 显露标记改变的是显示文本和位置映射，不是文件内容或撤销历史。
 ///
 /// `text` 是叶子块的原文，续行带有引用的 `>` 和列表的缩进；`caret` 是光标相对 `text` 的
 /// 字节偏移，为 `None` 时不显示标记；`insert` 是输入法组字，排在光标处并加下划线，没有原文位置。

@@ -648,9 +648,10 @@ impl App {
         });
     }
 
-    /// 对当前文档执行编辑命令 `command`，并更新布局、滚动位置和光标闪烁状态。
+    /// 编辑器核心 · 界面到文档：执行 `command`，再更新布局、滚动和光标闪烁。
     ///
-    /// 文档不可编辑时在状态栏提示原因，不执行命令。
+    /// 普通文本与排版视图都经这里改同一份原文。界面层保护 YAML、处理 Vim 和跨格式选区，
+    /// 实际写入及撤销由 `Document::execute` / `Document::apply` 负责。只读时提示原因。
     pub(in crate::app) fn run(&mut self, command: Command) {
         self.execute_text_command(command, false);
     }

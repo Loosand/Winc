@@ -1241,9 +1241,10 @@ impl Document {
         Some(changed && self.is_dirty())
     }
 
-    /// 应用一个事务并记入撤销栈。
+    /// 编辑器核心 · 原文事务：把改动写入文本、更新选区，并记入撤销栈。只读文档忽略。
     ///
-    /// 只读文档忽略。
+    /// 两种版本号不要混用：`history.version()` 表示当前撤销位置，用来判断是否回到已保存内容；
+    /// `revision` 在实际内容变动后递增，用来判断解析和排版缓存是否仍对应当前文档。
     pub fn apply(&mut self, transaction: Transaction) {
         if self.readonly || self.locked || self.all_locked {
             return;

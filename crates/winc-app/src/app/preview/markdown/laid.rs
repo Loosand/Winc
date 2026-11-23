@@ -428,10 +428,10 @@ pub(crate) fn hidden_blocks(
     hidden
 }
 
-/// 按 `key` 排整份文档，`reuse` 里有同样内容的块直接沿用。
+/// 编辑器核心 · 排版入口：把解析块变成带屏幕坐标的绘制项，由 `winc-typeset` 排字、折行。
+/// `reuse` 里有同样内容的块直接沿用；长文只在需要的范围保留绘制项。
 ///
-/// 可编辑的预览中光标所在的叶子块（`live`）显示原文，这一块不沿用，排出的结果也不留给其他
-/// 时候用。
+/// 光标所在的叶子块（`live`）结合当前原文即时排版，不能当作普通块在不同光标位置复用。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lay_out(
     app: &mut App,

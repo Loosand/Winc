@@ -598,7 +598,8 @@ impl App {
     ///
     /// 不再显示预览时释放预览占用的内存，见 [`MarkdownPreview::reset`]。
     ///
-    /// 每次绘制前调用。
+    /// 编辑器核心 · 解析调度：每次绘制前检查版本。后台解析读取原文快照，不写回文档；
+    /// 输入赶在结果之前时，光标所在块仍可参考当前原文即时排版。
     pub(crate) fn advance_markdown(&mut self) {
         let shown = shown_area(self).is_some();
         let Some(doc) = self.editor.active().filter(|_| shown) else {

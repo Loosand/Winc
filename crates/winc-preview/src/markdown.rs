@@ -574,7 +574,8 @@ pub(crate) fn options() -> Options {
         | Options::ENABLE_WIKILINKS
 }
 
-/// 解析 `text`。
+/// 编辑器核心 · Markdown 解析入口：从原文构建块、行内样式和源码位置映射。
+/// 映射供点击、选区和结构编辑回到原文使用；解析结果不作为保存时的文本来源。
 pub fn parse(text: &str) -> Markdown {
     let mut builder = Builder {
         source: text,
