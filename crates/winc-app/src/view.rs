@@ -33,7 +33,6 @@ mod editor;
 mod fields;
 mod git;
 mod note_property;
-mod note_search;
 mod overlays;
 #[cfg(all(test, unix))]
 pub(crate) use overlays::NOTICE_TEXT_X;
@@ -217,7 +216,7 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
     }
     if picker_open {
         if app.overlays.picker.notebook.is_some() {
-            note_search::draw_scrim(app, frame);
+            workspace::note_search::draw_scrim(app, frame);
         }
         let rect = app.layout.picker;
         draw_moving_card(app, frame, Card::Picker, rect, draw_picker);

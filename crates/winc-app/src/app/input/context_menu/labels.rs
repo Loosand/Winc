@@ -9,13 +9,12 @@ impl App {
     pub(crate) fn menu_label(&self, command: MenuCommand) -> MenuLabel {
         match command {
             MenuCommand::CopyPath
-                if self.notebook_sidebar()
-                    && matches!(
-                        self.overlays.context_menu.as_ref().map(|m| &m.target),
-                        Some(MenuTarget::Tree(_))
-                    ) =>
+                if matches!(
+                    self.overlays.context_menu.as_ref().map(|m| &m.target),
+                    Some(MenuTarget::Tree(_))
+                ) =>
             {
-                MenuLabel::plain(t!("menu-copy-file-path"))
+                MenuLabel::plain(self.tree_copy_path_label())
             }
             MenuCommand::PropertyOption(i) => {
                 let value = match self.overlays.context_menu.as_ref().map(|m| &m.target) {

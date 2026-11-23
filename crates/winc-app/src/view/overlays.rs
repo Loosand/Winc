@@ -318,7 +318,7 @@ pub(super) fn draw_picker(app: &mut App, frame: &mut Frame<'_>) {
         return;
     }
     if app.overlays.picker.notebook.is_some() {
-        super::note_search::draw(app, frame);
+        super::workspace::note_search::draw(app, frame);
         return;
     }
     if app.picker_is_git() {

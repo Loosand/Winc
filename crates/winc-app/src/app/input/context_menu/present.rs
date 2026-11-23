@@ -433,53 +433,7 @@ impl App {
                 }
                 menu
             }
-            MenuTarget::Tree(Some(_))
-                if self
-                    .editor
-                    .workspace
-                    .as_ref()
-                    .is_some_and(|w| w.multi_selected()) =>
-            {
-                let targets = self.tree_targets();
-                let remote =
-                    !targets.is_empty() && targets.iter().all(|p| winc_backend::is_remote(p));
-                tree_selection_menu(self.tree_selected_files().len(), remote)
-            }
-            MenuTarget::Tree(path) => {
-                // 目录自己的一行和空白处一样：不能改名、剪切、删除。
-                let folder = path.as_deref().filter(|p| {
-                    (self.editor.workspace.as_ref()).is_some_and(|ws| ws.is_folder_row(p))
-                });
-                let kind = path.as_ref().filter(|_| folder.is_none()).and_then(|p| {
-                    let ws = self.editor.workspace.as_ref()?;
-                    ws.row_of(p)
-                        .map(|i| ws.rows()[i].kind)
-                        .or_else(|| self.note_in_library(p).then_some(EntryKind::File))
-                });
-                let can_paste = self.can_paste_into_tree();
-                let remote = path.as_deref().is_some_and(winc_backend::is_remote);
-                let mut menu = if self.notebook_sidebar() && !remote {
-                    notebook_tree_menu(kind, can_paste)
-                } else {
-                    tree_menu(kind, can_paste, remote)
-                };
-                if kind.is_none() && !self.notebook_sidebar() {
-                    menu.extend(self.folder_items(folder));
-                }
-                // Git 模块开着、文件在仓库里：最后加「显示文件历史」，有更改的文件再加暂存与回滚。
-                if !self.notebook_sidebar()
-                    && let Some(path) = path.as_deref()
-                    && kind == Some(EntryKind::File)
-                    && self.in_repo(path)
-                {
-                    menu.extend([
-                        MenuEntry::Separator,
-                        MenuEntry::Item(MenuCommand::FileHistory, true),
-                    ]);
-                    menu.extend(self.git_change_items(path));
-                }
-                menu
-            }
+            MenuTarget::Tree(path) => self.tree_menu_entries(path.as_deref()),
             MenuTarget::Editor(id) => 'editor: {
                 let Some(doc) = self.editor.document(*id) else {
                     return;

@@ -453,74 +453,6 @@ impl App {
         self.request_redraw();
     }
 
-    /// 执行文件树菜单中的命令 `command`；`path` 为右键点中的项，`None` 表示根目录。
-    pub(in crate::app) fn run_tree_command(&mut self, command: MenuCommand, path: Option<PathBuf>) {
-        let Some(root) = self.editor.root().map(Path::to_path_buf) else {
-            return;
-        };
-        let target = path.clone().unwrap_or_else(|| root.clone());
-
-        // 选中了多项时（菜单只有这几项）作用于选中的各项。
-        if path.is_some()
-            && self
-                .editor
-                .workspace
-                .as_ref()
-                .is_some_and(|w| w.multi_selected())
-        {
-            let selection = self.editor.workspace.as_ref().map(|w| w.selection());
-            let selection = selection.unwrap_or_default();
-            match command {
-                MenuCommand::OpenFiles => self.open_tree_selection(),
-                MenuCommand::CompareFiles => {
-                    if let [left, right] = &self.tree_selected_files()[..] {
-                        self.compare_files(left, right);
-                    }
-                }
-                MenuCommand::Cut => self.cut_entries(&self.tree_targets()),
-                MenuCommand::Copy => {
-                    self.copy_entries(&self.tree_targets());
-                }
-                MenuCommand::Delete => self.ask_delete_all(self.tree_targets(), false),
-                MenuCommand::Download => self.pick(Pick::Download(self.tree_targets())),
-                MenuCommand::CopyPath => self.copy_paths(&selection, false),
-                MenuCommand::CopyRelativePath => self.copy_paths(&selection, true),
-                _ => {}
-            }
-            return;
-        }
-
-        match command {
-            MenuCommand::FileHistory => {
-                if let Some(path) = &path {
-                    self.git_file_history(path);
-                }
-            }
-            MenuCommand::CommitCheck(on) => self.stage_paths(&[target], on),
-            MenuCommand::GitRollbackFile => self.confirm_rollback(vec![target]),
-            MenuCommand::NewFile | MenuCommand::NewFolder => {
-                // 右键时已选中了那一行（空白处则取消选中），新建的位置由选中的行决定。
-                self.start_new_entry(command == MenuCommand::NewFolder);
-            }
-            MenuCommand::CloseFolder if target == root => self.close_folder(),
-            MenuCommand::AddFolder => self.ask_add_folder(),
-            MenuCommand::RemoveFolder => self.remove_folder(&target),
-            MenuCommand::Reveal => self.reveal_in_file_manager(&target),
-            MenuCommand::OpenInTerminal => self.open_in_terminal(Some(&target)),
-            MenuCommand::FindInFolder => self.find_in_folder(&target),
-            MenuCommand::CopyPath => self.copy_path(&target, false),
-            MenuCommand::CopyRelativePath => self.copy_path(&target, true),
-            MenuCommand::Rename => self.start_rename(&target),
-            MenuCommand::Delete => self.ask_delete(&target),
-            MenuCommand::Cut => self.cut_entries(std::slice::from_ref(&target)),
-            MenuCommand::Copy => self.copy_entry(&target),
-            // 右键时已选中了那一行（空白处则取消选中），粘贴到的目录由选中的行决定。
-            MenuCommand::Paste => self.paste_into_tree(),
-            MenuCommand::Download => self.pick(Pick::Download(vec![target])),
-            _ => {}
-        }
-    }
-
     fn run_terminal_command(&mut self, command: MenuCommand, block: Option<u32>) {
         match (command, block) {
             (MenuCommand::CopyCommand, Some(id)) => return self.copy_terminal_command(id),
@@ -721,7 +653,7 @@ impl App {
     }
 
     /// Git 模块开着、`path` 在仓库里。
-    pub(super) fn in_repo(&self, path: &Path) -> bool {
+    pub(in crate::app) fn in_repo(&self, path: &Path) -> bool {
         self.git.root.as_deref().is_some_and(|root| {
             path.starts_with(root)
                 || winc_config::files::canonicalize(path).is_ok_and(|real| real.starts_with(root))

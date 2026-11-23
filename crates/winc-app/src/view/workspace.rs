@@ -4,6 +4,7 @@ use super::*;
 
 pub(super) mod library;
 pub(super) mod note_graph;
+pub(super) mod note_search;
 mod notebook;
 pub(super) mod outline;
 pub(super) mod panel;

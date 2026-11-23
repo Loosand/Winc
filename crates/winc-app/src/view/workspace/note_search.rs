@@ -8,7 +8,7 @@ use crate::app::workspace::note_search::{Purpose, preview_rect, search_parts};
 use crate::app::{Focus, PickerPart};
 
 /// Draw the scrim before the animation captures its backdrop, so restoring it cannot erase a band of dimming.
-pub(super) fn draw_scrim(app: &App, frame: &mut Frame<'_>) {
+pub(in crate::view) fn draw_scrim(app: &App, frame: &mut Frame<'_>) {
     let fade = match app.overlays.picker.card.motion {
         Some((true, clock)) => dialog_curve(true, clock).0,
         _ => 1.0,
@@ -17,7 +17,7 @@ pub(super) fn draw_scrim(app: &App, frame: &mut Frame<'_>) {
     frame.rect(app.layout.window, scrim.alpha(scrim.a * 0.65 * fade));
 }
 
-pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
+pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let card = app.layout.picker;
     let p = app.palette;
     let Some(search) = &app.overlays.picker.notebook else {

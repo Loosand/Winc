@@ -12,6 +12,7 @@ mod live;
 mod markdown;
 mod navigation;
 mod options;
+mod paste;
 mod pdf;
 #[cfg(any(target_os = "macos", windows))]
 mod pdf_places;

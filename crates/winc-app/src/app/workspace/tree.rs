@@ -9,6 +9,8 @@ use winc_i18n::t;
 use super::*;
 use crate::layout::tree_row_slot;
 
+mod menu;
+
 /// 文件树中正在输入名字的那一行：新建文件或目录，或给已有的项改名。
 pub struct NameInput {
     /// 新建时所在的目录。
