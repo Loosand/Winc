@@ -20,7 +20,8 @@ impl App {
         let zoom = old.ui_zoom != new.ui_zoom;
         let fonts = (old.editor_font != new.editor_font || old.ui_font != new.ui_font)
             || (old.editor_size != new.editor_size || old.ui_size != new.ui_size)
-            || (old.terminal_font != new.terminal_font || old.terminal_size != new.terminal_size);
+            || (old.terminal_font != new.terminal_font || old.terminal_size != new.terminal_size)
+            || old.ui_font_weight != new.ui_font_weight;
         let theme = (old.theme != new.theme || old.dark_theme != new.dark_theme)
             || old.light_theme != new.light_theme;
         let tab_width = (old.tab_width != new.tab_width)
@@ -35,7 +36,11 @@ impl App {
         let images = old.markdown_remote_images != new.markdown_remote_images;
         let minimap = old.minimap != new.minimap
             || old.line_numbers != new.line_numbers
-            || old.status_bar != new.status_bar;
+            || old.status_bar != new.status_bar
+            || old.outline != new.outline;
+        let hide_outline = old.outline != new.outline && new.outline == Some(false);
+        let stop_preview_tabs =
+            old.preview_on_click != new.preview_on_click && new.preview_on_click == Some(false);
         let compact = old.compact_folders != new.compact_folders;
         let diff_layout = old.diff_inline != new.diff_inline;
         let staging_view = old.git_staging_area != new.git_staging_area;
@@ -76,6 +81,12 @@ impl App {
         }
         if minimap {
             self.relayout();
+        }
+        if hide_outline && self.focus == Focus::Outline {
+            self.focus = Focus::Tree;
+        }
+        if stop_preview_tabs {
+            self.preview_tab = None;
         }
         if compact {
             self.apply_compact_folders();

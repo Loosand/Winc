@@ -199,10 +199,7 @@ impl App {
                 self.ensure_caret_visible();
             }
             NoticeAction::Install { tools, dir } => self.show_install_guide(&tools, &dir),
-            NoticeAction::FormatSettings => {
-                self.open_settings();
-                self.settings_show_page(SettingsPage::Format);
-            }
+            NoticeAction::FormatSettings => self.open_settings_page(Some(SettingsPage::Format)),
             NoticeAction::GitOutput => self.show_git_output(),
             NoticeAction::Reconnect(folder) => {
                 self.reopen_remote(&folder);

@@ -157,7 +157,9 @@ pub(super) fn screens(event_loop: &ActiveEventLoop) -> Vec<Screen> {
 impl App {
     /// 安排在 [`FRAME_SETTLE`] 之后记录窗口的大小和位置；在此之前再次调用时推迟到新的时刻。
     pub(in crate::app) fn window_frame_changed(&mut self) {
-        self.window.frame_due = Some(Instant::now() + FRAME_SETTLE);
+        if !self.settings.standalone {
+            self.window.frame_due = Some(Instant::now() + FRAME_SETTLE);
+        }
     }
 
     /// 到达安排的时刻时记录窗口的大小和位置，返回下一次唤醒的时刻；没有待记录的变化时返回 `None`。
@@ -178,7 +180,8 @@ impl App {
         let Some(window) = &self.window.handle else {
             return;
         };
-        if self.window.hidden
+        if self.settings.standalone
+            || self.window.hidden
             || window.is_minimized() == Some(true)
             || window.is_maximized()
             || window.fullscreen().is_some()

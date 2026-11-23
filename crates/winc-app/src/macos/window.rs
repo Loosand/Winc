@@ -59,6 +59,22 @@ pub fn under_cursor(window: &Window) -> bool {
     }
 }
 
+/// Keep the traffic lights but let the two settings panes extend to the top edge.
+pub fn hide_titlebar_separator(window: &Window) {
+    let Some(ns_window) = ns_window(window) else {
+        return;
+    };
+    // SAFETY: A live NSWindow on the main thread. The setter is available on macOS 11+;
+    // NSTitlebarSeparatorStyleNone is the NSInteger value 1.
+    unsafe {
+        let available: Bool =
+            msg_send![ns_window, respondsToSelector: sel!(setTitlebarSeparatorStyle:)];
+        if available.as_bool() {
+            let () = msg_send![ns_window, setTitlebarSeparatorStyle: 1isize];
+        }
+    }
+}
+
 /// 把窗口设为全透明、不画阴影、鼠标点击穿透到下方的窗口，用于测量。
 ///
 /// 窗口仍然上屏并呈现（隐藏的窗口收不到重画事件，无法测量首帧），只是不可见、不可点击。

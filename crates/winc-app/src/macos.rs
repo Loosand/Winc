@@ -43,6 +43,7 @@ pub use pasteboard::{pasteboard_has_image, pasteboard_png};
 pub use recent_documents::sync_recent_documents;
 pub use text_input::{capture_inserted_text, with_inserted_text};
 pub use updates::{check as check_for_updates, start as start_updates};
+pub use window::hide_titlebar_separator;
 pub use window::{
     TrafficLights, has_sheet, keep_title_bar_drags, make_invisible, mouse_location,
     preferred_language, reduce_motion, show_without_focus, title_bar_double_click, under_cursor,

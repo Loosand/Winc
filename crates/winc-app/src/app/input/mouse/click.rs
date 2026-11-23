@@ -473,7 +473,7 @@ impl App {
     }
 
     /// 处理顶栏空白处的点击：拖动窗口；双击时按系统设置缩放或最小化窗口。
-    fn click_title_bar(&mut self, x: f32, y: f32) {
+    pub(super) fn click_title_bar(&mut self, x: f32, y: f32) {
         if self.title_bar_pressed(x, y) && self.title_bar_zooms_at(x) {
             self.title_bar_double_click();
         } else if let Some(window) = &self.window.handle {

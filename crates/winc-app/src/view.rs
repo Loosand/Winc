@@ -116,6 +116,17 @@ fn draw_tab_drop(app: &App, frame: &mut Frame<'_>) {
 /// 绘制顺序为：先绘制底色（[`base`]）和侧栏、顶栏、编辑区、状态栏，再绘制查找条、跳转条、
 /// 快速打开卡片、提示条等浮层；设置浮层打开时覆盖整个窗口并直接返回，其余情况最后绘制悬停提示。
 pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
+    if app.settings.standalone {
+        app.hits.clear();
+        app.begin_scrollbars();
+        settings::draw_window(app, frame);
+        app.hits.notice_button = app.notice.text.as_ref().and_then(|message| {
+            let (_, button) = draw_live_notice(app, frame, message);
+            button
+        });
+        draw_modal(app, frame);
+        return;
+    }
     // 设置浮层出现、消失的动画期间，下方的窗口和卡片内容不变，用动画开始时保存的快照绘制。
     if settings::draw_cached(app, frame) || settings::draw_scrolling(app, frame) {
         return;

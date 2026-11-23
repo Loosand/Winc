@@ -26,7 +26,8 @@ impl App {
 
     /// 当前帧是否可以使用保存的快照：设置页正在滚动或拖动，且快照与窗口的尺寸、缩放比例相同。
     pub(crate) fn settings_reuses_base(&self, bounds: Rect, scale: f32) -> bool {
-        self.settings.open
+        !self.settings.standalone
+            && self.settings.open
             && self.settings.motion.is_none()
             && self.settings.scrolled_at.is_some()
             && (self.settings.scroll_base.as_ref()).is_some_and(|b| b.covers(bounds, scale))

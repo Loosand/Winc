@@ -305,7 +305,11 @@ impl App {
     ///
     /// 未打开目录或没有该文件时返回 `None`；无法识别的内容在标准错误输出中提示。
     pub(in crate::app) fn project_format(&self) -> Option<Config> {
-        let (config, problems) = Config::load_project(self.editor.root()?)?;
+        Self::load_project_format(self.editor.root()?)
+    }
+
+    pub(in crate::app) fn load_project_format(root: &Path) -> Option<Config> {
+        let (config, problems) = Config::load_project(root)?;
         for problem in problems {
             eprintln!("winc: .winc/config.json：{problem}");
         }
@@ -769,7 +773,7 @@ impl App {
     /// 在只读标签中显示 `tools` 的安装方法：只有一个工具时即该工具，有多个时安装其中任意一个即可。
     ///
     /// `dir` 为文件所在的目录，项目内可安装的方式排在前面。
-    pub(in crate::app) fn show_install_guide(&mut self, tools: &[String], dir: &Path) {
+    pub(crate) fn show_install_guide(&mut self, tools: &[String], dir: &Path) {
         let tools: Vec<&str> = tools.iter().map(String::as_str).collect();
         let formatter = &self.format.formatter;
         let has = |program: &str| formatter.has(program) == Some(true);

@@ -20,6 +20,18 @@ impl Winc {
         self.by_key(key).expect("没有这个窗口")
     }
 
+    pub(crate) fn settings_for_test(
+        &mut self,
+        from: WindowKey,
+        page: Option<SettingsPage>,
+    ) -> &mut App {
+        self.prepare_settings(from, page).expect("settings window")
+    }
+
+    pub(crate) fn active_for_test(&self) -> Option<WindowKey> {
+        self.active_key()
+    }
+
     /// 测试用：按加入顺序返回所有窗口的编号。
     pub(crate) fn keys(&self) -> Vec<WindowKey> {
         self.windows.iter().map(|slot| slot.key).collect()

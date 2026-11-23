@@ -127,8 +127,13 @@ impl App {
             self.close_settings();
             return;
         }
+        // The blank band beside the native buttons moves the window, not the settings content.
+        if self.settings.standalone && y < layout.header.y {
+            self.click_title_bar(x, y);
+            return;
+        }
         // 顶部一条的空白处：拖动卡片，正在编辑的输入框保持不变。
-        if part.is_none() && layout.title_strip().contains(x, y) {
+        if !self.settings.standalone && part.is_none() && layout.title_strip().contains(x, y) {
             let grab = (x - layout.card.x, y - layout.card.y);
             self.pointer.drag = Drag::SettingsCard { grab };
             return;

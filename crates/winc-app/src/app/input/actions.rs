@@ -110,10 +110,7 @@ impl App {
             GoForward => self.navigate(true),
             Settings => self.open_settings(),
             ReleaseNotes => self.open_release_notes(crate::release_notes::Scope::All),
-            KeyboardShortcuts => {
-                self.open_settings();
-                self.settings_show_page(SettingsPage::Keys);
-            }
+            KeyboardShortcuts => self.open_settings_page(Some(SettingsPage::Keys)),
             RecordKeys if self.settings.open => self.toggle_recording(),
             RecordKeys => return false,
 

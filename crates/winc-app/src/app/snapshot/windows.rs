@@ -221,6 +221,56 @@ fn settings_changed_in_one_window_reach_the_others() {
 }
 
 #[test]
+fn native_settings_fill_their_own_window_and_share_config_without_a_workspace() {
+    let (mut winc, a, b, dir) = two_windows("native-settings");
+    let path = dir.join("config.json");
+    winc.app(a).store.config_path = Some(path.clone());
+    winc.set_active(a);
+    let settings = winc.settings_for_test(a, Some(SettingsPage::Keys));
+    let key = settings.link.key.unwrap();
+    assert!(settings.editor.documents.is_empty());
+    assert!(settings.editor.root().is_none());
+    assert!(settings.settings.open && settings.settings.motion.is_none());
+    assert_eq!(settings.settings.selected.page(), SettingsPage::Keys);
+    settings.frame.renderer = blank_app(false).frame.renderer.take();
+    paint(settings);
+    let layout = settings.settings_layout();
+    assert_eq!(layout.card, settings.layout.window);
+    assert_eq!(layout.nav.y, layout.card.y);
+    assert_eq!(layout.nav.bottom(), layout.card.bottom());
+    if cfg!(target_os = "macos") {
+        assert!(layout.header.y > layout.card.y);
+        assert!(layout.search.y >= layout.header.y);
+    }
+    assert_eq!(layout.close.w, 0.0);
+    assert!(settings.hits.tabs.is_empty());
+    settings.settings_toggle(Setting::WordWrap);
+    winc.settle_for_test();
+    for document in [a, b] {
+        let editor = winc.app(document);
+        assert!(!editor.settings.open);
+        assert_eq!(editor.config.word_wrap, Some(true));
+    }
+    assert_eq!(Config::load_from(&path).0.word_wrap, Some(true));
+    assert_eq!(winc.keys(), [a, b]);
+    assert_eq!(winc.active_for_test(), Some(a));
+    let settings = winc.settings_for_test(b, None);
+    assert_eq!(settings.link.key, Some(key));
+    assert_eq!(settings.settings.selected.page(), SettingsPage::Keys);
+    assert!(settings.editor.root().is_none());
+    settings.close_settings();
+    assert!(
+        !winc.settle_for_test().1,
+        "closing settings must not quit the application"
+    );
+    assert_eq!(winc.keys(), [a, b]);
+    let reopened = winc.settings_for_test(a, None);
+    assert_ne!(reopened.link.key, Some(key));
+    assert_eq!(reopened.config.word_wrap, Some(true));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn settings_written_back_keep_what_was_edited_in_the_file_meanwhile() {
     let (mut winc, a, b, dir) = two_windows("windows-config-edits");
     let path = dir.join("config.json");

@@ -71,7 +71,7 @@ impl App {
     /// （见 [`App::show_release_notes`]）。
     ///
     /// 没有事件循环（测试）时只打开标签，不请求网络。
-    pub(in crate::app) fn open_release_notes(&mut self, scope: Scope) {
+    pub(crate) fn open_release_notes(&mut self, scope: Scope) {
         let title = t!("workspace-release-notes-title");
         let index = self.editor.show_reading(title, Reading::Loading);
         self.release_notes.tab = Some(self.editor.documents[index].id);
@@ -118,7 +118,13 @@ impl App {
     /// 设置的「更新日志」：关闭设置，在阅读标签中打开全部版本。
     pub(in crate::app) fn settings_open_release_notes(&mut self) {
         self.close_settings();
-        self.open_release_notes(Scope::All);
+        if self.settings.standalone {
+            self.link
+                .shared
+                .request(crate::winc::Request::SettingsReleaseNotes);
+        } else {
+            self.open_release_notes(Scope::All);
+        }
     }
 
     /// 在浏览器中打开完整的更新日志。

@@ -18,20 +18,27 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
 
-        // 背景图层在创建窗口的同时生成，第一帧绘制时通常已经就绪。窗口大小按上次的估计，
-        // 缩放系数按主屏幕的估计，图层的大小允许与实际所需的有出入。
-        let expected =
-            (self.state.window).map_or((DEFAULT_WIDTH, DEFAULT_HEIGHT), |w| (w.width, w.height));
-        let screen = event_loop.primary_monitor();
-        let scale = screen.map_or(1.0, |screen| screen.scale_factor() as f32);
-        self.request_wallpaper(((expected.0 as f32, expected.1 as f32), scale));
+        let settings = self.settings.standalone;
+        // Only editor windows load wallpapers and restore the workspace window frame.
+        if !settings {
+            let expected = self
+                .state
+                .window
+                .map_or((DEFAULT_WIDTH, DEFAULT_HEIGHT), |w| (w.width, w.height));
+            let screen = event_loop.primary_monitor();
+            let scale = screen.map_or(1.0, |screen| screen.scale_factor() as f32);
+            self.request_wallpaper(((expected.0 as f32, expected.1 as f32), scale));
+        }
 
-        let title = self
-            .editor
-            .workspace
-            .as_ref()
-            .map_or(crate::layout::PRODUCT_NAME, |w| w.name.as_str());
-        let saved = self.saved_window_frame();
+        let title = if settings {
+            winc_i18n::t!("settings-title")
+        } else {
+            self.editor
+                .workspace
+                .as_ref()
+                .map_or(crate::layout::PRODUCT_NAME, |w| w.name.as_str())
+        };
+        let saved = (!settings).then(|| self.saved_window_frame()).flatten();
         // 从已有窗口打开的新窗口使用记录的大小（没有记录时使用默认大小），位置相对来源窗口向
         // 右下方偏移。偏移后的位置与记录的位置都按当前显示器校验，不在任何显示器上时由系统决定。
         let cascade = self.opening.cascade.take().map(|(at, scale)| WindowFrame {
@@ -48,12 +55,20 @@ impl ApplicationHandler<UserEvent> for App {
         });
         let frame = cascade.or(saved);
         let placed = frame.map(|frame| place(&frame, &screens(event_loop)));
-        let (width, height) =
-            placed.map_or((DEFAULT_WIDTH, DEFAULT_HEIGHT), |p| (p.width, p.height));
+        let (width, height) = if settings {
+            (800.0, 600.0)
+        } else {
+            placed.map_or((DEFAULT_WIDTH, DEFAULT_HEIGHT), |p| (p.width, p.height))
+        };
+        let min = if settings {
+            (620.0, 410.0)
+        } else {
+            (MIN_WIDTH, MIN_HEIGHT)
+        };
         let mut attributes = Window::default_attributes()
             .with_title(title)
             .with_inner_size(LogicalSize::new(width, height))
-            .with_min_inner_size(LogicalSize::new(MIN_WIDTH, MIN_HEIGHT))
+            .with_min_inner_size(LogicalSize::new(min.0, min.1))
             .with_theme(forced_theme(&self.theme_choice))
             .with_visible(false);
         if let (Some(frame), Some(placed)) = (frame, placed) {
@@ -111,6 +126,9 @@ impl ApplicationHandler<UserEvent> for App {
         #[cfg(target_os = "macos")]
         {
             crate::macos::keep_title_bar_drags(&window);
+            if settings {
+                crate::macos::hide_titlebar_separator(&window);
+            }
             crate::macos::capture_inserted_text(&window);
         }
 
@@ -180,7 +198,9 @@ impl ApplicationHandler<UserEvent> for App {
         self.frame.renderer = Some(renderer);
         self.measure_fonts();
         self.window.handle = Some(window.clone());
-        self.start_setup_intro();
+        if !settings {
+            self.start_setup_intro();
+        }
         #[cfg(windows)]
         {
             self.touch.window_input = crate::windows::WindowInput::new(&window);
@@ -188,7 +208,7 @@ impl ApplicationHandler<UserEvent> for App {
         self.note_window_frame();
         window.set_ime_allowed(true);
         #[cfg(target_os = "macos")]
-        {
+        if !settings {
             let proxy = self.link.proxy.clone();
             self.link.traffic_lights = crate::macos::TrafficLights::new(
                 &window,
@@ -205,21 +225,23 @@ impl ApplicationHandler<UserEvent> for App {
         }
         self.sync_zoom();
         self.place_traffic_lights();
-        // 在窗口显示后询问：提示框依附于窗口。
-        #[cfg(target_os = "macos")]
-        if let Some(proxy) = &self.link.proxy {
-            let _ = proxy.send_event(UserEvent::OfferMoveToApplications);
+        if !settings {
+            // 在窗口显示后询问：提示框依附于窗口。
+            #[cfg(target_os = "macos")]
+            if let Some(proxy) = &self.link.proxy {
+                let _ = proxy.send_event(UserEvent::OfferMoveToApplications);
+            }
+            self.install_system_hooks();
+            // 启动时恢复的目录在事件循环创建之前打开，此时才能开始监视、读取运行配置和恢复终端、侧栏。
+            self.watch_folder();
+            self.load_run_configs_for_window();
+            self.restore_terminal_for_window();
+            self.restore_sidebar_for_window();
         }
-        self.install_system_hooks();
-        // 启动时恢复的目录在事件循环创建之前打开，此时才能开始监视、读取运行配置和恢复终端、侧栏。
-        self.watch_folder();
-        self.load_run_configs_for_window();
-        self.restore_terminal_for_window();
-        self.restore_sidebar_for_window();
 
         // 开启「保存时格式化」时，启动后在后台预先读取用户 shell 的环境，避免第一次 `⌘S` 时等待；
         // 读取耗时取决于用户 shell 初始化脚本的速度。测量时不读取，避免干扰启动测量。
-        if self.config.format_on_save == Some(true) && !self.frame.bench.silent() {
+        if !settings && self.config.format_on_save == Some(true) && !self.frame.bench.silent() {
             self.format.formatter.prepare(|| {});
         }
 
@@ -290,6 +312,7 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
+            WindowEvent::CloseRequested if self.settings.standalone => self.close_settings(),
             WindowEvent::CloseRequested => self.request_close_window(),
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::Moved(_) => {
@@ -427,9 +450,9 @@ impl ApplicationHandler<UserEvent> for App {
                     self.picture_pinch(delta as f32);
                 }
             }
-            WindowEvent::HoveredFile(path) => self.hover_file(&path),
-            WindowEvent::HoveredFileCancelled => self.end_file_hover(),
-            WindowEvent::DroppedFile(path) => self.drop_file(&path),
+            WindowEvent::HoveredFile(path) if !self.settings.standalone => self.hover_file(&path),
+            WindowEvent::HoveredFileCancelled if !self.settings.standalone => self.end_file_hover(),
+            WindowEvent::DroppedFile(path) if !self.settings.standalone => self.drop_file(&path),
             _ => {}
         }
     }
@@ -574,15 +597,7 @@ impl App {
                 self.relayout();
                 self.request_redraw();
             }
-            // `⌘,` 由菜单项接管，不进入按键处理；设置已打开时再次触发则在此处关闭设置。窗口已
-            // 关闭时先重新显示窗口。
-            UserEvent::OpenSettings if self.settings.open && !self.window.hidden => {
-                self.close_settings()
-            }
-            UserEvent::OpenSettings => {
-                self.show_window();
-                self.open_settings();
-            }
+            UserEvent::OpenSettings => self.open_settings(),
             UserEvent::InstallShellCommand => self.install_shell_command(),
             UserEvent::OpenReleaseNotes => {
                 self.open_release_notes(crate::release_notes::Scope::All);

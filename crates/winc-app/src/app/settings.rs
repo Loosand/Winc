@@ -25,6 +25,10 @@ use crate::layout::{KeyRows, KeysLayout, SettingsView, ToolLanguages};
 /// 设置浮层的状态。
 #[derive(Debug, Default)]
 pub struct SettingsState {
+    /// This App hosts the separate settings window rather than an editor.
+    pub(crate) standalone: bool,
+    /// Workspace context for formatter suggestions; the settings window owns no documents.
+    pub(crate) project: (Option<PathBuf>, Option<PathBuf>),
     /// 浮层是否打开。
     ///
     /// 打开时覆盖整个窗口，键盘和鼠标都先交给浮层。
@@ -191,6 +195,27 @@ impl App {
     ///
     /// 每次打开都从第一页的顶部开始。
     pub(crate) fn open_settings(&mut self) {
+        self.open_settings_page(None);
+    }
+
+    /// Open or raise the single native window; offscreen Apps can still exercise the settings view.
+    pub(crate) fn open_settings_page(&mut self, page: Option<SettingsPage>) {
+        if let Some(key) = self.link.key
+            && self.link.proxy.is_some()
+            && !self.settings.standalone
+        {
+            self.link
+                .shared
+                .request(crate::winc::Request::OpenSettings(key, page));
+            return;
+        }
+        self.show_settings();
+        if let Some(page) = page {
+            self.settings_show_page(page);
+        }
+    }
+
+    fn show_settings(&mut self) {
         if self.settings.open {
             return;
         }
@@ -203,8 +228,9 @@ impl App {
         self.finish_name_input();
 
         self.settings.open = true;
-        self.settings.motion = self
-            .clock(super::animation::DIALOG_IN)
+        self.settings.motion = (!self.settings.standalone)
+            .then(|| self.clock(super::animation::DIALOG_IN))
+            .flatten()
             .map(|clock| (true, clock));
         self.settings.cache = None;
         self.settings.scroll = 0.0;
@@ -235,7 +261,7 @@ impl App {
     /// 关闭设置浮层。
     ///
     /// 正在编辑的字体名按 `Esc` 处理：没有按回车确认就不生效。
-    pub(super) fn close_settings(&mut self) {
+    pub(crate) fn close_settings(&mut self) {
         if !self.settings.open {
             return;
         }
@@ -246,8 +272,9 @@ impl App {
             self.pointer.drag = Drag::None;
         }
         self.settings.open = false;
-        self.settings.motion = self
-            .clock(super::animation::DIALOG_OUT)
+        self.settings.motion = (!self.settings.standalone)
+            .then(|| self.clock(super::animation::DIALOG_OUT))
+            .flatten()
             .map(|clock| (false, clock));
         self.settings.cache = None;
         self.settings.scroll_base = None;
@@ -267,7 +294,11 @@ impl App {
             self.focus = Focus::Editor;
         }
 
-        self.request_redraw();
+        if self.settings.standalone {
+            self.hide_window();
+        } else {
+            self.request_redraw();
+        }
     }
 
     /// 返回设置浮层中窗口坐标 (`x`, `y`) 处的部件。
@@ -389,7 +420,18 @@ impl App {
             scroll: self.settings.scroll,
             offset: self.settings.offset,
         };
-        SettingsLayout::compute(self.layout.window, &view, measure)
+        if self.settings.standalone {
+            // macOS draws the native buttons over the content. Keep their clearance
+            // constant in window points even when Minc's UI zoom changes.
+            let chrome = if cfg!(target_os = "macos") {
+                30.0 / self.zoom()
+            } else {
+                0.0
+            };
+            SettingsLayout::compute_window(self.layout.window, chrome, &view, measure)
+        } else {
+            SettingsLayout::compute(self.layout.window, &view, measure)
+        }
     }
 
     /// 是否在显示搜索结果：分类栏顶部的搜索框不为空白。
@@ -837,6 +879,12 @@ impl App {
                 if !on {
                     crate::app::git::question::forget_credentials();
                 }
+            }
+            Setting::GitTree if self.settings.standalone => {
+                self.git.commit.set_flat(!on);
+                self.link
+                    .shared
+                    .request(crate::winc::Request::SettingsGitTree(on));
             }
             Setting::GitTree if on == self.git.commit.flat() => self.toggle_commit_layout(),
             Setting::GitTree => {}

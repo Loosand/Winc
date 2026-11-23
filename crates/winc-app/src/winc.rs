@@ -24,6 +24,7 @@ use crate::app::{App, UserEvent};
 use crate::bench::Bench;
 use crate::cli::Target;
 use crate::instance::{AppLock, Listener};
+use crate::layout::SettingsPage;
 
 /// 窗口在本进程里的编号：建 [`App`] 时就定下（那时系统窗口还没建，没有 [`WindowId`]），
 /// 后台任务送回的事件靠它找回自己的窗口。
@@ -86,6 +87,14 @@ impl WindowProxy {
 pub enum Request {
     /// 新建一个窗口；带目录时在里面打开它，目录已经开在某个窗口里时切到那个窗口。
     NewWindow(Option<PathBuf>),
+    /// Open or raise the app-wide settings window, optionally on a specific page.
+    OpenSettings(WindowKey, Option<SettingsPage>),
+    /// Open release notes in a document window rather than a preferences tab.
+    SettingsReleaseNotes,
+    /// Show a formatter installation guide in the document window.
+    SettingsInstallGuide(Vec<String>, PathBuf),
+    /// Apply the Git list/tree display choice to the document window.
+    SettingsGitTree(bool),
     /// 启动时为上次开着的目录新建窗口：用该目录记下的大小和位置，不相对当前窗口错开。
     RestoreWindow(PathBuf),
     /// 把这个窗口切到前台（它开着要打开的目录）。
@@ -262,6 +271,11 @@ pub struct Winc {
     proxy: Option<EventLoopProxy<Envelope>>,
     /// 所有窗口，以及本层为它们记下的东西。
     windows: Vec<Slot>,
+    /// Separate from workspace windows: no file-open targeting, session restore or quit prompts.
+    settings: Option<Slot>,
+    settings_owner: Option<WindowKey>,
+    /// Target of an app-wide native popup callback, including the settings window.
+    menu_window: Option<WindowKey>,
     /// 最近一个获得焦点或按下鼠标的窗口；属于整个应用的事件交给它。
     active: Option<WindowKey>,
     /// 下一个窗口的编号（[`WindowKey`] 的序号，从 0 起递增）。
@@ -284,6 +298,9 @@ impl Winc {
         Winc {
             proxy,
             windows: Vec::new(),
+            settings: None,
+            settings_owner: None,
+            menu_window: None,
             active: None,
             next_key: 0,
             shared: Rc::default(),
@@ -373,7 +390,11 @@ impl Winc {
 
     /// 编号为 `key` 的窗口。
     fn by_key(&mut self, key: WindowKey) -> Option<&mut App> {
-        let found = self.windows.iter_mut().find(|slot| slot.key == key);
+        let found = self
+            .windows
+            .iter_mut()
+            .chain(&mut self.settings)
+            .find(|slot| slot.key == key);
         found.map(|slot| &mut slot.app)
     }
 
@@ -382,6 +403,7 @@ impl Winc {
         let found = self
             .windows
             .iter()
+            .chain(&self.settings)
             .find(|slot| slot.app.window_id() == Some(id));
         found.map(|slot| slot.key)
     }
@@ -409,6 +431,14 @@ impl Winc {
     /// 返回窗口要本层做的事，和是否该结束事件循环。
     fn settle(&mut self) -> (Vec<Request>, bool) {
         self.sync_config();
+        if let Some(slot) = &self.settings
+            && slot.app.window.hidden
+        {
+            if self.menu_window == Some(slot.key) {
+                self.menu_window = None;
+            }
+            self.settings = None;
+        }
         self.drop_closed();
         for slot in &mut self.windows {
             slot.app.finish_waiting();
@@ -431,18 +461,20 @@ impl Winc {
 
     /// 某个窗口改了设置（[`App::config_rev`] 变了）：把它的配置发给其他窗口。
     fn sync_config(&mut self) {
-        let changed = self
+        let Some(from) = self
             .windows
             .iter()
-            .position(|s| s.app.store.config_rev != s.config_rev);
-        let Some(from) = changed else {
+            .chain(&self.settings)
+            .find(|s| s.app.store.config_rev != s.config_rev)
+        else {
             return;
         };
-        let config = self.windows[from].app.config.clone();
+        let key = from.key;
+        let config = from.app.config.clone();
         // 一并同步配置文件的内容：该窗口写入失败时，未写入的项在之后任一窗口写回时仍算作修改。
-        let saved = self.windows[from].app.store.saved_config.clone();
-        for (i, slot) in self.windows.iter_mut().enumerate() {
-            if i != from {
+        let saved = from.app.store.saved_config.clone();
+        for slot in self.windows.iter_mut().chain(&mut self.settings) {
+            if slot.key != key {
                 slot.app.store.saved_config = saved.clone();
                 slot.app.adopt_config(config.clone());
             }
@@ -584,6 +616,33 @@ impl Winc {
                 match request {
                     Request::NewWindow(folder) => {
                         self.new_window(event_loop, folder, None, true);
+                    }
+                    Request::OpenSettings(from, page) => {
+                        if let Some(app) = self.prepare_settings(from, page) {
+                            app.resumed(event_loop);
+                            if !app.window.hidden {
+                                app.raise();
+                            }
+                        }
+                    }
+                    Request::SettingsReleaseNotes => {
+                        if let Some(app) = self.settings_document() {
+                            app.raise();
+                            app.open_release_notes(crate::release_notes::Scope::All);
+                        }
+                    }
+                    Request::SettingsInstallGuide(tools, dir) => {
+                        if let Some(app) = self.settings_document() {
+                            app.raise();
+                            app.show_install_guide(&tools, &dir);
+                        }
+                    }
+                    Request::SettingsGitTree(on) => {
+                        if let Some(app) = self.settings_document()
+                            && app.git.commit.flat() == on
+                        {
+                            app.toggle_commit_layout();
+                        }
                     }
                     Request::RestoreWindow(folder) => {
                         self.new_window(event_loop, Some(folder), None, false);
@@ -862,16 +921,82 @@ impl Winc {
         }
     }
 
+    fn settings_document(&mut self) -> Option<&mut App> {
+        let owner = self.settings_owner.filter(|&key| {
+            self.windows
+                .iter()
+                .any(|slot| slot.key == key && !slot.app.window.hidden)
+        });
+        self.by_key(owner.or_else(|| self.active_key())?)
+    }
+
+    /// Configure the singleton before creating its surface (also testable offscreen).
+    fn prepare_settings(
+        &mut self,
+        from: WindowKey,
+        page: Option<SettingsPage>,
+    ) -> Option<&mut App> {
+        if self.quitting.is_some() {
+            return None;
+        }
+        let source = &self.windows.iter().find(|s| s.key == from)?.app;
+        let project = (
+            source.editor.root().map(Path::to_path_buf),
+            source
+                .editor
+                .active()
+                .and_then(|d| d.path.as_deref()?.parent())
+                .map(Path::to_path_buf),
+        );
+        let flat = source.git.commit.flat();
+        let initial = self.settings.is_none().then(|| {
+            (
+                source.config.clone(),
+                source.store.saved_config.clone(),
+                source.store.config_path.clone(),
+                source.store.state_path.clone(),
+                source.shared_glyphs(),
+            )
+        });
+        if let Some((config, saved, path, state, glyphs)) = initial {
+            let (key, proxy) = self.reserve();
+            let mut app = App::new(Editor::default(), proxy, Bench::off(), config);
+            app.link.key = Some(key);
+            app.link.shared = Rc::clone(&self.shared);
+            app.store.saved_config = saved;
+            app.store.config_path = path;
+            app.store.state_path = state;
+            app.opening.glyphs_from = glyphs;
+            app.settings.standalone = true;
+            self.settings = Some(Slot {
+                key,
+                config_rev: app.store.config_rev,
+                app,
+            });
+        }
+        self.settings_owner = Some(from);
+        let slot = self.settings.as_mut()?;
+        self.menu_window = Some(slot.key);
+        slot.app.set_settings_project(project);
+        slot.app.git.commit.set_flat(flat);
+        slot.app.open_settings_page(page);
+        Some(&mut slot.app)
+    }
+
     /// 各窗口下一次要醒来的时刻里最早的一个。
     fn next_wake(&mut self) -> Option<Instant> {
-        let wakes = self.windows.iter_mut().filter_map(|slot| slot.app.tick());
+        let wakes = self
+            .windows
+            .iter_mut()
+            .chain(&mut self.settings)
+            .filter_map(|slot| slot.app.tick());
         wakes.min()
     }
 }
 
 impl ApplicationHandler<Envelope> for Winc {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        for slot in &mut self.windows {
+        for slot in self.windows.iter_mut().chain(&mut self.settings) {
             slot.app.resumed(event_loop);
         }
         self.after_event(event_loop);
@@ -883,13 +1008,13 @@ impl ApplicationHandler<Envelope> for Winc {
             UserEvent::Opened(targets) => self.opened(event_loop, &targets),
             UserEvent::UpdateFound(version) => {
                 *self.shared.update.borrow_mut() = version;
-                for slot in &mut self.windows {
+                for slot in self.windows.iter_mut().chain(&mut self.settings) {
                     slot.app.request_redraw();
                 }
             }
             UserEvent::UpdateState(state) => {
                 *self.shared.update_state.borrow_mut() = state;
-                for slot in &mut self.windows {
+                for slot in self.windows.iter_mut().chain(&mut self.settings) {
                     slot.app.request_redraw();
                 }
             }
@@ -910,7 +1035,15 @@ impl ApplicationHandler<Envelope> for Winc {
             }
             event => {
                 // 发出事件的窗口已经关掉了：后台任务的结果没有窗口接收，直接丢弃。
-                if let Some(app) = self.recipient(envelope.to) {
+                let to = if matches!(event, UserEvent::MenuCommand(_))
+                    && envelope.to == Recipient::Active
+                {
+                    self.menu_window
+                        .map_or(Recipient::Active, Recipient::Window)
+                } else {
+                    envelope.to
+                };
+                if let Some(app) = self.recipient(to) {
                     app.user_event(event_loop, event);
                 }
             }
@@ -932,14 +1065,17 @@ impl ApplicationHandler<Envelope> for Winc {
                     ..
                 }
         ) {
-            self.active = Some(key);
+            self.menu_window = Some(key);
+            if self.settings.as_ref().is_none_or(|slot| slot.key != key) {
+                self.active = Some(key);
+            }
         }
         // 光标同一时刻只位于一个窗口上：某个窗口在光标处位于最上层并收到移动时，其余仍认为光标
         // 在内的窗口按光标离开处理。被遮挡的窗口不一定再收到移动或离开事件。
         if matches!(event, WindowEvent::CursorMoved { .. })
             && self.by_key(key).is_some_and(|app| app.under_cursor())
         {
-            for slot in &mut self.windows {
+            for slot in self.windows.iter_mut().chain(&mut self.settings) {
                 if slot.key != key && slot.app.cursor_inside() {
                     slot.app.cursor_left();
                 }
@@ -959,6 +1095,9 @@ impl ApplicationHandler<Envelope> for Winc {
     }
 
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(mut settings) = self.settings.take() {
+            settings.app.close_settings();
+        }
         // 当前窗口最后记现场：下次启动打开的是它的目录（`State::last`）。
         let active = self.active_key();
         self.windows.sort_by_key(|slot| Some(slot.key) == active);

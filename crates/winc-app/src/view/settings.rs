@@ -110,14 +110,29 @@ fn draw_motion(app: &App, frame: &mut Frame<'_>, layout: &SettingsLayout) {
     super::blend_card(frame, p, (layout.card, &cache.card), RADIUS_CARD, curve);
 }
 
+/// Draw the same settings controls directly into their native window.
+pub(super) fn draw_window(app: &mut App, frame: &mut Frame<'_>) {
+    let layout = layout(app, frame);
+    draw_dialog(app, frame, &layout);
+}
+
 /// 绘制设置卡片：两栏、标题和当前页的内容。
 fn draw_dialog(app: &mut App, frame: &mut Frame<'_>, layout: &SettingsLayout) {
     let p = app.palette;
 
     // 分为两栏：左侧用窗口底色，右侧用编辑区底色，中间不绘制分隔线。阴影和细边另行绘制。
-    frame.rounded(layout.card, p.editor_bg, RADIUS_CARD);
-    let r = RADIUS_CARD;
-    frame.rect_corners(layout.nav, p.frame_bg, [r, 0.0, 0.0, r], layout.card);
+    if app.settings.standalone {
+        frame.rect(layout.card, p.editor_bg);
+        frame.rect(layout.nav, p.frame_bg);
+        frame.rect(
+            Rect::new(layout.nav.right() - 1.0, layout.nav.y, 1.0, layout.nav.h),
+            p.separator,
+        );
+    } else {
+        frame.rounded(layout.card, p.editor_bg, RADIUS_CARD);
+        let r = RADIUS_CARD;
+        frame.rect_corners(layout.nav, p.frame_bg, [r, 0.0, 0.0, r], layout.card);
+    }
 
     let search_caret = draw_search(app, frame, layout);
     draw_nav(app, frame, layout);
@@ -155,7 +170,11 @@ fn draw_search(app: &mut App, frame: &mut Frame<'_>, layout: &SettingsLayout) ->
     icons::magnifier(frame, (search.x + 14.0, cy), p.text_dim, search);
     let x = search.x + 26.0;
     let area = Rect::new(x, search.y, (search.right() - 8.0 - x).max(0.0), search.h);
-    let placeholder = t!("settings-search-placeholder");
+    let placeholder = if app.settings.standalone {
+        t!("workspace-search-placeholder")
+    } else {
+        t!("settings-search-placeholder")
+    };
     let mut field = std::mem::take(&mut app.settings.search);
     let caret = crate::view::draw_bar_field(app, frame, area, &mut field, placeholder, focused);
     app.settings.search = field;
@@ -236,15 +255,34 @@ fn draw_header(app: &App, frame: &mut Frame<'_>, layout: &SettingsLayout) {
     let p = app.palette;
     let header = layout.header;
     let x = header.x + SETTINGS_PAD;
-    let title = t!("settings-title");
-    let x = ui_text(frame, app, x, header, title, p.text_muted, header);
-    let arrow = (x + 10.0, header.y + header.h / 2.0);
-    icons::chevron(frame, arrow, 6.5, Direction::Right, p.text_dim, header);
     let page = if layout.searching {
         t!("settings-search-results")
     } else {
         layout.page.title()
     };
+    if app.settings.standalone {
+        let size = (app.fonts.ui * 1.85).clamp(20.0, 29.0);
+        let metrics = frame.metrics(FontKind::Ui, size);
+        let y = baseline_in(header, metrics.ascent, metrics.descent);
+        frame.text_faux(
+            FontKind::Ui,
+            Faux {
+                bold: true,
+                italic: false,
+            },
+            size,
+            x,
+            y,
+            page,
+            p.text,
+            header,
+        );
+        return;
+    }
+    let title = t!("settings-title");
+    let x = ui_text(frame, app, x, header, title, p.text_muted, header);
+    let arrow = (x + 10.0, header.y + header.h / 2.0);
+    icons::chevron(frame, arrow, 6.5, Direction::Right, p.text_dim, header);
     ui_text(frame, app, x + 20.0, header, page, p.text, header);
 
     let close = layout.close;

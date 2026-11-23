@@ -590,6 +590,9 @@ impl App {
             }
             return;
         }
+        if self.settings.standalone && cmd && base == "," {
+            return;
+        }
 
         if self.focus == Focus::KeySearch {
             self.on_key_search_keys(event, base, cmd);

@@ -234,7 +234,7 @@ impl App {
     /// 在按目录排成树和平铺之间切换更改列表。
     ///
     /// 记进状态文件：以后打开的窗口、下次启动都用同一种显示方式。
-    pub(in crate::app) fn toggle_commit_layout(&mut self) {
+    pub(crate) fn toggle_commit_layout(&mut self) {
         let flat = !self.git.commit.flat();
         self.git.commit.set_flat(flat);
         self.update_state(|state| state.commit_tree = !flat);

@@ -78,7 +78,7 @@ impl App {
 
     /// 隐藏窗口（macOS 上关闭窗口时）：应用留在程序坞中，点击图标时由 [`App::show_window`]
     /// 重新显示。
-    pub(super) fn hide_window(&mut self) {
+    pub(in crate::app) fn hide_window(&mut self) {
         if let Some(window) = &self.window.handle {
             window.set_visible(false);
         }
@@ -188,7 +188,7 @@ impl App {
     /// 窗口建不起来（系统窗口或渲染器）：还有别的窗口时只放弃这一个（标成关掉，应用层去掉它），
     /// 否则结束。
     pub(super) fn give_up_window(&mut self, event_loop: &ActiveEventLoop) {
-        if self.link.shared.others() {
+        if self.settings.standalone || self.link.shared.others() {
             self.window.handle = None;
             self.window.hidden = true;
         } else {
@@ -248,6 +248,24 @@ impl App {
     ///
     /// 窗口尺寸、面板宽度、标签或预览状态变化后调用；面板跟着焦点关闭也在这一步完成。
     pub(crate) fn relayout(&mut self) {
+        if self.settings.standalone {
+            if let Some(renderer) = &self.frame.renderer {
+                let (w, h) = renderer.logical_size();
+                let window = Rect::new(0.0, 0.0, w, h);
+                if window != self.layout.window {
+                    self.layout = Layout {
+                        window,
+                        editor: window,
+                        ..Layout::default()
+                    };
+                    self.settings.scroll = self
+                        .settings
+                        .scroll
+                        .clamp(0.0, self.settings_scroll_area().1);
+                }
+            }
+            return;
+        }
         self.note_terminal_tab_position();
         // 面板打开以后换了标签（⌘W、切换标签、后退前进、新建文件）：面板里的符号、书签、用法
         // 都属于原来的文档，回车会在新标签里跳到错误的位置，所以关掉。`close_picker` 会再次
@@ -651,6 +669,10 @@ impl App {
     ///
     /// 同时让渲染器的背景图与配置一致（见 `App::sync_wallpaper`）。
     pub(in crate::app) fn declare_base(&mut self, renderer: &mut winc_render::Renderer) {
+        if self.settings.standalone {
+            renderer.cover_next_frame(self.layout.window);
+            return;
+        }
         self.sync_wallpaper(renderer);
         let (window, scale) = (self.layout.window, renderer.scale_factor());
         if self.settings_reuses_base(window, scale) {

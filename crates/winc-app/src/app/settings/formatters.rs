@@ -5,13 +5,34 @@ use winc_i18n::t;
 use super::*;
 
 impl App {
+    pub(crate) fn set_settings_project(&mut self, project: (Option<PathBuf>, Option<PathBuf>)) {
+        if self.settings.project != project {
+            self.settings.project = project;
+            if self.settings.open {
+                self.settings.languages = ToolLanguages::default();
+                self.refresh_format_rows(true);
+            }
+        }
+    }
+
+    fn settings_format_root(&self) -> Option<&Path> {
+        self.settings
+            .project
+            .0
+            .as_deref()
+            .or_else(|| self.editor.root())
+    }
+
     /// 重新计算格式化页每一行上显示的内容；打开设置、修改命令、取到用户 shell 的环境之后调用。
     ///
     /// `list_new` 为 `true` 时先把应列出的新语言补到列表中（见 [`App::list_new_languages`]）。
     /// 项目设置只读一次，两步共用。
     pub(super) fn refresh_format_rows(&mut self, list_new: bool) {
         let file = self.format_dir().join("_");
-        let project = self.project_format().unwrap_or_default();
+        let project = self
+            .settings_format_root()
+            .and_then(Self::load_project_format)
+            .unwrap_or_default();
         if list_new {
             self.list_new_languages(&file, &project);
         }
@@ -39,7 +60,7 @@ impl App {
         if self.settings.probing || winc_editor::wsl::locate_here(file).is_none() {
             return;
         }
-        let root = self.editor.root();
+        let root = self.settings_format_root();
         let formatter = &self.format.formatter;
         let listed = &self.settings.languages;
         let rows = (listed.format.iter().map(|&id| (Task::Format, id)))
@@ -101,7 +122,7 @@ impl App {
         language: &Language,
         file: &Path,
     ) -> Option<Result<Plan, FormatError>> {
-        match Plan::for_task(task, language, file, self.editor.root(), None) {
+        match Plan::for_task(task, language, file, self.settings_format_root(), None) {
             Ok(plan) if plan.is_guess() => self.format.formatter.peek(&plan),
             plan => Some(plan),
         }
@@ -111,9 +132,9 @@ impl App {
     ///
     /// 优先取已打开的目录；没有时取当前文件所在的目录，再没有则为 `/`。
     fn format_dir(&self) -> PathBuf {
-        self.editor
-            .root()
+        self.settings_format_root()
             .map(Path::to_path_buf)
+            .or_else(|| self.settings.project.1.clone())
             .or_else(|| {
                 let path = self.editor.active()?.path.as_ref()?;
                 path.parent().map(Path::to_path_buf)
@@ -133,7 +154,7 @@ impl App {
         project: Option<String>,
         auto: Option<Result<Plan, FormatError>>,
     ) -> FormatRow {
-        let root = self.editor.root();
+        let root = self.settings_format_root();
         let formatter = &self.format.formatter;
         let presets_for = |id| presets(task, id);
         let auto_tool = match &auto {
@@ -469,7 +490,13 @@ impl App {
                     .unwrap_or_default();
                 let dir = self.format_dir();
                 self.close_settings();
-                self.show_install_guide(&tools, &dir);
+                if self.settings.standalone {
+                    self.link
+                        .shared
+                        .request(crate::winc::Request::SettingsInstallGuide(tools, dir));
+                } else {
+                    self.show_install_guide(&tools, &dir);
+                }
             }
             _ => {}
         }

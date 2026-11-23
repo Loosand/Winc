@@ -1169,6 +1169,25 @@ impl SettingsLayout {
         view: &SettingsView<'_>,
         measure: &mut dyn FnMut(&str) -> f32,
     ) -> Self {
+        Self::compute_at(settings_card(window, view.offset), view, measure, None)
+    }
+
+    /// Lay out the native settings window without a card margin or a second close button.
+    pub(crate) fn compute_window(
+        window: Rect,
+        chrome: f32,
+        view: &SettingsView<'_>,
+        measure: &mut dyn FnMut(&str) -> f32,
+    ) -> Self {
+        Self::compute_at(window, view, measure, Some(chrome))
+    }
+
+    fn compute_at(
+        card: Rect,
+        view: &SettingsView<'_>,
+        measure: &mut dyn FnMut(&str) -> f32,
+        chrome: Option<f32>,
+    ) -> Self {
         let &SettingsView {
             page,
             query,
@@ -1177,17 +1196,17 @@ impl SettingsLayout {
             git,
             editing,
             scroll,
-            offset,
+            ..
         } = view;
         let searching = !query.trim().is_empty();
-        let card = settings_card(window, offset);
 
         let nav = Rect::new(card.x, card.y, SETTINGS_NAV_W.min(card.w), card.h);
+        let top = card.y + chrome.unwrap_or_default().min(card.h);
         // 搜索框与右侧标题行垂直居中对齐，各页列在其下。「终端」一项的高度按显示比例收放，
         // 下方各项随之滑动。
         let search = Rect::new(
             nav.x + 8.0,
-            card.y + (SETTINGS_HEADER - SETTINGS_CONTROL_H) / 2.0,
+            top + (SETTINGS_HEADER - SETTINGS_CONTROL_H) / 2.0,
             (nav.w - 16.0).max(0.0),
             SETTINGS_CONTROL_H,
         );
@@ -1207,14 +1226,23 @@ impl SettingsLayout {
             })
             .collect();
 
-        let right = Rect::new(nav.right(), card.y, (card.w - nav.w).max(0.0), card.h);
-        let header = Rect::new(right.x, right.y, right.w, SETTINGS_HEADER.min(right.h));
-        let close = Rect::new(
-            header.right() - 12.0 - BUTTON,
-            header.y + (header.h - BUTTON) / 2.0,
-            BUTTON,
-            BUTTON,
+        let right = Rect::new(
+            nav.right(),
+            top,
+            (card.w - nav.w).max(0.0),
+            card.bottom() - top,
         );
+        let header = Rect::new(right.x, right.y, right.w, SETTINGS_HEADER.min(right.h));
+        let close = if chrome.is_some() {
+            Rect::default()
+        } else {
+            Rect::new(
+                header.right() - 12.0 - BUTTON,
+                header.y + (header.h - BUTTON) / 2.0,
+                BUTTON,
+                BUTTON,
+            )
+        };
         let body = Rect::new(
             right.x,
             header.bottom(),
