@@ -1626,16 +1626,107 @@ fn code_blocks_are_created_and_removed_as_a_whole() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 文档以代码块结束时再按 ↓：在其后另起一段，光标移到该段。
 #[test]
-fn down_after_a_trailing_code_block_adds_a_paragraph() {
+fn leaving_code_accepts_a_closer_at_least_as_long_as_its_fence() {
+    use winc_editor::Command;
     use winit::keyboard::{Key, NamedKey};
-    let (mut app, dir) = live_doc("md-trailing-code", "前文\n\n```\nx\n```");
-    put_caret(&mut app, "x", true);
-    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
-    settle(&mut app);
-    assert_eq!(with_caret(&app), "前文\n\n```\nx\n```\n\n|");
-    let _ = std::fs::remove_dir_all(&dir);
+    for (name, source, expected) in [
+        (
+            "long-backticks",
+            "````md\n```\n内容\n````",
+            "````md\n```\n内容\n````\n\n下文",
+        ),
+        (
+            "longer-tildes-crlf",
+            "~~~text\r\n内容\r\n~~~~~",
+            "~~~text\r\n内容\r\n~~~~~\r\n\r\n下文",
+        ),
+        (
+            "quoted",
+            "> ````text\n> 内容\n> `````",
+            "> ````text\n> 内容\n> `````\n\n下文",
+        ),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-fence-leave-{name}"), source);
+        put_caret(&mut app, "内容", true);
+        assert!(
+            app.markdown_key(&Key::Named(NamedKey::Enter), true),
+            "{name}"
+        );
+        app.run(Command::Insert("下文".into()));
+        settle(&mut app);
+        assert_eq!(doc_text(&app), expected);
+        use winc_preview::markdown::Block;
+        let parsed = app.preview.markdown.parsed.as_ref().unwrap();
+        assert!(matches!(parsed.blocks.last(), Some(Block::Paragraph(_))));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn a_false_closing_fence_cannot_be_used_to_leave_open_code() {
+    use winit::keyboard::{Key, NamedKey};
+    for (name, source) in [
+        ("too-short", "````md\n内容\n```"),
+        ("trailing-text", "```text\n内容\n```>"),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-open-fence-{name}"), source);
+        put_caret(&mut app, "内容", true);
+        assert!(
+            !app.markdown_key(&Key::Named(NamedKey::Enter), true),
+            "{name}"
+        );
+        app.run(winc_editor::Command::DocEnd { extend: false });
+        settle(&mut app);
+        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
+        assert_eq!(doc_text(&app), source, "{name}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn backspace_from_prose_after_a_wide_fence_keeps_the_delimiter_intact() {
+    use winit::keyboard::{Key, NamedKey};
+    let text = "````text\r\n原文\r\n`````\r\n\r\n下文";
+    let (mut app, dir) = live_doc("md-join-wide-fence", text);
+    put_caret(&mut app, "下文", false);
+    assert!(app.markdown_key(&Key::Named(NamedKey::Backspace), false));
+    assert_eq!(with_caret(&app), "````text\r\n原文|\r\n`````\r\n\r\n下文");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_fence_with_a_literal_quote_marker_is_not_empty() {
+    use winit::keyboard::{Key, NamedKey};
+    for (name, source) in [
+        ("standalone", "```\n>\n```"),
+        ("quoted", "> ```\n> >\n> ```"),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-fence-literal-greater-{name}"), source);
+        app.run(winc_editor::Command::DocEnd { extend: false });
+        settle(&mut app);
+        assert!(app.markdown_key(&Key::Named(NamedKey::Backspace), false));
+        assert_eq!(doc_text(&app), source);
+        assert!(with_caret(&app).contains(">|\n"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// 文档以代码块或公式结束时再按 ↓：在其后另起一段，光标移到该段。
+#[test]
+fn down_after_a_trailing_code_block_or_formula_adds_a_paragraph() {
+    use winit::keyboard::{Key, NamedKey};
+    for (name, source) in [
+        ("code", "前文\n\n```\nx\n```"),
+        ("inline-fence", "前文\n\n$$x$$"),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-trailing-{name}"), source);
+        put_caret(&mut app, "x", true);
+        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
+        settle(&mut app);
+        assert_eq!(with_caret(&app), format!("{source}\n\n|"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 /// 滚动预览时，悬停展开的标题列表和钉住的列表位置不变。

@@ -4,6 +4,63 @@
 
 use super::*;
 
+/// Find the boundaries of a parsed fence. A shorter run, or a run followed by
+/// literal code, is content and cannot be used as a destination outside the block.
+fn fenced_lines(rope: &ropey::Rope, range: std::ops::Range<usize>) -> Option<Fenced> {
+    let len = rope.len_bytes();
+    let start = range.start.min(len);
+    let first = rope.byte_to_line(start);
+    let opening = rope.byte_slice(start..rope.line_to_byte(first + 1));
+    let opening = std::borrow::Cow::<str>::from(opening);
+    let open = opening.trim();
+    let mark = open.bytes().next()?;
+    let min = match mark {
+        b'`' | b'~' => 3,
+        b'$' => 2,
+        _ => return None,
+    };
+    let count = open.bytes().take_while(|&b| b == mark).count();
+    if count < min {
+        return None;
+    }
+    let quotes = rope
+        .byte_slice(rope.line_to_byte(first)..start)
+        .chars()
+        .filter(|&c| c == '>')
+        .count();
+    let text = |line| {
+        let raw = std::borrow::Cow::<str>::from(rope.line(line));
+        let mut body = raw.as_ref();
+        for _ in 0..quotes {
+            let Some(rest) = body.trim_start_matches([' ', '\t']).strip_prefix('>') else {
+                break;
+            };
+            body = rest;
+        }
+        body.trim_matches([' ', '\t', '\r', '\n']).to_owned()
+    };
+    let end = range.end.min(len).saturating_sub(1).max(start);
+    let mut last = rope.byte_to_line(end);
+    while last > first && text(last).is_empty() {
+        last -= 1;
+    }
+    // Single-line display math has no separate closing line to navigate around.
+    if first == last && mark == b'$' && open[count..].ends_with("$$") {
+        return None;
+    }
+    let close = text(last);
+    let closed = last > first && close.len() >= count && close.bytes().all(|b| b == mark);
+    let content = first + 1..if closed { last } else { last + 1 };
+    Some(Fenced {
+        first,
+        last,
+        closed,
+        bare: count == open.len(),
+        empty: content.clone().all(|line| text(line).is_empty()),
+        content,
+    })
+}
+
 impl App {
     /// 可编辑的预览中 ↑↓ 按显示行移动光标（加 ⇧ 扩展选区），`PageUp` / `PageDown` 移动一屏；
     /// 正文里的回车、⇧ 回车见 [`App::live_enter`]。
@@ -563,8 +620,21 @@ impl App {
                 if !prose && !blank(line) {
                     let last = rope.line(above).to_string();
                     let last = last.trim_end();
-                    let from = if above > 0 && ["```", "~~~", "$$"].contains(&last.trim_start()) {
-                        line_end(rope, above - 1)
+                    let closed = self.preview.markdown.parsed.as_ref().and_then(|parsed| {
+                        let end = rope.char_to_byte(from);
+                        let i = parsed
+                            .leaves
+                            .partition_point(|leaf| leaf.range.start <= end);
+                        let leaf = parsed.leaves.get(i.checked_sub(1)?)?;
+                        if leaf.prose || leaf.table {
+                            return None;
+                        }
+                        fenced_lines(rope, leaf.range.clone())
+                            .filter(|f| f.closed && f.last == above)
+                    });
+                    let from = if let Some(fence) = closed {
+                        // Empty blocks have no content line; stay before the closing marker.
+                        line_end(rope, fence.last - 1)
                     } else if let Some(cell) = last.strip_suffix('|') {
                         from - (last.chars().count() - cell.trim_end().chars().count())
                     } else {
@@ -745,39 +815,7 @@ impl App {
     pub(super) fn live_fenced(&self) -> Option<Fenced> {
         let live = self.live_leaf().filter(|l| !l.prose && !l.table)?;
         let rope = self.editor.active()?.text().rope()?;
-        let len = rope.len_bytes();
-        // 引用、列表中的代码块各行带有引用标记和缩进。
-        let text = |l: usize| {
-            let text = rope.line(l).to_string();
-            text.trim_matches([' ', '\t', '>', '\n', '\r']).to_owned()
-        };
-        let first = rope.byte_to_line(live.leaf.start.min(len));
-        let open = text(first);
-        let mark = ["```", "~~~", "$$"]
-            .into_iter()
-            .find(|m| open.starts_with(m))?;
-        let end = live
-            .leaf
-            .end
-            .min(len)
-            .saturating_sub(1)
-            .max(live.leaf.start);
-        let mut last = rope.byte_to_line(end);
-        while last > first && text(last).is_empty() {
-            last -= 1;
-        }
-        let close = text(last);
-        let closed =
-            last > first && close.starts_with(mark) && close.chars().all(|c| mark.starts_with(c));
-        let content = first + 1..if closed { last } else { last + 1 };
-        Some(Fenced {
-            first,
-            last,
-            closed,
-            bare: open.chars().all(|c| mark.starts_with(c)),
-            empty: content.clone().all(|l| text(l).is_empty()),
-            content,
-        })
+        fenced_lines(rope, live.leaf)
     }
 
     /// 将围栏代码块 `fenced` 的全部各行替换为 `text`，光标放在其开头。
@@ -898,7 +936,9 @@ impl App {
         if chars == 0 || rope.char(chars - 1) == '\n' {
             return false;
         }
-        if self.live_prose_at(rope.len_bytes()) != Some(false) {
+        if self.live_prose_at(rope.len_bytes()) != Some(false)
+            || self.live_fenced().is_some_and(|fence| !fence.closed)
+        {
             return false;
         }
         if let Some(doc) = self.editor.active_mut() {

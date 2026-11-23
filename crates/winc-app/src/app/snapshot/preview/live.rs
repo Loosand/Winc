@@ -342,6 +342,29 @@ fn enter_in_the_preview_continues_lists_and_splits_paragraphs() {
 }
 
 #[test]
+fn leaving_a_task_list_and_joining_paragraphs_preserves_the_crlf_note() {
+    use winc_editor::Command;
+    use winit::keyboard::{Key, NamedKey};
+    let source = "- [x] 已做\r\n- [ ] ";
+    let (mut app, dir) = live_doc("md-task-exit-join", source);
+    put_caret(&mut app, "- [ ] ", true);
+    let enter = Key::Named(NamedKey::Enter);
+    assert!(app.markdown_key(&enter, false));
+    app.run(Command::Insert("第一段".into()));
+    settle(&mut app);
+    assert!(app.markdown_key(&enter, false));
+    app.run(Command::Insert("第二段".into()));
+    let split = "- [x] 已做\r\n\r\n第一段\r\n\r\n第二段";
+    assert_eq!(doc_text(&app), split);
+    put_caret(&mut app, "第二段", false);
+    assert!(app.markdown_key(&Key::Named(NamedKey::Backspace), false));
+    assert_eq!(with_caret(&app), "- [x] 已做\r\n\r\n第一段|第二段");
+    app.run(Command::Undo);
+    assert_eq!(doc_text(&app), split);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn repeated_enter_moves_the_visible_caret_down_one_row_at_a_time() {
     use winit::keyboard::{Key, NamedKey};
     for (name, source) in [
