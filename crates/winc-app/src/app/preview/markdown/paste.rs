@@ -10,8 +10,9 @@ pub(super) struct Spot {
 }
 
 impl Spot {
-    /// 返回放在粘贴处的多块内容 `text`，前后与其他文字各隔一个空行。
-    fn block(&self, text: &str) -> String {
+    /// Return the inserted block and its separators in one edit. A table must leave
+    /// a new prose line at the caret even when there is no existing text to its right.
+    fn block(&self, text: &str, continue_after: bool) -> String {
         let lead = if !self.before.trim().is_empty() {
             "\n\n"
         } else if !self.blank_above {
@@ -20,10 +21,10 @@ impl Spot {
             ""
         };
         let text = text.trim_end_matches('\n');
-        let tail = if self.after.trim().is_empty() {
-            ""
-        } else {
+        let tail = if continue_after || !self.after.trim().is_empty() {
             "\n\n"
+        } else {
+            ""
         };
         format!("{lead}{text}{tail}")
     }
@@ -43,7 +44,7 @@ impl App {
             }
             let spot = self.prose_spot()?;
             let table = winc_preview::markdown::cells::from_tsv(content)?;
-            Some(spot.block(&table))
+            Some(spot.block(&table, self.markdown_live()))
         })
     }
 
@@ -90,10 +91,22 @@ impl App {
             || body
                 .split_once(". ")
                 .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()));
-        match !body.contains('\n') && !starts_block {
-            true => Some(body.to_owned()),
-            false => Some(spot.block(&converted.text)),
+        if !body.contains('\n') && !starts_block {
+            return Some(body.to_owned());
         }
+        // The HTML writer ends each top-level table row with a pipe. Use that
+        // cheap check before asking the parser whether the last block is a table.
+        let end_in_prose = self.markdown_live()
+            && spot.after.trim().is_empty()
+            && body
+                .lines()
+                .next_back()
+                .is_some_and(|line| line.starts_with('|') && line.ends_with('|'))
+            && matches!(
+                markdown::parse(body).blocks.last(),
+                Some(markdown::Block::Table(..))
+            );
+        Some(spot.block(&converted.text, end_in_prose))
     }
 
     /// Copy a single note selection without changing the note or caret.
