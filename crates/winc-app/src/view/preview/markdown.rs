@@ -1,7 +1,7 @@
 //! Markdown 预览的排版和绘制，字号与间距都按逻辑像素算。
 //!
-//! 正文是编辑器字号的 16/13 倍，编辑器默认 13 时正文 16；行高 1.5 倍，段落之间 16 逻辑像素，
-//! 标题为正文的 2/1.5/1.25/1/0.875/0.85 倍。排版在 `layout` 子模块里做，要量字宽，所以在绘制
+//! 正文是编辑器字号的 16/13 倍。段距、行高和标题层级由 `winc-typeset` 统一；
+//! 排版要量字宽，所以在绘制
 //! 时进行，结果按顶层块缓存（[`Laid`]）：文字改了只重排变了的块，宽度、字号、配色或图片大小
 //! 变了才整份重排。换行时不在「，。」这类标点前面、「（“」这类标点后面断。
 
@@ -168,7 +168,12 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     let mut before = None;
     // 很长的文档只保留这个范围内的块的排版结果：视口前后各两屏，以及光标、选区所在的块前后。
     let near = {
-        let view = drawn_scroll(app.preview.markdown.scroll()) - pad;
+        let view = drawn_scroll(
+            app.preview
+                .markdown
+                .scroll()
+                .min(app.preview.markdown.max_scroll()),
+        ) - pad;
         let around = |block: usize| block.saturating_sub(NEAR_BLOCKS)..block + NEAR_BLOCKS + 1;
         let chosen = app.preview.markdown.selection;
         let picked = (app.preview.markdown.layout.as_ref().zip(chosen)).map(|(laid, (a, b))| {
@@ -225,7 +230,13 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             // 文字未变时保留旧的各块供沿用，并记录视口顶边所在的块，排版期间保持其屏幕位置。
             let same = (old.as_ref())
                 .filter(|l| l.source == source && l.blocks.len() == parsed.blocks.len());
-            let top = drawn_scroll(app.preview.markdown.scroll());
+            let width_changed = same.is_some_and(|l| l.key.width != key.width);
+            let top = drawn_scroll(
+                app.preview
+                    .markdown
+                    .scroll()
+                    .min(app.preview.markdown.max_scroll()),
+            );
             let held = same.and_then(|l| l.place_at(top - l.pad));
             let mut window = same.map(|l| l.blocks_in(top - l.pad - area.h, top + area.h * 2.0));
             let mut kept = same.map(|l| l.blocks.clone());
@@ -273,7 +284,8 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                 kept = Some(laid.blocks);
             };
             // 分帧排版、图片加载完成、收起或展开标题后，视口顶边所在块的屏幕位置不变。
-            let anchored = was_pending || laid.pending() || !loaded.is_empty() || refold;
+            let anchored =
+                width_changed || was_pending || laid.pending() || !loaded.is_empty() || refold;
             if let Some((i, off)) = held.filter(|_| anchored) {
                 let y = laid.tops[i] + off.min(room_below(&laid, i)) + pad;
                 app.preview.markdown.set_scroll(y);

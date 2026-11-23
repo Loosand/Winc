@@ -671,6 +671,9 @@ impl App {
             && !matches!(command, Command::Undo | Command::Redo))
         .then(|| self.property_body_start())
         .flatten();
+        let repair = (!property_patch && self.focus == Focus::Editor && self.vim.is_none())
+            .then(|| self.markdown_selection_replacement(&command))
+            .flatten();
 
         let Some(doc) = self.editor.active_mut() else {
             return;
@@ -714,7 +717,12 @@ impl App {
         let Some(doc) = self.editor.active_mut() else {
             return;
         };
-        doc.execute(command, page, tab_width);
+        if let Some(repair) = repair {
+            doc.goal_cell = None;
+            doc.apply(repair);
+        } else {
+            doc.execute(command, page, tab_width);
+        }
         if let Some(input) = input {
             self.vim_typed(input);
         }

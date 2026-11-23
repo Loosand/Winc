@@ -439,6 +439,238 @@ fn shift_down_selects_a_wrapped_row_for_paste_and_undo() {
 }
 
 #[test]
+fn replacing_across_blocks_keeps_the_unselected_emphasis_balanced() {
+    use winc_core::Selection;
+    use winc_editor::Command;
+    use winit::event::Ime;
+    let source = "开头 **保留 删除**\r\n\r\n选中部分 后文";
+    let (mut app, dir) = live_doc("md-replace-bold-boundary", source);
+    let at = |word| source[..source.find(word).unwrap()].chars().count();
+    let selection = Selection::new(at(" 后文"), at("删除"));
+    app.editor.active_mut().unwrap().selection = selection;
+    settle(&mut app);
+    app.on_ime(Ime::Commit("换掉".into()));
+    assert_eq!(with_caret(&app), "开头 **保留** 换掉| 后文");
+    app.run(Command::Undo);
+    assert_eq!(doc_text(&app), source);
+    assert_eq!(app.editor.active().unwrap().selection, selection);
+    app.run(Command::Redo);
+    assert_eq!(with_caret(&app), "开头 **保留** 换掉| 后文");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn long_notes(sections: usize) -> String {
+    (0..sections).map(|i| format!("## 第 {i} 节\n\n中英文 mixed {i}，**重点**，图表和引用。👩‍💻 e\u{301}\n\n- 列表项\n- 条目\n\n")).collect()
+}
+
+#[test]
+fn background_markdown_reflow_keeps_the_visible_editing_line_in_place() {
+    use std::time::Duration;
+    use winc_editor::Command;
+    let (mut app, dir) = live_doc("md-async-anchored-edit", &long_notes(1200));
+    put_caret(&mut app, "中英文 mixed 600", true);
+    let middle = app.preview.markdown.area.h / 2.0;
+    let off = caret_screen_y(&app) - app.preview.markdown.area.y - middle;
+    app.preview
+        .markdown
+        .set_scroll(app.preview.markdown.scroll() + off);
+    paint(&mut app);
+    let original = app.editor.active().unwrap().selection.head;
+    // Force the asynchronous path rather than depending on a machine-specific parse time.
+    app.preview.markdown.cost = Some(Duration::from_secs(1));
+    app.run(Command::Insert("\n\n# 新的标题\n\n继续输入".into()));
+    paint(&mut app);
+    let before = caret_screen_y(&app);
+    let from_top = before - app.preview.markdown.area.y;
+    assert!(
+        (0.0..app.preview.markdown.area.h).contains(&from_top),
+        "before: {before}"
+    );
+    // Exercise a real selection while the worker's new structure is not yet applied.
+    app.run(Command::MoveLeft {
+        word: false,
+        extend: true,
+    });
+    paint(&mut app);
+    let selection = app.editor.active().unwrap().selection;
+    assert!(selection.head > original && !selection.is_empty());
+    let before = caret_screen_y(&app);
+    settle(&mut app);
+    let after = caret_screen_y(&app);
+    assert_eq!(app.editor.active().unwrap().selection, selection);
+    assert!(
+        (after - before).abs() <= 2.0,
+        "before {before}, after {after}"
+    );
+    use winit::event::Ime;
+    let expected = doc_text(&app).replace("继续输入", "继续输新字👩‍💻e\u{301}");
+    app.preview.markdown.cost = Some(Duration::from_secs(1));
+    app.on_ime(Ime::Preedit("xin".into(), Some((3, 3))));
+    paint(&mut app);
+    assert_eq!(app.editor.active().unwrap().selection, selection);
+    let old = app.preview.markdown.parsed.clone().unwrap();
+    app.on_ime(Ime::Commit("新字".into()));
+    paint(&mut app); // enqueue this revision; do not drain the result
+    assert!(std::sync::Arc::ptr_eq(
+        &old,
+        app.preview.markdown.parsed.as_ref().unwrap()
+    ));
+    for text in ["👩‍💻", "e\u{301}"] {
+        app.on_ime(Ime::Commit(text.into()));
+    }
+    let committed = app.editor.active().unwrap().selection;
+    assert_eq!(doc_text(&app), expected);
+    paint(&mut app);
+    app.scroll_markdown_to(0.0);
+    paint(&mut app);
+    settle(&mut app);
+    assert!(
+        app.preview.markdown.scroll() <= 2.0,
+        "a reparse chased an offscreen caret"
+    );
+    assert_eq!(doc_text(&app), expected);
+    assert_eq!(app.editor.active().unwrap().selection, committed);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_outline_jump_during_reparse_stays_put_for_the_next_drag() {
+    use std::time::Duration;
+    use winc_editor::Command;
+    let source = long_notes(1200);
+    let (mut app, dir) = live_doc("md-async-outline-drag", &source);
+    app.show_outline();
+    paint(&mut app);
+    let heading = app
+        .panels
+        .outline
+        .items
+        .iter()
+        .position(|item| item.name == "第 900 节")
+        .unwrap();
+    put_caret(&mut app, "中英文 mixed 0", true);
+    app.focus = crate::app::Focus::Editor;
+    app.preview.markdown.cost = Some(Duration::from_secs(1));
+    app.run(Command::Insert("新增".into()));
+    paint(&mut app);
+    app.jump_to_outline(heading);
+    settle(&mut app);
+    let at = caret_screen_y(&app) - app.preview.markdown.area.y;
+    assert!((0.0..app.preview.markdown.area.h).contains(&at));
+    let doc = app.editor.active().unwrap();
+    let selection = doc.selection;
+    let selected = doc
+        .text()
+        .rope()
+        .unwrap()
+        .slice(selection.from()..selection.to());
+    assert_eq!(selected, "第 900 节");
+    let top = app.preview.markdown.scroll() + at - app.preview.markdown.area.h / 3.0;
+    app.scroll_markdown_to(top);
+    paint(&mut app);
+    let text = doc_text(&app);
+    let start = text.find("中英文 mixed 900").unwrap();
+    let end = start + text[start..].find("条目").unwrap() + "条".len();
+    let md = &app.preview.markdown;
+    let laid = md.layout.as_ref().unwrap();
+    let point = |byte| {
+        let (x, y, h) = laid.caret_point(byte).unwrap();
+        (laid.left + x + 0.5, md.area.y + y + h / 2.0 - md.scroll())
+    };
+    let (from, to) = (point(end), point(start));
+    app.on_mouse_move(from.0, from.1);
+    app.on_mouse_down(MouseButton::Left);
+    app.on_mouse_move(to.0, to.1);
+    app.on_mouse_up(MouseButton::Left);
+    settle(&mut app);
+    let doc = app.editor.active().unwrap();
+    let selection = doc.selection;
+    assert!(selection.anchor > selection.head);
+    let selected = doc
+        .text()
+        .rope()
+        .unwrap()
+        .slice(selection.from()..selection.to());
+    assert!(
+        selected.to_string().starts_with("中英文 mixed 900"),
+        "{selected}"
+    );
+    assert!(selected.to_string().ends_with("条"), "{selected}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "offscreen writing performance, run explicitly"]
+fn time_single_view_writing() {
+    use std::time::Instant;
+    use winc_editor::Command;
+    let list: String = (0..4000)
+        .map(|i| format!("- 第 {i} 项，说明 **重点**\n"))
+        .collect();
+    let rows: String = (0..4000)
+        .map(|i| format!("| {i} | 第 {i} 项 |\n"))
+        .collect();
+    let table = format!("| 序号 | 说明 |\n| --- | --- |\n{rows}");
+    let report = |values: &mut [f64]| {
+        values.sort_by(f64::total_cmp);
+        (
+            values[values.len() / 2],
+            values[(values.len() * 95).div_ceil(100) - 1],
+        )
+    };
+    for (name, body) in [
+        ("mixed-small", long_notes(1000)),
+        ("mixed-large", long_notes(10000)),
+        ("list", list),
+        ("table", table),
+    ] {
+        let text = format!("# 性能样稿\n\n标记位置\n\n{body}");
+        let open = Instant::now();
+        let (mut app, dir) = live_doc(&format!("md-timing-{name}"), &text);
+        let open_ms = open.elapsed().as_secs_f64() * 1000.0;
+        put_caret(&mut app, "标记位置", true);
+        let (mut first, mut parser, mut reflow, mut settled, mut scroll, mut jump) = (
+            [0.0; 16], [0.0; 16], [0.0; 16], [0.0; 16], [0.0; 16], [0.0; 16],
+        );
+        for i in 0..16 {
+            let now = Instant::now();
+            app.run(Command::Insert("字".into()));
+            paint(&mut app);
+            first[i] = now.elapsed().as_secs_f64() * 1000.0;
+            app.wait_for_markdown();
+            parser[i] = app.preview.markdown.cost.unwrap_or_default().as_secs_f64() * 1000.0;
+            let parsed = Instant::now();
+            paint(&mut app);
+            reflow[i] = parsed.elapsed().as_secs_f64() * 1000.0;
+            settled[i] = now.elapsed().as_secs_f64() * 1000.0;
+        }
+        for time in &mut scroll {
+            let started = Instant::now();
+            app.scroll_markdown(-120.0);
+            paint(&mut app);
+            *time = started.elapsed().as_secs_f64() * 1000.0;
+        }
+        for (i, time) in jump.iter_mut().enumerate() {
+            let started = Instant::now();
+            app.scroll_markdown_to(app.preview.markdown.height * (i + 1) as f32 / 18.0);
+            paint(&mut app);
+            *time = started.elapsed().as_secs_f64() * 1000.0;
+        }
+        eprintln!(
+            "{name} {} KiB open={open_ms:.1}ms p50/p95(ms) first={:.2?} parse={:.2?} reflow={:.2?} settled={:.2?} scroll={:.2?} jump={:.2?}",
+            text.len() / 1024,
+            report(&mut first),
+            report(&mut parser),
+            report(&mut reflow),
+            report(&mut settled),
+            report(&mut scroll),
+            report(&mut jump)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
 fn repeated_enter_moves_the_visible_caret_down_one_row_at_a_time() {
     use winit::keyboard::{Key, NamedKey};
     for (name, source) in [

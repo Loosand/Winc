@@ -18,10 +18,9 @@ use crate::app::{App, Focus};
 pub(crate) const BASE_RATIO: f32 = 16.0 / 13.0;
 /// 正文宽度为「标准」（`markdown.textWidth`）时正文的最大宽度（逻辑像素，经验值）：更宽时居中、
 /// 两侧留白。
-pub(crate) const MAX_WIDTH: f32 = 880.0;
-/// 正文宽度为「较宽」时正文的最大宽度（逻辑像素）：约为标准的 1.4 倍，1440 逻辑像素宽的屏幕上
-/// 隐藏侧栏后两侧仍各留约 100。
-pub(crate) const WIDE_WIDTH: f32 = 1240.0;
+pub(crate) const MAX_WIDTH: f32 = 720.0;
+/// 「较宽」给表格和双语长段留出空间，保留两侧页边距。
+pub(crate) const WIDE_WIDTH: f32 = 1040.0;
 /// 区域不窄于 600 逻辑像素时文档四周的留白（逻辑像素，经验值）。
 pub(crate) const PAD: f32 = 32.0;
 /// 窄的时候（分栏，区域宽不足 600 逻辑像素）两边的留白（逻辑像素，经验值）。
@@ -46,6 +45,7 @@ pub(crate) struct Laid {
     pub(crate) ranges: Vec<std::ops::Range<usize>>,
     /// Source-addressable line boxes in the spaces between formatted blocks.
     gaps: Vec<BlankGap>,
+    blank_offsets: Arc<[usize]>,
     /// 排版时光标所在的叶子块，见 [`LiveKey`]。
     ///
     /// 不能编辑时为 `None`；光标换了叶子块（表格里换了一格）、或者打了字，这一块要重排。
@@ -77,28 +77,17 @@ pub(crate) struct Laid {
 struct BlankGap {
     top: f32,
     row: f32,
-    starts: Box<[usize]>,
-    end: usize,
+    offsets: std::ops::Range<usize>,
 }
 
 impl BlankGap {
-    fn new(rope: &ropey::Rope, lines: std::ops::Range<usize>, top: f32, height: f32) -> Self {
-        let row = height / lines.len() as f32;
-        let end = if lines.end == rope.len_lines() {
-            rope.len_bytes() + 1 // the empty last line can start at EOF
-        } else {
-            rope.line_to_byte(lines.end)
-        };
-        Self {
-            top,
-            row,
-            starts: lines.map(|line| rope.line_to_byte(line)).collect(),
-            end,
-        }
+    fn new(offsets: std::ops::Range<usize>, top: f32, height: f32) -> Self {
+        let row = height / (offsets.len() - 1) as f32;
+        Self { top, row, offsets }
     }
 
     fn bottom(&self) -> f32 {
-        self.top + self.row * self.starts.len() as f32
+        self.top + self.row * (self.offsets.len() - 1) as f32
     }
 }
 
@@ -371,18 +360,33 @@ pub(crate) fn old_caret(
     live: Option<&LiveKey>,
     clicked: Option<usize>,
 ) -> Option<(usize, f32)> {
-    let old = old.filter(|old| {
-        old.source == source && old.live.as_ref().map(|k| k.2) == live.map(|k| k.2)
-    })?;
-    let source = app
+    let old = old?;
+    let caret = app
         .markdown_live()
         .then(|| app.live_caret_source())
         .flatten()?;
-    if clicked == Some(source) && !app.scroll.keyed {
+    if clicked == Some(caret) && !app.scroll.keyed {
         return None;
     }
-    old.caret_point(source)
-        .map(|(_, y, _)| (source, y - old.pad))
+    let (_, y, h) = old.caret_point(caret)?;
+    if old.source != source {
+        // A background parse can replace an approximate layout for the same
+        // edit. Anchor only its unchanged, visible caret; never chase one the
+        // user left offscreen by scrolling or moved since the last frame.
+        let (previous, next) = (old.live.as_ref()?, live?);
+        let scroll = app.preview.markdown.scroll();
+        if previous.2 != next.2
+            || previous.3 != Some(caret)
+            || next.3 != Some(caret)
+            || y + h <= scroll
+            || y >= scroll + app.preview.markdown.area.h
+        {
+            return None;
+        }
+    } else if old.live.as_ref().map(|k| k.2) != live.map(|k| k.2) {
+        return None;
+    }
+    Some((caret, y - old.pad))
 }
 
 /// 重排后光标所在的那一行在屏幕上不动：光标换了叶子块时，上面的块从原文换回排版（或反过来），
@@ -539,39 +543,28 @@ pub(crate) fn lay_out(
     let mut gaps = Vec::new();
     // During an asynchronous reparse, keep the raw editing fallback rather than attaching
     // old source offsets to the newly edited note.
-    let rope = app
-        .editor
-        .active()
-        .filter(|d| editable && app.preview.markdown.checked == Some(d.revision))
-        .and_then(|d| d.text().rope());
-    let lines_before = |i: usize| {
-        let rope = rope?;
-        let n = *parsed.blank_before.get(i)?;
-        if n == 0 || hidden[i] || (i > 0 && hidden[i - 1]) {
-            return None;
-        }
-        let end = rope.byte_to_line(parsed.ranges[i].start);
-        Some(end.checked_sub(n)?..end)
+    let checked = editable
+        && app
+            .editor
+            .active()
+            .is_some_and(|d| app.preview.markdown.checked == Some(d.revision));
+    let blank = &parsed.blank_rows;
+    let blank_before = |i: usize, offsets: std::ops::Range<usize>| {
+        (checked && !offsets.is_empty() && !hidden[i] && (i == 0 || !hidden[i - 1]))
+            .then_some(offsets)
     };
-    let lines_after = rope.and_then(|rope| {
-        let n = parsed.blank_after;
-        let end = rope.len_lines();
-        // A single conventional final newline need not add a permanent row.
-        (n > 1 && n < end && hidden.last() == Some(&false)).then(|| end - n..end)
-    });
+    let after = blank.after();
+    // A single conventional final newline need not add a permanent row.
+    let blank_after = checked && after.len() > 2 && hidden.last() == Some(&false);
     let mapped = live.is_some_and(|live| {
-        let Some(rope) = rope else {
-            return false;
-        };
-        let line = rope.byte_to_line(live.at);
         [
-            lines_before(live.block),
-            lines_before(live.block + 1),
-            lines_after.clone(),
+            blank_before(live.block, blank.before(live.block)),
+            blank_before(live.block + 1, blank.before(live.block + 1)),
+            blank_after.then(|| after.clone()),
         ]
         .into_iter()
         .flatten()
-        .any(|lines| lines.contains(&line))
+        .any(|r| (blank.offsets()[r.start]..blank.offsets()[r.end - 1]).contains(&live.at))
     });
     let mut stale = Vec::new();
     let near = near.filter(|_| parsed.blocks.len() > SHED_BLOCKS);
@@ -630,7 +623,8 @@ pub(crate) fn lay_out(
         // 沿用的结果已经释放了要画的项，而这一块在需要保留的范围内：重新排版。
         let (margin, margin_bottom) = margins(block, key.base, false);
         let already = blocks.last().map_or(0.0, |(_, b)| b.editing_blank_height);
-        let extra_rows = parsed.blank_before[i].saturating_sub(usize::from(i != 0));
+        let offsets = blank.before(i);
+        let extra_rows = offsets.len().saturating_sub(1 + usize::from(i != 0));
         let gap = if editable && (i == 0 || !hidden[i - 1]) {
             (extra_rows as f32 * blank_row - already).max(0.0)
         } else {
@@ -639,9 +633,9 @@ pub(crate) fn lay_out(
         let space = below.map_or(0.0, |below: f32| below.max(margin)) + gap;
         if already == 0.0
             && space > 0.0
-            && let Some(lines) = lines_before(i)
+            && let Some(offsets) = blank_before(i, offsets)
         {
-            gaps.push(BlankGap::new(rope.unwrap(), lines, y, space));
+            gaps.push(BlankGap::new(offsets, y, space));
         }
         let top = y + space;
         let wanted = |laid: &LaidBlock| {
@@ -719,11 +713,9 @@ pub(crate) fn lay_out(
     }
     if editable && hidden.last() == Some(&false) {
         let already = blocks.last().map_or(0.0, |(_, b)| b.editing_blank_height);
-        let extra = parsed.blank_after.saturating_sub(1) as f32 * blank_row;
-        if already == 0.0
-            && let Some(lines) = lines_after
-        {
-            gaps.push(BlankGap::new(rope.unwrap(), lines, y, extra));
+        let extra = after.len().saturating_sub(2) as f32 * blank_row;
+        if already == 0.0 && blank_after {
+            gaps.push(BlankGap::new(after, y, extra));
             y += extra;
         } else {
             y += (extra - already).max(0.0);
@@ -811,6 +803,7 @@ pub(crate) fn lay_out(
             ranges
         },
         gaps,
+        blank_offsets: Arc::clone(blank.offsets()),
         live: live.map(|l| live_key(l, app.preedit_at(Focus::Editor))),
         caret: std::cell::Cell::new(None),
         upstream: std::cell::Cell::new(None),
@@ -1034,7 +1027,7 @@ impl Laid {
             .partition_point(|gap| gap.top <= y)
             .checked_sub(1)?;
         let gap = &self.gaps[i];
-        gap.starts
+        self.blank_offsets[gap.offsets.start..gap.offsets.end - 1]
             .get(((y - gap.top) / gap.row).floor() as usize)
             .copied()
     }
@@ -1042,13 +1035,14 @@ impl Laid {
     pub(super) fn blank_point(&self, source: usize) -> Option<Point> {
         let i = self
             .gaps
-            .partition_point(|gap| gap.starts[0] <= source)
+            .partition_point(|gap| self.blank_offsets[gap.offsets.start] <= source)
             .checked_sub(1)?;
         let gap = &self.gaps[i];
-        if source >= gap.end {
+        let (end, starts) = self.blank_offsets[gap.offsets.clone()].split_last()?;
+        if source >= *end {
             return None;
         }
-        let row = gap.starts.partition_point(|&s| s <= source) - 1;
+        let row = starts.partition_point(|&s| s <= source) - 1;
         Some((0.0, self.pad + gap.top + row as f32 * gap.row, gap.row))
     }
 
@@ -1077,7 +1071,7 @@ impl Laid {
         } else {
             row.ceil() - 1.0
         };
-        let row = row.clamp(0.0, gap.starts.len() as f32 - 1.0);
+        let row = row.clamp(0.0, (gap.offsets.len() - 2) as f32);
         let center = self.pad + gap.top + (row + 0.5) * gap.row;
         if down {
             target.min(center)

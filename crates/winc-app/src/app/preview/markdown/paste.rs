@@ -109,6 +109,101 @@ impl App {
         Some(spot.block(&converted.text, end_in_prose))
     }
 
+    /// Keep the unselected ends of a simple emphasis span intact when replacing
+    /// across source lines. Use one transaction with the original selection for undo.
+    pub(in crate::app) fn markdown_selection_replacement(
+        &self,
+        command: &winc_editor::Command,
+    ) -> Option<winc_core::Transaction> {
+        use winc_core::{Change, EditKind, Selection, Transaction};
+        use winc_editor::Command;
+        let replace = match command {
+            Command::Insert(text) | Command::Paste(text) if !text.contains(['\n', '\r']) => text,
+            Command::Backspace { .. } | Command::Delete { .. } => "",
+            _ => return None,
+        };
+        let doc = self.editor.active()?;
+        if !self.markdown_live() || doc.has_cursors() || doc.selection.is_empty() {
+            return None;
+        }
+        let rope = doc.text().rope()?;
+        let (first, last) = (
+            rope.char_to_line(doc.selection.from()),
+            rope.char_to_line(doc.selection.to()),
+        );
+        if first == last
+            || rope
+                .line(first)
+                .len_bytes()
+                .max(rope.line(last).len_bytes())
+                > 32 * 1024
+        {
+            return None;
+        }
+        let (mut a, mut b) = (
+            rope.char_to_byte(doc.selection.from()),
+            rope.char_to_byte(doc.selection.to()),
+        );
+        let (left, right) = (rope.line_to_byte(first), rope.line_to_byte(last));
+        let (before, after) = (rope.line(first).to_string(), rope.line(last).to_string());
+        let marker = markdown::format::emphasis_boundary;
+        let start = (self.live_prose_at(a) == Some(true))
+            .then(|| marker(&before, a - left))
+            .flatten();
+        let end = (self.live_prose_at(b) == Some(true))
+            .then(|| marker(&after, b - right))
+            .flatten();
+        if start.is_none() && end.is_none() {
+            return None;
+        }
+        // Matching marks already join around the replacement. Do not insert
+        // back-to-back delimiters, which the parser treats as a different run.
+        if let (Some((_, l)), Some((_, r))) = (&start, &end)
+            && (l == r || replace.is_empty())
+        {
+            return None;
+        }
+        let mut inserted = String::new();
+        if let Some((range, mark)) = start {
+            let body = &before[range.start + mark.len()..a - left];
+            let kept = body.trim_end();
+            if kept.is_empty() {
+                a = left + range.start;
+            } else {
+                a -= body.len() - kept.len();
+                inserted.push_str(mark);
+            }
+            inserted.push_str(&body[kept.len()..]);
+        }
+        inserted.push_str(replace);
+        let caret = inserted.chars().count();
+        if let Some((range, mark)) = end {
+            let body = &after[b - right..range.end - mark.len()];
+            let kept = body.trim_start();
+            inserted.push_str(&body[..body.len() - kept.len()]);
+            if kept.is_empty() {
+                b = right + range.end;
+            } else {
+                b += body.len() - kept.len();
+                inserted.push_str(mark);
+            }
+        }
+        let start = rope.byte_to_char(a);
+        if !doc.fits_edit(start, rope.byte_to_char(b)) {
+            return None;
+        }
+        Some(Transaction::new(
+            vec![Change {
+                start,
+                removed: rope.byte_slice(a..b).to_string(),
+                inserted,
+            }],
+            doc.selection,
+            Selection::point(start + caret),
+            EditKind::Other,
+        ))
+    }
+
     /// Copy a single note selection without changing the note or caret.
     pub(in crate::app) fn copy_note_selection(&mut self, markdown: bool) -> bool {
         let Some(doc) = self.editor.active() else {

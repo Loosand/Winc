@@ -467,8 +467,14 @@ fn a_long_document_keeps_layout_only_near_the_viewport() {
     // 改变宽度后分帧重排，排完后离视口远的块仍然释放。
     app.set_text_width(winc_config::TextWidth::Full);
     settle(&mut app);
-    let (shed, drawn, ..) = state(&app);
-    assert!(shed > 1000 && drawn, "{shed}");
+    let (shed, drawn, _, seen) = state(&app);
+    let laid = app.preview.markdown.layout.as_ref().unwrap();
+    assert!(
+        shed > 1000 && drawn,
+        "{shed} {seen:?}; retained: {:?}; pending: {}",
+        laid.near.as_ref().map(|near| &near.rows),
+        laid.pending()
+    );
     assert!(!app.preview.markdown.catch_up.pending);
 
     // 可编辑的预览里光标跳到文末：光标所在的块排好，预览滚动到那里；回到开头同样如此。

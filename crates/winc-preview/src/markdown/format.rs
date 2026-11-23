@@ -20,6 +20,39 @@ pub struct Toggle {
     pub select: Range<usize>,
 }
 
+/// Return the source span and delimiter of a simple emphasis run cut at `at`.
+/// Skip overlapping styles, links and inline code, which need their own edit rules.
+pub fn emphasis_boundary(line: &str, at: usize) -> Option<(Range<usize>, &str)> {
+    use pulldown_cmark::{Event, Parser, Tag};
+    let mut found = None;
+    for (event, range) in Parser::new_ext(line, super::options()).into_offset_iter() {
+        if !(range.start < at && at < range.end) {
+            continue;
+        }
+        let width = match event {
+            Event::Start(Tag::Emphasis) => 1,
+            Event::Start(Tag::Strong | Tag::Strikethrough) => 2,
+            Event::Start(Tag::Link { .. } | Tag::Image { .. }) | Event::Code(_) => return None,
+            _ => continue,
+        };
+        let raw = &line[range.clone()];
+        let Some(mark) = raw
+            .get(..width)
+            .filter(|mark| matches!(*mark, "*" | "**" | "~~"))
+        else {
+            continue;
+        };
+        if !raw.ends_with(mark) || at < range.start + width || at > range.end - width {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some((range, mark));
+    }
+    found
+}
+
 /// `line` 中的选区 `selection` 是否已有标记 `mark`，即 [`toggle`] 会移除标记。
 pub fn active(line: &str, selection: Range<usize>, mark: &str) -> bool {
     if selection.is_empty() {

@@ -56,10 +56,8 @@ pub struct Markdown {
     ///
     /// 移到最后的脚注算在原文末尾。
     pub lines: Vec<usize>,
-    /// Source blank rows before each top-level block, including the ordinary separator.
-    pub blank_before: Vec<usize>,
-    /// Source rows after the final block, including the empty line after its final newline.
-    pub blank_after: usize,
+    /// Packed byte offsets for blank rows, including the ordinary separator between blocks.
+    pub blank_rows: BlankRows,
     /// Valid YAML header, kept separate from the normal Markdown blocks.
     pub properties: Option<(usize, Vec<properties::Field>)>,
     /// 每个顶层块在原文中的字节范围，与 `blocks` 一一对应；块里记下的原文位置（见
@@ -73,6 +71,31 @@ pub struct Markdown {
     pub leaves: Vec<LeafRange>,
     /// 原文的字节数：与当前文档的长度相比，得出解析之后又改了多少。
     pub len: usize,
+}
+
+/// Source starts of blank rows. Each nonempty slice ends with the exclusive byte limit.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct BlankRows {
+    offsets: std::sync::Arc<[usize]>,
+    before: Vec<Range<usize>>,
+    after: Range<usize>,
+}
+
+impl BlankRows {
+    /// Indices in [`Self::offsets`] for the gap before the given top-level block.
+    pub fn before(&self, block: usize) -> Range<usize> {
+        self.before.get(block).cloned().unwrap_or_default()
+    }
+
+    /// Indices in [`Self::offsets`] for the gap at the end of the document.
+    pub fn after(&self) -> Range<usize> {
+        self.after.clone()
+    }
+
+    /// Shared byte offsets, so a reflow only needs to update the on-screen geometry.
+    pub fn offsets(&self) -> &std::sync::Arc<[usize]> {
+        &self.offsets
+    }
 }
 
 /// 文字与原文的对照：文字中的字节偏移对应原文中的哪个字节偏移。
@@ -1298,7 +1321,7 @@ impl Builder<'_> {
                 leaves.push(leaf);
             }
         }
-        let (blank_before, blank_after) = blank_rows(source, &self.ranges, main);
+        let blank_rows = blank_rows(source, &self.ranges, main);
         let properties = match properties::header(source) {
             properties::Header::Valid { end, fields }
                 if self
@@ -1314,8 +1337,7 @@ impl Builder<'_> {
             blocks: self.root,
             hashes,
             lines,
-            blank_before,
-            blank_after,
+            blank_rows,
             properties,
             ranges: self.ranges,
             leaves,
@@ -1338,8 +1360,9 @@ impl Builder<'_> {
 }
 
 /// Recover intentional blank rows without treating hidden definitions or generated blocks as spacing.
-fn blank_rows(source: &str, ranges: &[Range<usize>], main: usize) -> (Vec<usize>, usize) {
-    let mut before = vec![0; ranges.len()];
+fn blank_rows(source: &str, ranges: &[Range<usize>], main: usize) -> BlankRows {
+    let mut before = vec![0..0; ranges.len()];
+    let mut offsets = Vec::new();
     let is_white = |b: &u8| matches!(b, b' ' | b'\t' | b'\r' | b'\n');
     let source = source.as_bytes();
     let count = |bytes: &[u8]| memchr::memchr_iter(b'\n', bytes).count();
@@ -1349,24 +1372,57 @@ fn blank_rows(source: &str, ranges: &[Range<usize>], main: usize) -> (Vec<usize>
             .rposition(|b| !is_white(b))
             .map_or(0, |i| i + 1)
     };
+    let line_start = |at| memchr::memrchr2(b'\n', b'\r', &source[..at]).map_or(0, |i| i + 1);
+    let previous_line = |at: usize| {
+        // Match Ropey's CR, LF and CRLF boundaries; do not split a CRLF pair.
+        let newline = at.saturating_sub(1);
+        let before = newline
+            - usize::from(
+                source.get(newline) == Some(&b'\n') && newline > 0 && source[newline - 1] == b'\r',
+            );
+        line_start(before)
+    };
+    let mut push = |rows: usize, at, tail| {
+        let start = offsets.len();
+        if rows > 0 {
+            let mut line = line_start(at);
+            if tail {
+                offsets.push(source.len() + 1); // EOF itself can be a blank-row start
+            }
+            for _ in 0..rows {
+                offsets.push(line);
+                line = previous_line(line);
+            }
+            if !tail {
+                offsets.push(line);
+            }
+            offsets[start..].reverse();
+        }
+        start..offsets.len()
+    };
     for i in 0..main {
         let start = ranges[i].start;
-        if i == 0 {
+        let rows = if i == 0 {
             let lead = &source[..start];
             if lead.iter().all(is_white) {
-                before[i] = count(lead);
+                count(lead)
+            } else {
+                0
             }
-            continue;
-        }
-        let prev = &ranges[i - 1];
-        if prev.start >= start || prev.end > start {
-            continue;
-        }
-        let prefix = &source[prev.start..start];
-        let content_end = end_of_content(prefix);
-        if content_end != 0 && prev.start + content_end <= prev.end {
-            before[i] = count(&prefix[content_end..]).saturating_sub(1);
-        }
+        } else {
+            let prev = &ranges[i - 1];
+            if prev.start >= start || prev.end > start {
+                continue;
+            }
+            let prefix = &source[prev.start..start];
+            let content_end = end_of_content(prefix);
+            if content_end != 0 && prev.start + content_end <= prev.end {
+                count(&prefix[content_end..]).saturating_sub(1)
+            } else {
+                0
+            }
+        };
+        before[i] = push(rows, start, false);
     }
     let after = ranges
         .last()
@@ -1380,7 +1436,12 @@ fn blank_rows(source: &str, ranges: &[Range<usize>], main: usize) -> (Vec<usize>
                 0
             }
         });
-    (before, after)
+    let after = push(after, source.len(), true);
+    BlankRows {
+        offsets: offsets.into(),
+        before,
+        after,
+    }
 }
 
 /// 给标题生成锚点的规则：转成小写，空格换成 `-`，去掉其他标点（保留 `-`、`_`）。
