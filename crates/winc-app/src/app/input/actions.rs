@@ -4,7 +4,7 @@
 
 use winc_core::transform::Case;
 use winc_editor::panes::Axis;
-use winc_editor::{Command, EntryKind, FoldCommand};
+use winc_editor::{Command, EntryKind, FoldCommand, PreviewKind, PreviewMode};
 use winc_preview::markdown::paragraph::Kind;
 
 use super::*;
@@ -420,6 +420,19 @@ impl App {
             ToggleStickyScroll => self.settings_toggle(crate::layout::Setting::StickyScroll),
             ToggleVimMode => self.settings_toggle(crate::layout::Setting::VimMode),
             TogglePreview => self.toggle_preview(),
+            MarkdownSourceMode => {
+                let mode = if self
+                    .editor
+                    .active()
+                    .is_some_and(|doc| doc.preview_mode() == PreviewMode::Source)
+                {
+                    PreviewMode::Preview
+                } else {
+                    PreviewMode::Source
+                };
+                self.focus = Focus::Editor;
+                self.set_preview_mode(mode);
+            }
             ToggleReadOnly => self.toggle_read_only(),
             ToggleReadOnlyAll => self.set_read_only_all(!self.editor.all_locked()),
             ToggleWordWrap => self.settings_toggle(crate::layout::Setting::WordWrap),
@@ -553,6 +566,14 @@ impl App {
             }
             Action::StopConfiguration if !self.run_config_running() => return false,
             Action::TogglePreview if !self.preview_switch_available() => return false,
+            Action::MarkdownSourceMode
+                if !self
+                    .editor
+                    .active()
+                    .is_some_and(|doc| doc.preview_kind() == Some(PreviewKind::Markdown)) =>
+            {
+                return false;
+            }
             Action::ChangeLanguageMode if !self.can_change_language() => return false,
             // 写作命令只在编辑 Markdown 时可用；其余位置同一个键执行其他命令。专注、打字机模式
             // 不受 `markdown.shortcuts` 影响。

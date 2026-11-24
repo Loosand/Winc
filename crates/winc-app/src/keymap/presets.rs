@@ -189,6 +189,8 @@ pub(super) const COMMON: &[PresetRow] = &[
         &["ctrl+v", "ctrl+shift+v", "shift+insert"],
     ),
     // Markdown 的写作命令：两套方案都按专门的 Markdown 编辑器的默认键。
+    // 源码模式在 Markdown 编辑区优先于行注释，包括关闭写作快捷键时的源码模式。
+    row(MarkdownSourceMode, Editor, &["cmd+/"], &[]),
     row(MarkdownHeading1, Markdown, &["cmd+1"], &["ctrl+1"]),
     row(MarkdownHeading2, Markdown, &["cmd+2"], &["ctrl+2"]),
     row(MarkdownHeading3, Markdown, &["cmd+3"], &["ctrl+3"]),

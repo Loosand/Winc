@@ -263,6 +263,7 @@ impl Action {
             PreviousError => "Terminal: Previous Error",
             SendToTerminal => "Terminal: Run Selected Text",
             TogglePreview => "Toggle Preview",
+            MarkdownSourceMode => "Markdown: Toggle Source Mode",
             ToggleReadOnly => "Toggle Read-Only",
             ToggleReadOnlyAll => "Toggle Read-Only for All Files",
         }

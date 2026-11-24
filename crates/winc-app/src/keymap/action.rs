@@ -229,6 +229,8 @@ pub enum Action {
     /// 全部显示或不显示空白符。
     ToggleWhitespace,
     TogglePreview,
+    /// 在 Markdown 的排版视图与源码模式之间切换。
+    MarkdownSourceMode,
     /// 把当前标签设为只读或恢复为可以编辑。
     ToggleReadOnly,
     /// 把窗口里的全部标签设为只读或恢复。
@@ -639,6 +641,7 @@ impl Action {
             PreviousError => t!("cmd-previous-error"),
             SendToTerminal => t!("cmd-send-to-terminal"),
             TogglePreview => t!("cmd-toggle-preview"),
+            MarkdownSourceMode => t!("cmd-markdown-source-mode"),
             ToggleReadOnly => t!("cmd-toggle-read-only"),
             ToggleReadOnlyAll => t!("cmd-toggle-read-only-all"),
         }
@@ -804,6 +807,7 @@ impl Action {
             | ToggleStatusBar
             | ToggleWhitespace
             | TogglePreview
+            | MarkdownSourceMode
             | ToggleReadOnly
             | ToggleReadOnlyAll
             | NextDifference
@@ -1305,6 +1309,7 @@ pub const ACTIONS: &[Action] = {
         ToggleStatusBar,
         ToggleWhitespace,
         TogglePreview,
+        MarkdownSourceMode,
         ToggleReadOnly,
         ToggleReadOnlyAll,
         ShowCommit,

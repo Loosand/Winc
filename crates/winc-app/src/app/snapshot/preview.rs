@@ -964,7 +964,7 @@ fn a_new_note_can_be_written_saved_and_reopened_in_the_single_view() {
 }
 
 #[test]
-fn markdown_has_no_user_facing_mode_switch() {
+fn markdown_has_no_generic_preview_switch() {
     use crate::keymap::Action;
     use winc_editor::PreviewMode;
 
@@ -989,6 +989,42 @@ fn markdown_has_no_user_facing_mode_switch() {
         app.choose_preview_mode(mode);
         assert!(app.markdown_live());
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn command_slash_toggles_markdown_source_and_still_comments_code() {
+    use crate::keymap::{KeyCode, Mods, Stroke};
+
+    let source = "---\ntitle: 标题\n---\n\n## 正文\n";
+    let (mut app, dir) = live_doc("md-source-shortcut", source);
+    app.config.markdown_shortcuts = Some(false);
+    put_caret(&mut app, "正文", true);
+    let selection = app.editor.active().unwrap().selection;
+    let slash = Stroke {
+        key: KeyCode::Char('/'),
+        mods: Mods::META,
+    };
+
+    assert!(app.on_shortcut(slash));
+    paint(&mut app);
+    let doc = app.editor.active().unwrap();
+    assert_eq!(doc.preview_mode(), PreviewMode::Source);
+    assert_eq!(doc.selection, selection);
+    assert!(doc.shows_text());
+    assert_eq!(doc_text(&app), source);
+    assert!(app.on_shortcut(slash));
+    settle(&mut app);
+    assert!(app.markdown_live());
+    assert_eq!(doc_text(&app), source);
+
+    let code = dir.join("hello.py");
+    std::fs::write(&code, "print('hello')\n").unwrap();
+    app.open_path(&code);
+    paint(&mut app);
+    assert!(app.on_shortcut(slash));
+    assert_eq!(doc_text(&app), "# print('hello')\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

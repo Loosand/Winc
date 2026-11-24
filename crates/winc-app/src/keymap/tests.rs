@@ -153,8 +153,11 @@ fn no_two_bindings_fight_over_a_key() {
                 // 范围重叠时，前面那条的范围必须更小（优先匹配），且两者不能完全相同；
                 // 前一个执行不了时才执行后一个的除外。
                 let narrower = a.when.mask() & !b.when.mask() == 0 && a.when != b.when;
-                let fallback = (a.action, b.action)
-                    == (Action::RemoveSecondaryCursors, Action::ClearWordHighlights);
+                let fallback = matches!(
+                    (a.action, b.action),
+                    (Action::RemoveSecondaryCursors, Action::ClearWordHighlights)
+                        | (Action::MarkdownSourceMode, Action::ToggleComment)
+                );
                 assert!(
                     narrower || fallback || a.action == b.action,
                     "{os:?}: {} 同时是 {:?}（{:?}）和 {:?}（{:?}）",
@@ -177,6 +180,23 @@ fn no_two_bindings_fight_over_a_key() {
                     a.label(os)
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn mac_source_mode_takes_priority_over_the_comment_shortcut() {
+    let stroke = Stroke {
+        key: KeyCode::Char('/'),
+        mods: Mods::META,
+    };
+    for preset in Preset::ALL {
+        let table = preset.bindings(Os::Mac);
+        for context in [Context::Markdown, Context::Editor] {
+            assert_eq!(
+                lookup(&table, stroke, None, context),
+                Lookup::Run(vec![Action::MarkdownSourceMode, Action::ToggleComment])
+            );
         }
     }
 }

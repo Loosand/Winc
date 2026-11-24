@@ -393,7 +393,7 @@ impl App {
         }
     }
 
-    /// Markdown 只有可编辑的排版视图，不显示模式切换。
+    /// Markdown 通过独立命令切换源码模式，不显示通用的预览切换按钮。
     pub(crate) fn preview_switch_available(&self) -> bool {
         self.editor.active().is_some_and(|doc| {
             doc.preview_kind()

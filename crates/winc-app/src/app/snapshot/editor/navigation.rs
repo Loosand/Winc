@@ -355,8 +355,8 @@ fn command_palette_runs_commands_and_remembers_them() {
     // Markdown 的写作命令只在编辑 Markdown 时列出。
     let installable = |a: &&crate::keymap::Action| {
         use crate::keymap::Action::{
-            InstallShellCommand, MoveToSplitDown, MoveToSplitRight, NextPane, PreviousPane,
-            TogglePreview, UninstallShellCommand, Unsplit,
+            InstallShellCommand, MarkdownSourceMode, MoveToSplitDown, MoveToSplitRight, NextPane,
+            PreviousPane, TogglePreview, UninstallShellCommand, Unsplit,
         };
         // Python 没有预览切换；窗格命令也只在有对应对象时列出。
         !a.markdown_only()
@@ -370,6 +370,7 @@ fn command_palette_runs_commands_and_remembers_them() {
                     | MoveToSplitRight
                     | MoveToSplitDown
                     | TogglePreview
+                    | MarkdownSourceMode
             )
     };
     let always = (palette().iter())

@@ -265,6 +265,7 @@ cmd-send-to-terminal = 终端：运行选中的代码
 cmd-toggle-read-only-all = 切换全部只读
 cmd-toggle-read-only = 切换只读
 cmd-toggle-preview = 切换预览
+cmd-markdown-source-mode = Markdown：切换源码模式
 
 ## 执行命令时的提示
 

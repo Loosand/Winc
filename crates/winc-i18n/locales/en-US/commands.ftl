@@ -265,6 +265,7 @@ cmd-send-to-terminal = Terminal: Run Selected Code
 cmd-toggle-read-only-all = Toggle Read-Only for All Files
 cmd-toggle-read-only = Toggle Read-Only
 cmd-toggle-preview = Toggle Preview
+cmd-markdown-source-mode = Markdown: Toggle Source Mode
 
 ## Command feedback
 
