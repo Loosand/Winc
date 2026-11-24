@@ -681,6 +681,7 @@ pub struct Cx<'a, 'f> {
 }
 
 /// 可编辑的预览中光标所在的叶子块：不排版，显示原文。
+#[derive(Clone, Hash)]
 pub struct Raw {
     /// 所在顶层块现在的原文（从块的起点起，含解析之后的修改）。
     pub block: Arc<str>,
@@ -696,6 +697,8 @@ pub struct Raw {
     pub done: bool,
     /// 光标在 `block` 中的位置：表格只把光标所在的单元格显示为原文。
     pub caret: usize,
+    /// 当前选区相对于 `block` 的字节范围。
+    pub selection: Option<std::ops::Range<usize>>,
     /// 叶子块的种类，决定原文的显示方式。
     pub kind: RawKind,
     /// 输入法正在组合的文字（仅限正文），排入光标所在的行，见 `reveal`。
@@ -703,7 +706,7 @@ pub struct Raw {
 }
 
 /// 显示原文的叶子块的种类。
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum RawKind {
     /// 段落、标题：按排版显示，只显示光标接触到的标记，见 `reveal`。
     Prose,
@@ -733,6 +736,7 @@ impl Raw {
             leaf,
             done: false,
             caret,
+            selection: None,
             kind: RawKind::Plain,
             preedit,
         };
@@ -816,7 +820,12 @@ fn reveal(raw: &Raw) -> (Block, Vec<usize>, bool) {
     let blanks = blanks(raw);
     let at = (caret <= content).then_some(caret);
     let preedit = raw.preedit.as_deref().filter(|_| at.is_some());
-    let mut block = winc_preview::markdown::reveal::reveal(&text[..content], at, preedit);
+    let selection = raw.selection.as_ref().map(|range| {
+        let relative = |at: usize| at.saturating_sub(raw.leaf.start).min(content);
+        relative(range.start)..relative(range.end)
+    });
+    let mut block =
+        winc_preview::markdown::reveal::reveal(&text[..content], at, preedit, selection);
     if let Block::Paragraph(inline) | Block::Heading(_, inline) = &mut block {
         inline.source = raw.leaf.start;
     }
@@ -993,14 +1002,14 @@ impl Cx<'_, '_> {
                 out.anchors.push((format!("fn-{label}"), y));
                 let flow = self.blocks(blocks, x + indent, y, width - indent, env, out);
                 let marker = format!("{label}.");
-                self.marker(
+                out.items.push(self.marker(
                     &marker,
                     x + indent,
                     y,
                     flow.first_baseline,
                     env.color,
-                    &mut out.items,
-                );
+                    None,
+                ));
                 flow
             }
             Block::Details {
@@ -1030,24 +1039,48 @@ impl Cx<'_, '_> {
         y: f32,
         baseline: Option<f32>,
         color: Color,
-        out: &mut Vec<Item>,
-    ) {
+        span: Option<Span>,
+    ) -> Item {
         let size = self.base;
         let baseline = baseline.unwrap_or_else(|| {
             let m = self.frame.metrics(FontKind::Ui, size);
             y + (size * 1.5 - m.ascent - m.descent) / 2.0 + m.ascent
         });
-        let w = self.frame.measure(FontKind::Ui, size, marker);
-        out.push(Item::Text {
-            x: content_x - size * 0.4 - w,
+        let (gap, width) = if let Some(span) = &span {
+            (0.0, span.advances.iter().sum())
+        } else {
+            (size * 0.4, self.frame.measure(FontKind::Ui, size, marker))
+        };
+        Item::Text {
+            x: content_x - gap - width,
             baseline,
             text: marker.into(),
             font: FontKind::Ui,
             faux: Faux::default(),
             size,
             color,
-            span: None,
-        });
+            span,
+        }
+    }
+
+    fn selected_list_prefix(&self, item: &ListItem) -> Option<(usize, &str)> {
+        let raw = self.raw.as_ref().filter(|raw| !raw.done)?;
+        let selection = raw.selection.as_ref()?;
+        let (Block::Paragraph(inline) | Block::Heading(_, inline)) = item.blocks.first()? else {
+            return None;
+        };
+        if !(raw.leaf.start..=raw.parsed_end).contains(&inline.source) {
+            return None;
+        }
+        let before = raw.block.get(..raw.leaf.start)?;
+        let start = before.rfind(['\n', '\r']).map_or(0, |at| at + 1);
+        let line_prefix = &before[start..];
+        let marker = winc_preview::markdown::enter::list_prefix(line_prefix)?;
+        let source = start + marker.start;
+        (marker.end == line_prefix.len()
+            && selection.start <= source
+            && selection.end >= raw.leaf.start)
+            .then(|| (source, &line_prefix[marker]))
     }
 
     /// 画无序列表项的记号：第一层实心圆点，第二层空心圆圈，更深的层实心方块。
@@ -1125,11 +1158,38 @@ impl Cx<'_, '_> {
             } else {
                 (content_x, room)
             };
+            let selected = self
+                .selected_list_prefix(item)
+                .map(|(source, prefix)| (source, prefix.to_owned(), self.chars));
+            if let Some((_, prefix, _)) = &selected {
+                self.text.push_str(prefix);
+                self.chars += prefix.chars().count();
+            }
             let flow = self.blocks(&item.blocks, item_x, top, item_room, inner, out);
             first_baseline = first_baseline.or(flow.first_baseline);
             let baseline = flow.first_baseline;
             match (item.task, start) {
                 _ if item.bare => {}
+                _ if let Some((source, prefix, start)) = selected => {
+                    let chars: Vec<_> = prefix.chars().collect();
+                    let span = Span {
+                        start,
+                        advances: self
+                            .frame
+                            .advances_faux(FontKind::Ui, Faux::default(), base, &chars)
+                            .into(),
+                        source: u32::try_from(source).ok(),
+                        jumps: None,
+                    };
+                    out.items.push(self.marker(
+                        &prefix,
+                        content_x,
+                        top,
+                        baseline,
+                        self.colors.muted,
+                        Some(span),
+                    ));
+                }
                 (Some(checked), _) => {
                     let size = (base * 0.85).round();
                     let line_mid = baseline.map_or(top + base * 0.75, |b| b - base * 0.35);
@@ -1146,7 +1206,8 @@ impl Cx<'_, '_> {
                 }
                 (None, Some(start)) => {
                     let marker = format!("{}.", start + i as u64);
-                    self.marker(&marker, content_x, top, baseline, env.color, &mut out.items);
+                    out.items
+                        .push(self.marker(&marker, content_x, top, baseline, env.color, None));
                 }
                 (None, None) => self.bullet(content_x, top, baseline, env, &mut out.items),
             }

@@ -451,9 +451,27 @@ fn draw_tooltip(app: &App, frame: &mut Frame<'_>) {
                 Some(button) => (button, t!("workspace-tip-more-actions").to_owned()),
                 None => return,
             },
+            Hover::CloudBadge(_) => {
+                let (x, y) = app.mouse();
+                let Some(&(badge, status)) =
+                    app.hits.cloud_badges.iter().find(|(r, _)| r.contains(x, y))
+                else {
+                    return;
+                };
+                (badge, status.label().to_owned())
+            }
             Hover::SidebarButton => (
                 app.layout.sidebar_button,
                 crate::layout::with_key(t!("cmd-toggle-sidebar"), Some(Action::ToggleSidebar)),
+            ),
+            Hover::WorkspaceHistory(forward) => (
+                app.hits.workspace_history[usize::from(forward)],
+                if forward {
+                    t!("cmd-go-forward")
+                } else {
+                    t!("cmd-go-back")
+                }
+                .to_owned(),
             ),
             Hover::Browser => (app.layout.browser, t!("preview-browser-open").to_owned()),
             Hover::Preview(mode) => {

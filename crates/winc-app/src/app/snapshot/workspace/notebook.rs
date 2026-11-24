@@ -3,6 +3,104 @@ use crate::app::OutlineTarget;
 use crate::layout::SidebarView;
 
 #[test]
+fn notebook_places_icloud_badges_to_the_right_and_marks_an_opening_file() {
+    use crate::app::workspace::cloud::CloudStatus;
+
+    let (mut app, root) = note_app("minc-icloud-badges");
+    let online = root.join("config.txt");
+    let uploading = root.join("薄荷.md");
+    app.panels
+        .tree
+        .cloud
+        .set_status(online.clone(), CloudStatus::OnlineOnly);
+    app.panels
+        .tree
+        .cloud
+        .set_status(uploading, CloudStatus::Uploading);
+    paint(&mut app);
+    let badges = &app.hits.cloud_badges;
+    assert_eq!(badges.len(), 2);
+    assert_eq!(
+        [badges[0].1, badges[1].1],
+        [CloudStatus::OnlineOnly, CloudStatus::Uploading]
+    );
+    assert_eq!(badges[0].0.x, badges[1].0.x);
+    assert!(badges[0].0.right() < app.layout.tree.right());
+    let badge = badges[0].0;
+    app.on_mouse_move(badge.x + badge.w / 2.0, badge.y + badge.h / 2.0);
+    assert!(matches!(app.pointer.hover, Hover::CloudBadge(_)));
+    assert!(app.pointer.hover.has_tooltip());
+    if std::env::var_os("WINC_SNAPSHOT_DIR").is_some() {
+        shoot(&mut app, "notebook-icloud-badges");
+    }
+    app.editor.open_tab(&online);
+    assert!(app.editor.active().unwrap().is_pending());
+    paint(&mut app);
+    assert_eq!(app.hits.cloud_badges[0].1, CloudStatus::Downloading);
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn notebook_toolbar_steps_through_visited_files_and_folders() {
+    use crate::app::workspace::library::LibraryTarget;
+
+    let (mut app, root) = note_app("minc-path-history");
+    let folder = root.join("Recipes");
+    let tea = folder.join("茶.md");
+    let mint = root.join("薄荷.md");
+    paint(&mut app);
+    assert!(!app.can_step_workspace_path(false) && !app.can_step_workspace_path(true));
+    let folder_card = app
+        .hits
+        .library
+        .iter()
+        .find_map(|&(r, target)| match target {
+            LibraryTarget::Card(i) if app.library.cards[i].path == folder => Some(r),
+            _ => None,
+        })
+        .unwrap();
+    press(&mut app, folder_card);
+    app.open_path(&tea);
+    app.open_path(&mint);
+    paint(&mut app);
+    assert!(app.hits.crumbs.is_empty());
+    assert!(app.hits.document_title.w > 0.0);
+    let [back, forward] = app.hits.workspace_history;
+    let controls = app.caption_controls();
+    assert!(controls.contains(&back) && controls.contains(&forward));
+    let title = app.hits.document_title;
+    right_click(&mut app, (title.x + title.w / 2.0, title.y + title.h / 2.0));
+    assert!(matches!(
+        app.overlays.context_menu.as_ref().map(|menu| &menu.target),
+        Some(MenuTarget::Tab(id)) if *id == app.editor.active().unwrap().id
+    ));
+    app.dismiss_popup();
+
+    press(&mut app, back);
+    assert_eq!(app.editor.active().unwrap().path.as_ref(), Some(&tea));
+    press(&mut app, back);
+    assert!(app.library_shown());
+    assert_eq!(app.library.folder.as_ref(), Some(&folder));
+    press(&mut app, back);
+    assert_eq!(app.library.folder.as_ref(), Some(&root));
+    assert!(!app.can_step_workspace_path(false));
+    press(&mut app, back);
+    assert_eq!(app.library.folder.as_ref(), Some(&root));
+    press(&mut app, forward);
+    assert_eq!(app.library.folder.as_ref(), Some(&folder));
+
+    std::fs::remove_file(&tea).unwrap();
+    press(&mut app, forward);
+    assert_eq!(app.editor.active().unwrap().path.as_ref(), Some(&mint));
+    assert!(!app.can_step_workspace_path(true));
+    press(&mut app, back);
+    assert_eq!(app.library.folder.as_ref(), Some(&folder));
+    app.open_path(&root.join("config.txt"));
+    assert!(!app.can_step_workspace_path(true));
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn notebook_sidebar_toggle_stays_beside_the_window_buttons() {
     use crate::app::animation::{Clock, SIDEBAR_ANIMATION};
     use crate::app::workspace::tree::SidebarMotion;
@@ -532,6 +630,11 @@ fn notebook_preserves_the_open_document_if_switching_cannot_save_it() {
     assert!(!app.library_shown());
     assert_eq!(app.editor.active().unwrap().id, tea_id);
     assert!(app.editor.active().unwrap().is_dirty());
+    let back = app.hits.workspace_history[0];
+    press(&mut app, back);
+    assert_eq!(app.editor.active().unwrap().id, tea_id);
+    assert!(app.editor.active().unwrap().is_dirty());
+    assert!(app.can_step_workspace_path(false));
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 

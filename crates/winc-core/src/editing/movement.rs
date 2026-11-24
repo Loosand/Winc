@@ -6,6 +6,10 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::text::{CellLayout, Lines, leading_whitespace};
 
+mod words;
+
+pub use words::{next_word, prev_word, word_at};
+
 /// 查找字素边界时向前或向后最多读取的字符数（字符）。
 ///
 /// 64 为经验值，大于常见 emoji 序列的长度（例如家庭 emoji 为 7 个字符），用于限制单次查找的
@@ -75,120 +79,6 @@ pub fn snap_to_grapheme(text: &impl Lines, pos: usize) -> usize {
     } else {
         start
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Class {
-    /// 空白字符。
-    Space,
-    /// 单词字符：字母、数字和 `_`。
-    Word,
-    /// 除空白和单词字符以外的字符。
-    Punct,
-}
-
-/// 返回字符所属的类别：空白、单词字符（字母、数字、`_`）或标点。
-fn class_of(c: char) -> Class {
-    if c.is_whitespace() {
-        Class::Space
-    } else if c.is_alphanumeric() || c == '_' {
-        Class::Word
-    } else {
-        Class::Punct
-    }
-}
-
-/// 返回 `pos` 向左移动一个词后的位置：先跳过空白，再跳过同一类字符。
-///
-/// 在行首时等同于 [`prev_grapheme`]，即跳到上一行行末。
-pub fn prev_word(text: &impl Lines, pos: usize) -> usize {
-    let (line, col) = text.pos_to_line_col(pos);
-
-    if col == 0 {
-        return prev_grapheme(text, pos);
-    }
-
-    let content = text.line_content(line);
-    let mut chars = content.slice().chars_at(col).reversed().peekable();
-    let mut i = col;
-
-    while chars.next_if(|&c| class_of(c) == Class::Space).is_some() {
-        i -= 1;
-    }
-
-    if let Some(&c) = chars.peek() {
-        let class = class_of(c);
-
-        while chars.next_if(|&c| class_of(c) == class).is_some() {
-            i -= 1;
-        }
-    }
-
-    text.line_start(line) + i
-}
-
-/// 返回 `pos` 向右移动一个词后的位置：先跳过当前字符所属类别的字符，再跳过空白。
-///
-/// 在行末时等同于 [`next_grapheme`]，即跳到下一行行首。
-pub fn next_word(text: &impl Lines, pos: usize) -> usize {
-    let (line, col) = text.pos_to_line_col(pos);
-    let content = text.line_content(line);
-    let slice = content.slice();
-
-    if col >= slice.len_chars() {
-        return next_grapheme(text, pos);
-    }
-
-    let class = class_of(slice.char(col));
-    let mut chars = slice.chars_at(col).peekable();
-    let mut i = col;
-
-    if class != Class::Space {
-        while chars.next_if(|&c| class_of(c) == class).is_some() {
-            i += 1;
-        }
-    }
-
-    while chars.next_if(|&c| class_of(c) == Class::Space).is_some() {
-        i += 1;
-    }
-
-    text.line_start(line) + i
-}
-
-/// 返回双击选词的位置范围 `(起点, 终点)`，终点不含。
-///
-/// 范围是包含 `pos` 的同类字符区间。`pos` 紧跟在单词字符之后、且当前字符不是单词字符时，选中
-/// 左侧的词。
-pub fn word_at(text: &impl Lines, pos: usize) -> (usize, usize) {
-    let (line, col) = text.pos_to_line_col(pos);
-    let content = text.line_content(line);
-    let slice = content.slice();
-    let len = slice.len_chars();
-    let base = text.line_start(line);
-
-    if len == 0 {
-        return (base, base);
-    }
-
-    let at_word_end = col > 0 && class_of(slice.char(col - 1)) == Class::Word;
-    let at = if col == len || (at_word_end && class_of(slice.char(col)) != Class::Word) {
-        col - 1
-    } else {
-        col
-    };
-    let class = class_of(slice.char(at));
-    let before = slice
-        .chars_at(at)
-        .reversed()
-        .take_while(|&c| class_of(c) == class)
-        .count();
-    let after = slice
-        .chars_at(at)
-        .take_while(|&c| class_of(c) == class)
-        .count();
-
-    (base + at - before, base + at + after)
 }
 
 /// 返回上下移动 `delta` 行后的（位置，目标显示列）。

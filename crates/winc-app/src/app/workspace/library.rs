@@ -279,7 +279,8 @@ impl App {
         self.browse_library_folder(root, Focus::Editor);
     }
 
-    fn browse_library_folder(&mut self, folder: PathBuf, focus: Focus) {
+    pub(super) fn browse_library_folder(&mut self, folder: PathBuf, focus: Focus) {
+        self.remember_workspace_visit();
         if self.writing_workspace() && !self.library_shown() && !self.prepare_writing_switch(None) {
             return;
         }
@@ -303,6 +304,7 @@ impl App {
         }
         self.focus = focus;
         self.relayout();
+        self.remember_workspace_visit();
         self.request_redraw();
     }
 
@@ -619,11 +621,11 @@ fn scan_library(
 }
 
 fn file_card(root: &Path, entry: DirEntry) -> Card {
-    let (name, content) = if !entry.symlink && is_markdown(&entry.path) {
-        (
-            note_name(&entry),
-            CardContent::Note(read_page(root, &entry.path)),
-        )
+    let (name, content) = if !entry.symlink
+        && is_markdown(&entry.path)
+        && let Some(lines) = read_page(root, &entry.path)
+    {
+        (note_name(&entry), CardContent::Note(lines))
     } else {
         let content = if !entry.symlink
             && let Some(kind) = AttachmentKind::of(&entry.path)
@@ -728,20 +730,21 @@ fn folder_preview(root: &Path, folder: &Path, show_hidden: bool) -> Option<Folde
     clippy::disallowed_methods,
     reason = "笔记库只浏览本机目录，按字节上限读取缩略页"
 )]
-fn read_page(root: &Path, path: &Path) -> Vec<PreviewLine> {
-    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+fn read_page(root: &Path, path: &Path) -> Option<Vec<PreviewLine>> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file()
+        || crate::system::is_dataless(&metadata)
         || !winc_config::files::canonicalize(path).is_ok_and(|path| path.starts_with(root))
     {
-        return Vec::new();
+        return None;
     }
     let mut bytes = Vec::new();
-    if File::open(path)
-        .and_then(|f| f.take(PREVIEW_BYTES).read_to_end(&mut bytes))
-        .is_err()
-    {
-        return Vec::new();
-    }
-    preview_lines(&String::from_utf8_lossy(&bytes))
+    File::open(path)
+        .ok()?
+        .take(PREVIEW_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(preview_lines(&String::from_utf8_lossy(&bytes)))
 }
 
 pub(crate) fn preview_lines(text: &str) -> Vec<PreviewLine> {

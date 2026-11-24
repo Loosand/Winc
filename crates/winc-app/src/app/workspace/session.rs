@@ -269,6 +269,7 @@ impl App {
         self.panels.tree.scroll_x = 0.0;
         self.history.closed.clear();
         self.jumps.navigation.clear();
+        self.jumps.paths = Default::default();
     }
 
     /// 把当前目录移到最近列表的最前面并立即写入状态文件，避免进程异常中止后丢失。

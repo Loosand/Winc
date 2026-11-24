@@ -171,7 +171,8 @@ impl Cx<'_, '_> {
         let cell = (!content.is_empty()).then(|| {
             let caret = raw.caret.saturating_sub(start).min(content.len());
             let preedit = raw.preedit.as_deref();
-            let mut block = winc_preview::markdown::reveal::reveal(content, Some(caret), preedit);
+            let mut block =
+                winc_preview::markdown::reveal::reveal(content, Some(caret), preedit, None);
             let (Block::Paragraph(inline) | Block::Heading(_, inline)) = &mut block else {
                 unreachable!("reveal 只排出段落、标题");
             };

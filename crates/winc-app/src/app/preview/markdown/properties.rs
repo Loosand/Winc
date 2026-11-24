@@ -148,8 +148,10 @@ impl App {
             .filter(|_| md.doc == Some(doc.id) && md.checked == Some(doc.revision))?;
         let (end, _) = parsed.properties.as_ref()?;
         let rope = doc.text().rope()?;
-        // Blank rows after the closing delimiter are already part of the editable body.
-        Some(rope.byte_to_char((*end).min(rope.len_bytes())))
+        let start = parsed
+            .collapsed_separator_at(*end)
+            .map_or(*end, |gap| gap.end);
+        Some(rope.byte_to_char(start.min(rope.len_bytes())))
     }
 
     pub(crate) fn note_properties_available(&self) -> bool {

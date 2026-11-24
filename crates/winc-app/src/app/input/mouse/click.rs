@@ -6,6 +6,15 @@ use super::*;
 impl App {
     /// 处理鼠标按键 `button` 在当前鼠标位置按下。
     pub(in crate::app) fn on_mouse_down(&mut self, button: MouseButton) {
+        self.on_mouse_down_with_click_count(button, None);
+    }
+
+    /// 处理按下事件，并在可编辑的 Markdown 里采用系统提供的连击次数。
+    pub(in crate::app) fn on_mouse_down_with_click_count(
+        &mut self,
+        button: MouseButton,
+        native_click_count: Option<u8>,
+    ) {
         self.scroll.keyed = false;
         // 选择面板的动画期间高度还在变，而点击按最终的布局：先取消动画，使显示直接到位。
         if self.overlays.picker.fold.take().is_some() {
@@ -262,7 +271,7 @@ impl App {
             Target::Browser => self.open_in_browser(),
             Target::MarkdownLink(link) => self.open_markdown_link(link),
             Target::MarkdownToc(target) => self.press_toc(target),
-            Target::MarkdownText(_) => self.click_markdown(x, y),
+            Target::MarkdownText(_) => self.click_markdown(x, y, native_click_count),
             Target::ImageHandle => {
                 if let Some(image) = self.image_handle_at(x, y) {
                     self.start_image_resize(image, x);
@@ -285,6 +294,7 @@ impl App {
             Target::Scrollbar(bar, grab) => self.grab_scrollbar(bar, grab),
             Target::Minimap => self.press_minimap(y),
             Target::Crumb(index) => self.open_crumb_menu(index),
+            Target::WorkspaceHistory(forward) => self.step_workspace_path(forward),
             Target::Status(item) => self.open_status_menu(item),
             Target::TitleBar => self.click_title_bar(x, y),
             Target::WindowControl(control) => self.pointer.control_pressed = Some(control),

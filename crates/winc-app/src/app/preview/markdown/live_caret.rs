@@ -1,146 +1,43 @@
-//! 编辑器核心 · 光标与选区：文档选区用字符偏移，Markdown 源位置用 UTF-8 字节偏移，
-//! 排版命中用逻辑像素。这里和 `laid` 负责三者之间的换算，不把屏幕上的折行写进文件。
+//! 可编辑 Markdown 的光标移动、折行归属和视口跟随。
 
-use super::*;
-use winc_core::Selection;
+use winc_core::{Selection, movement};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SelectionUnit {
-    Character,
-    Word,
-    Paragraph,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct LiveDrag {
-    origin: Selection,
-    unit: SelectionUnit,
-    /// 按下之前光标的原文字节偏移，拖动时用来保持排版稳定。
-    before: Option<usize>,
-}
+use super::{laid, line_end};
+use crate::app::{App, ScrollTarget};
 
 impl App {
     /// 可编辑的预览中文字光标的原文位置（字节偏移，按当前文字计算）。
     pub(crate) fn live_caret_source(&self) -> Option<usize> {
-        let rope = self.editor.active()?.text().rope()?;
-        let head = self.editor.active()?.selection.head;
-        Some(rope.char_to_byte(head.min(rope.len_chars())))
-    }
-
-    /// 返回可编辑的预览中光标所在的叶子块，见 [`LiveLeaf`]；尚未解析或没有叶子块时为 `None`。
-    ///
-    /// 光标在第一个叶子块之前时取第一个。拖动选择文字时取按下处（选区的起点）所在的块：
-    /// 拖到其他块上时该块不切换回排版，鼠标下方的内容不移位。
-    pub(crate) fn live_leaf(&self) -> Option<LiveLeaf> {
         let doc = self.editor.active()?;
-        let parsed = self.preview.markdown.parsed.as_ref()?;
         let rope = doc.text().rope()?;
-        let len = rope.len_bytes();
-        // 按住鼠标期间按按下之前的光标查找，显示原文的块和标记保持不变，鼠标下方的文字不移动；
-        // 否则按下时该块切换为原文，文字移位，单击会变成选中一段。未开始编辑时全部按排版显示。
-        let caret = match self.preview.markdown.live_drag {
-            Some(drag) if self.live_dragging() => drag.before?,
-            _ => self.live_caret_source()?,
-        };
-        let delta = len as i64 - parsed.len as i64;
-        let shift = |at: usize| usize::try_from(at as i64 + delta).unwrap_or(0).min(len);
-        let i = parsed.leaves.partition_point(|l| l.range.start <= caret);
-        let line = rope.byte_to_line(caret);
-        let line_start = rope.line_to_byte(line);
-        let line_end = rope
-            .try_line_to_byte(line + 1)
-            .map_or(len, |b| b.saturating_sub(1).max(caret))
-            .min(len);
-        let block_of = |at: usize| {
-            parsed
-                .ranges
-                .iter()
-                .rposition(|r| r.start <= at && at < r.end.max(r.start + 1))
-        };
-        let prev = i.checked_sub(1).map(|k| &parsed.leaves[k]);
-        let next = parsed.leaves.get(i);
-        let (found, leaf, gap) = match (prev.map(|l| &l.range), next.map(|l| &l.range)) {
-            (Some(p), _) if caret <= shift(p.end).max(p.start) => (p, p.start..shift(p.end), false),
-            // 光标在块的标记上（引用的 `>`、提示块的 `[!NOTE]`、列表的序号），尚未到达其第一个
-            // 叶子块：取该叶子块，从光标所在行显示原文。
-            (_, Some(n)) if block_of(n.start).is_some() && block_of(n.start) == block_of(caret) => {
-                (n, line_start.min(n.start)..shift(n.end).max(n.start), false)
-            }
-            // 光标在叶子块之后的空行上：范围延伸到光标所在行，使光标在原文的空行上有位置。
-            (Some(p), _) => (p, p.start..line_end, true),
-            (None, Some(n)) => (n, n.start..shift(n.end).max(n.start), false),
-            (None, None) => return None,
-        };
-        let kind = prev
-            .into_iter()
-            .chain(next)
-            .find(|l| std::ptr::eq(&l.range, found));
-        // 块之间的空行视为正文：回车另起一段。
-        let prose = gap || kind.is_some_and(|l| l.prose);
-        let table = !gap && kind.is_some_and(|l| l.table);
-        let before = rope.byte_slice(line_start..caret.max(line_start));
-        let blank = line_start > found.start
-            && kind.is_some_and(|l| l.prose)
-            && before.chars().all(char::is_whitespace);
-        let block = block_of(found.start)?;
-        let range = parsed.ranges[block].start..shift(parsed.ranges[block].end).max(leaf.end);
-        // 输入之后、重新解析之前，范围来自上一版文档：起点可能已超出文档，也可能不在字符边界上；
-        // 先将范围限制在当前文档内，之后才能按范围截取原文。
-        let snap = |at: usize| rope.char_to_byte(rope.byte_to_char(at.min(len)));
-        let leaf = snap(leaf.start)..snap(leaf.end).max(snap(leaf.start));
-        let range = snap(range.start)..snap(range.end).max(snap(range.start));
-        let last = rope.byte_to_line(leaf.end.min(len));
-        let edge =
-            (!prose && !table && (line <= rope.byte_to_line(leaf.start) || line + 1 >= last))
-                .then_some(line);
-        Some(LiveLeaf {
-            block,
-            range,
-            leaf,
-            parsed_end: found.end,
-            revision: doc.revision,
-            prose,
-            table,
-            blank,
-            at: caret,
-            edge,
-        })
+        Some(rope.char_to_byte(doc.selection.head.min(rope.len_chars())))
     }
 
-    /// 是否正在可编辑的预览上拖动选择文字。
-    pub(super) fn live_dragging(&self) -> bool {
-        self.pointer.drag == crate::app::Drag::MarkdownText
-            && self.preview.markdown.live_drag.is_some()
-    }
-
-    /// ←→ 只略过不显示的块标记（见 [`App::live_visible`]）。空行和普通文字交给编辑区逐字移动。
+    /// ←→ 略过不显示的块标记和块间分隔行。普通文字和可编辑的空行交给编辑区处理。
     pub(super) fn live_horizontal(&mut self, right: bool) -> bool {
         self.preview.markdown.line_end = None;
         let extend = self.pointer.modifiers.shift_key();
         let Some(doc) = self.editor.active() else {
             return false;
         };
-        let Some(rope) = doc.text().rope() else {
-            return false;
-        };
-        let (sel, chars) = (doc.selection, rope.len_chars());
+        let sel = doc.selection;
         if !sel.is_empty() && !extend {
             return false;
         }
-        let next = match right {
-            true if sel.head < chars => sel.head + 1,
-            false if sel.head > 0 => sel.head - 1,
-            _ => return false,
+        // 和文档层用同一个字素边界，包括跨过整组 CRLF。
+        let next = if right {
+            movement::next_grapheme(doc.text(), sel.head)
+        } else {
+            movement::prev_grapheme(doc.text(), sel.head)
         };
         let target = self.live_visible(next, right);
-        if target == next {
+        if target == next || next == sel.head {
             return false;
         }
         if let Some(doc) = self.editor.active_mut() {
             doc.goal_cell = None;
             doc.collapse_selections();
-            let anchor = if extend { doc.selection.anchor } else { target };
-            doc.selection = winc_core::Selection::new(anchor, target);
+            doc.selection = doc.selection.moved_to(target, extend);
         }
         self.preview.markdown.goal = None;
         self.start_live_editing();
@@ -149,75 +46,39 @@ impl App {
         true
     }
 
-    /// 原文第 `at` 个字节所在的叶子块是否为正文（段落、标题）；不在任何叶子块中时为
-    /// `Some(false)`，解析结果不是当前版本时为 `None`。
-    pub(super) fn live_prose_at(&self, at: usize) -> Option<bool> {
-        let doc = self.editor.active()?;
-        if self.preview.markdown.checked != Some(doc.revision) {
-            return None;
-        }
-        let leaves = &self.preview.markdown.parsed.as_ref()?.leaves;
-        let i = leaves.partition_point(|l| l.range.start <= at);
-        Some(
-            i.checked_sub(1)
-                .map(|i| &leaves[i])
-                .is_some_and(|l| l.prose && at <= l.range.end),
-        )
-    }
-
-    /// 返回第 `line` 行开头在预览中不显示的块标记的长度（字符）。
-    ///
-    /// 叶子块的第一行取叶子块之前的部分（引用的 `>`、列表记号、任务框），正文的续行取引用
-    /// 标记和缩进。解析结果不是当前版本时为 0。
-    pub(super) fn live_hidden_prefix(&self, line: usize) -> usize {
-        let Some(doc) = self.editor.active() else {
-            return 0;
-        };
-        if self.preview.markdown.checked != Some(doc.revision) {
-            return 0;
-        }
-        let (Some(parsed), Some(rope)) = (self.preview.markdown.parsed.as_ref(), doc.text().rope())
-        else {
-            return 0;
-        };
-        if line >= rope.len_lines() {
-            return 0;
-        }
-        let start = rope.line_to_byte(line);
-        let text = rope.line(line).to_string();
-        let text = text.trim_end_matches(['\n', '\r']);
-        let i = parsed
-            .leaves
-            .partition_point(|l| l.range.start <= start + text.len());
-        let Some(leaf) = i.checked_sub(1).map(|i| &parsed.leaves[i]) else {
-            return 0;
-        };
-        let hidden = if leaf.range.start >= start {
-            leaf.range.start - start
-        } else if leaf.prose && start <= leaf.range.end {
-            winc_preview::markdown::enter::indent(text)
-        } else {
-            0
-        };
-        rope.byte_to_char((start + hidden).min(rope.len_bytes())) - rope.line_to_char(line)
-    }
-
-    /// 光标位置 `pos`（字符偏移）落在不显示的块标记中时，返回移动方向上最近的可见位置；
-    /// 否则返回 `pos`。
+    /// 光标落在块标记或分隔行时，返回移动方向上最近的可见位置（字符偏移）。
     ///
     /// 向后（`forward`）时取该行内容的开头；向前时优先停在上方可编辑的空行，否则取上一行文字的末尾。
     pub(super) fn live_visible(&self, pos: usize, forward: bool) -> usize {
-        let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
+        let Some(doc) = self.editor.active() else {
+            return pos;
+        };
+        let Some(rope) = doc.text().rope() else {
             return pos;
         };
         let body_start = self.property_body_start().unwrap_or(0);
-        let pos = pos.max(body_start).min(rope.len_chars());
+        let mut pos = pos.max(body_start).min(rope.len_chars());
+        let preview = &self.preview.markdown;
+        let current = preview.doc == Some(doc.id) && preview.checked == Some(doc.revision);
+        if current
+            && let Some(separator) = preview
+                .parsed
+                .as_ref()
+                .and_then(|md| md.collapsed_separator_at(rope.char_to_byte(pos)))
+        {
+            if !forward {
+                let above = rope.byte_to_line(separator.start) - 1;
+                return line_end(rope, above).max(body_start);
+            }
+            pos = rope.byte_to_char(separator.end);
+        }
         let line = rope.char_to_line(pos);
         let mapped = |line| {
-            self.preview.markdown.layout.as_ref().is_some_and(|laid| {
-                self.preview.markdown.checked == self.editor.active().map(|d| d.revision)
-                    && laid.blank_point(rope.line_to_byte(line)).is_some()
-            })
+            current
+                && preview
+                    .layout
+                    .as_ref()
+                    .is_some_and(|laid| laid.blank_point(rope.line_to_byte(line)).is_some())
         };
         if mapped(line) {
             return pos;
@@ -258,7 +119,7 @@ impl App {
         }
         if let Some(doc) = self.editor.active_mut() {
             let anchor = if sel.is_empty() { head } else { sel.anchor };
-            doc.selection = winc_core::Selection::new(anchor, head);
+            doc.selection = Selection::new(anchor, head);
         }
         self.request_redraw();
     }
@@ -278,7 +139,9 @@ impl App {
         let Some(laid) = self.preview.markdown.layout.as_ref() else {
             return false;
         };
-        let Some((_, y, h)) = laid.caret_point(source) else {
+        let Some((_, y, h)) =
+            laid.caret_point_with_affinity(source, self.live_upstream() == Some(source))
+        else {
             return false;
         };
         // 横坐标取内容一栏之外：命中的是该行最左、最右的字缝。
@@ -288,18 +151,10 @@ impl App {
             laid.left - self.preview.markdown.area.w
         };
         let sy = self.preview.markdown.area.y - self.preview.markdown.scroll() + y + h / 2.0;
-        let Some(found) = crate::app::preview::markdown::laid::source_at(self, x, sy) else {
+        let Some(found) = laid::source_at(self, x, sy) else {
             return false;
         };
-        // 折行处的位置按下一行的开头定位：纵坐标与当前行不同时，光标应画在本行的末尾。
-        laid.set_upstream(None);
-        let wrapped = end
-            && laid
-                .caret_point(found)
-                .is_some_and(|(_, fy, _)| (fy - y).abs() >= 0.5);
-        if wrapped {
-            laid.set_upstream(Some(found));
-        }
+        let wrapped = end && self.live_row_affinity(found, sy);
         let Some(doc) = self.editor.active_mut() else {
             return false;
         };
@@ -310,8 +165,7 @@ impl App {
         let revision = doc.revision;
         doc.goal_cell = None;
         doc.collapse_selections();
-        let anchor = if extend { doc.selection.anchor } else { pos };
-        doc.selection = winc_core::Selection::new(anchor, pos);
+        doc.selection = doc.selection.moved_to(pos, extend);
         self.preview.markdown.line_end = wrapped.then_some((pos, revision));
         self.preview.markdown.goal = None;
         self.start_live_editing();
@@ -320,8 +174,7 @@ impl App {
         true
     }
 
-    /// 原文位置 `source` 位于折行处时，判断窗口纵坐标 `y` 是否更接近上一显示行，并让排版结果
-    /// 按该结论定位光标（见 `Laid::set_upstream`）。
+    /// 原文位置 `source` 位于折行处时，判断窗口纵坐标 `y` 是否更接近上一显示行。
     ///
     /// 折行处的位置同时是上一行的末尾和下一行的开头：在上一行的右端点击、从上方按 ↓ 移到
     /// 行尾时，光标应留在上一行。
@@ -331,18 +184,12 @@ impl App {
         };
         let y = y - (self.preview.markdown.area.y - self.preview.markdown.scroll());
         let far = |p: Option<(f32, f32, f32)>| p.map(|(_, top, h)| (top + h / 2.0 - y).abs());
-        laid.set_upstream(None);
-        let below = laid.caret_point(source);
-        laid.set_upstream(Some(source));
-        let above = laid.caret_point(source);
-        let upstream = match (far(above), far(below)) {
+        let below = laid.caret_point_with_affinity(source, false);
+        let above = laid.caret_point_with_affinity(source, true);
+        match (far(above), far(below)) {
             (Some(a), Some(b)) => a + 0.5 < b,
             _ => false,
-        };
-        if !upstream {
-            laid.set_upstream(None);
         }
-        upstream
     }
 
     /// 可编辑的预览中光标应画在上一显示行末尾时，返回光标的原文位置（字节偏移），见
@@ -365,7 +212,9 @@ impl App {
         let Some(laid) = self.preview.markdown.layout.as_ref() else {
             return;
         };
-        let Some((x, y, h)) = laid.caret_point(source) else {
+        let Some((x, y, h)) =
+            laid.caret_point_with_affinity(source, self.live_upstream() == Some(source))
+        else {
             return;
         };
         let head = self.editor.active().map_or(0, |d| d.selection.head);
@@ -376,44 +225,34 @@ impl App {
         let step = by.unwrap_or(h);
         let sign = if down { 1.0 } else { -1.0 };
         let height = laid.height();
-        let screen = |laid: &crate::app::preview::markdown::laid::Laid, v: f32| {
-            (
-                laid.left + goal,
-                self.preview.markdown.area.y - self.preview.markdown.scroll() + v,
-            )
-        };
+        let screen_x = laid.left + goal;
+        let screen_top = self.preview.markdown.area.y - self.preview.markdown.scroll();
         // 块间留白高于一行时，下一行的目标位置落在留白中，取到的最近一行仍是原来的行；
         // 因此每次再前进半行，直到到达其他行或超出内容范围。
         let center = y + h / 2.0;
         let mut target = center + sign * step;
-        let mut moved = None;
-        let mut upstream = false;
-        loop {
+        let moved = loop {
             let probe = if by.is_none() {
                 laid.limit_blank_step(center, target)
             } else {
                 target
             };
             if !(0.0..=height).contains(&probe) {
-                break;
+                break None;
             }
-            let (sx, sy) = screen(laid, probe);
-            let found = crate::app::preview::markdown::laid::source_at(self, sx, sy);
-            moved = found.filter(|&s| {
-                upstream = self.live_row_affinity(s, sy);
-                let point = self
-                    .preview
-                    .markdown
-                    .layout
-                    .as_ref()
-                    .and_then(|l| l.caret_point(s));
-                point.is_none_or(|(_, py, _)| (py - y).abs() >= 0.5)
+            let screen_y = screen_top + probe;
+            let found = laid::source_at(self, screen_x, screen_y).and_then(|source| {
+                let upstream = self.live_row_affinity(source, screen_y);
+                let point = laid.caret_point_with_affinity(source, upstream);
+                point
+                    .is_none_or(|(_, row_y, _)| (row_y - y).abs() >= 0.5)
+                    .then_some((source, upstream))
             });
-            if moved.is_some() || by.is_some() || !(0.0..=height).contains(&target) {
-                break;
+            if found.is_some() || by.is_some() || !(0.0..=height).contains(&target) {
+                break found;
             }
             target += sign * h / 2.0;
-        }
+        };
         // 文档以代码块、表格、分隔线等结束：再向下时在其后另起一段，光标有处可去。
         if moved.is_none() && down && !extend && self.live_append_paragraph() {
             return;
@@ -427,149 +266,23 @@ impl App {
             return;
         };
         let pos = match moved {
-            Some(s) => rope.byte_to_char(s.min(rope.len_bytes())),
+            Some((source, _)) => rope.byte_to_char(source.min(rope.len_bytes())),
             None if down => rope.len_chars(),
             None => body_start,
         }
         .max(body_start);
         doc.goal_cell = None;
         doc.collapse_selections();
-        let anchor = if extend { doc.selection.anchor } else { pos };
-        doc.selection = winc_core::Selection::new(anchor, pos);
+        doc.selection = doc.selection.moved_to(pos, extend);
         let revision = doc.revision;
-        self.preview.markdown.line_end = (moved.is_some() && upstream).then_some((pos, revision));
+        self.preview.markdown.line_end = moved
+            .is_some_and(|(_, upstream)| upstream)
+            .then_some((pos, revision));
         self.preview.markdown.goal = Some((goal, pos));
         self.preview.markdown.selection = None;
         self.start_live_editing();
         self.reset_blink();
         self.request_redraw();
-    }
-
-    /// 返回命中位置的字符偏移及其选区。正文按解析出的叶子块选择，代码等其他内容按原文行选择。
-    fn live_selection_at(&self, source: usize, unit: SelectionUnit) -> Option<(usize, Selection)> {
-        let doc = self.editor.active()?;
-        let rope = doc.text().rope()?;
-        let source = source.min(rope.len_bytes());
-        let pos = rope.byte_to_char(source);
-        let selection = match unit {
-            SelectionUnit::Character => Selection::point(pos),
-            SelectionUnit::Word => {
-                let (start, end) = winc_core::movement::word_at(doc.text(), pos);
-                Selection::new(start, end)
-            }
-            SelectionUnit::Paragraph => {
-                let md = &self.preview.markdown;
-                if md.doc == Some(doc.id)
-                    && md.checked == Some(doc.revision)
-                    && let Some(parsed) = &md.parsed
-                    && let Some(i) = parsed
-                        .leaves
-                        .partition_point(|l| l.range.start <= source)
-                        .checked_sub(1)
-                    && let Some(leaf) = parsed.leaves.get(i)
-                    && leaf.prose
-                    && source <= leaf.range.end
-                {
-                    let mut end = leaf.range.end;
-                    // 段尾换行隔开相邻段落；段落内部的原文换行属于同一次选择。
-                    while end > leaf.range.start
-                        && matches!(rope.get_byte(end - 1), Some(b'\r' | b'\n'))
-                    {
-                        end -= 1;
-                    }
-                    Selection::new(rope.byte_to_char(leaf.range.start), rope.byte_to_char(end))
-                } else {
-                    let line = rope.char_to_line(pos);
-                    let span = doc.text().line_span(line);
-                    let hidden = self.live_hidden_prefix(line);
-                    Selection::new((span.start + hidden).min(span.end), span.end)
-                }
-            }
-        };
-        Some((pos, selection))
-    }
-
-    /// 处理可编辑预览上的鼠标按下：单击定位光标，双击选词，三击选中整个 Markdown 段落。
-    /// 按住 ⇧ 单击时扩展已有选区。
-    pub(super) fn click_live(&mut self, x: f32, y: f32) {
-        // 按下之前的光标位置：未开始编辑时为 `None`，按住鼠标期间整篇按排版显示。
-        let editing = self.editor.active().map(|d| d.id) == self.preview.markdown.editing;
-        let before = self.live_caret_source().filter(|_| editing);
-        self.ime.preedit.clear();
-        self.preview.markdown.selection = None;
-        self.preview.markdown.goal = None;
-        self.preview.markdown.line_end = None;
-        self.request_redraw();
-        let property_start = self.property_body_start().and_then(|at| {
-            let rope = self.editor.active()?.text().rope()?;
-            Some(rope.char_to_byte(at))
-        });
-        let source = crate::app::preview::markdown::laid::source_at(self, x, y);
-        let Some(source) = source
-            .map(|source| source.max(property_start.unwrap_or(0)))
-            .or(property_start)
-        else {
-            // 没有可定位的文字（空文档）：仍然进入编辑，显示光标。
-            self.start_live_editing();
-            return;
-        };
-        let count = self.click_count(x, y);
-        let shift = self.pointer.modifiers.shift_key();
-        let upstream = count == 1 && self.live_row_affinity(source, y);
-        let unit = match count {
-            2 => SelectionUnit::Word,
-            3 => SelectionUnit::Paragraph,
-            _ => SelectionUnit::Character,
-        };
-        let Some((pos, mut origin)) = self.live_selection_at(source, unit) else {
-            return;
-        };
-        let Some(doc) = self.editor.active_mut() else {
-            return;
-        };
-        self.preview.markdown.line_end = upstream.then_some((pos, doc.revision));
-        self.preview.markdown.clicked = Some(source);
-        doc.goal_cell = None;
-        doc.record_cursors();
-        doc.collapse_selections();
-        if unit == SelectionUnit::Character && shift {
-            origin = Selection::point(doc.selection.anchor);
-            doc.selection = Selection::new(origin.anchor, pos);
-        } else {
-            doc.selection = origin;
-        }
-        self.preview.markdown.live_drag = Some(LiveDrag {
-            origin,
-            unit,
-            before,
-        });
-        self.pointer.drag = crate::app::Drag::MarkdownText;
-        self.start_live_editing();
-        self.reset_blink();
-    }
-
-    /// 按发起拖动时的单位扩展选区：字符、词或段落。
-    pub(super) fn drag_live(&mut self, x: f32, y: f32) {
-        let Some(LiveDrag { origin, unit, .. }) = self.preview.markdown.live_drag else {
-            return;
-        };
-        let Some(source) = crate::app::preview::markdown::laid::source_at(self, x, y) else {
-            return;
-        };
-        let Some((pos, target)) = self.live_selection_at(source, unit) else {
-            return;
-        };
-        let upstream = unit == SelectionUnit::Character && self.live_row_affinity(source, y);
-        let Some(doc) = self.editor.active_mut() else {
-            return;
-        };
-        self.preview.markdown.line_end = upstream.then_some((pos, doc.revision));
-        doc.selection = if unit != SelectionUnit::Character && pos < origin.anchor {
-            Selection::new(origin.head, target.anchor)
-        } else {
-            Selection::new(origin.anchor, target.head)
-        };
-        self.reset_blink();
     }
 
     /// 可编辑的预览在本帧是否将光标所在的块显示为原文。

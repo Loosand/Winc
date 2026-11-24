@@ -62,6 +62,7 @@ pub(crate) struct Jumps {
     pub(crate) name_hint: Option<NameHint>,
     /// 「后退」「前进」使用的位置历史。
     pub(in crate::app) navigation: editor::navigation::Navigation,
+    pub(in crate::app) paths: workspace::history::PathHistory,
     /// 正在后台进行的项目内定义查找。
     pub(in crate::app) definitions: Option<editor::definition::DefinitionSearch>,
 }

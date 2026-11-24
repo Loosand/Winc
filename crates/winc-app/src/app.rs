@@ -341,6 +341,8 @@ pub enum UserEvent {
     TreeScanned,
     /// 本地笔记库的卡片读取完成。
     LibraryScanned,
+    #[cfg(target_os = "macos")]
+    CloudRows,
     NotebookSearchScanned,
     /// 笔记链接索引已在后台更新。
     NoteLinksScanned,
@@ -496,6 +498,7 @@ pub enum Hover {
     /// JSON 结构图的画布或按钮。
     Json(preview::json::Target),
     NotebookNav(workspace::notebook::SidebarTarget),
+    WorkspaceHistory(bool),
     NewTab,
     /// 标签栏无法容纳全部标签时显示在最右端的「⌄」，用于列出全部标签。
     TabList,
@@ -519,6 +522,7 @@ pub enum Hover {
     PdfTool(crate::app::preview::pdf::PdfTool),
     Search(SearchButton),
     TreeRow(usize),
+    CloudBadge(usize),
     /// 历史差异侧栏标题行中切换树形与列表的按钮。
     LogDiffLayout,
     /// 标签序号，以及是否悬停在该标签的关闭按钮上。
@@ -601,6 +605,7 @@ impl Hover {
                 )
                 | Hover::Status(StatusItem::Terminal | StatusItem::Remote | StatusItem::Settings)
                 | Hover::TreeMore
+                | Hover::CloudBadge(_)
                 | Hover::SidebarButton
                 | Hover::LogDiffLayout
                 | Hover::Tab(..)
@@ -1095,6 +1100,8 @@ impl App {
             UserEvent::Reread => self.poll_rereads(),
             UserEvent::TreeScanned => self.poll_tree_scans(),
             UserEvent::LibraryScanned => self.poll_library(),
+            #[cfg(target_os = "macos")]
+            UserEvent::CloudRows => self.poll_cloud_rows(),
             UserEvent::NotebookSearchScanned => self.poll_notebook_search(),
             UserEvent::NoteLinksScanned => self.poll_note_links(),
             UserEvent::Saved => self.poll_saves(),

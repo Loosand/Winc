@@ -188,7 +188,20 @@ fn scan(root: &Path, notes: &mut BTreeMap<PathBuf, Arc<Vec<Citation>>>, start: &
     }
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the local note index must not download iCloud placeholders"
+)]
 fn read_note(notes: &mut BTreeMap<PathBuf, Arc<Vec<Citation>>>, path: PathBuf) {
+    #[cfg(target_os = "macos")]
+    if path
+        .symlink_metadata()
+        .is_ok_and(|metadata| crate::system::is_dataless(&metadata))
+    {
+        // Keep the note discoverable by its name so opening a link can download it.
+        notes.insert(path, Arc::default());
+        return;
+    }
     if let Ok(bytes) = winc_backend::fs::read(&path) {
         let (text, encoding) = winc_editor::encoding::decode_unknown(&bytes);
         if encoding != winc_editor::Encoding::Binary {

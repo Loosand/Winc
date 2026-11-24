@@ -120,6 +120,7 @@ impl Navigation {
 impl App {
     /// 把光标当前位置记入后退、前进的历史，每处理完一批事件调用一次。
     pub(in crate::app) fn track_navigation(&mut self) {
+        self.remember_workspace_visit();
         let Some(doc) = self.editor.active() else {
             return;
         };

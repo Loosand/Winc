@@ -1387,7 +1387,7 @@ fn arrows_skip_the_hidden_block_markers() {
     for (needle, before, after) in [
         ("二", "- 一|\n- 二\n", "- 一\n- |二\n"),
         ("三", "- 二|\n  - 三\n", "- 二\n  - |三\n"),
-        ("引", "  - 三\n|\n> 引\n", "  - 三\n\n> |引\n"),
+        ("引", "  - 三|\n\n> 引\n", "  - 三\n\n> |引\n"),
     ] {
         put_caret(&mut app, needle, false);
         assert!(app.markdown_key(&left, false), "{needle}");
@@ -1509,6 +1509,7 @@ fn code_blocks_are_created_and_removed_as_a_whole() {
         app.run(winc_editor::Command::Insert("`".into()));
         paint(&mut app);
     }
+    app.preview.markdown.cost = Some(std::time::Duration::MAX);
     assert!(app.markdown_key(&tick, false));
     paint(&mut app);
     assert_eq!(with_caret(&app), "前文\n\n```|\n```\n\n后文\n");

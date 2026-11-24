@@ -15,7 +15,9 @@ mod display_link;
 mod drag;
 mod files;
 mod folder_menu;
+mod icloud;
 pub mod install;
+mod mouse;
 mod pasteboard;
 mod recent_documents;
 mod text_input;
@@ -39,6 +41,8 @@ pub use drag::dragging_out;
 pub(crate) use files::application_path;
 pub use files::{default_browser, move_to_trash};
 pub use folder_menu::{FolderItem, on_folder_menu, popup_folder_menu};
+pub(crate) use icloud::{icloud_file_status, is_dataless, is_icloud_item};
+pub use mouse::{capture_left_click_count, take_left_click_count};
 // 测试中由 `App` 上的字段代替剪贴板，不使用这两个函数。
 #[cfg_attr(test, allow(unused_imports))]
 pub use pasteboard::{pasteboard_has_image, pasteboard_png};

@@ -66,6 +66,16 @@ pub(crate) fn is_icloud_folder(path: &Path) -> bool {
             .any(|dir| dir.ends_with("Library/Mobile Documents"))
 }
 
+pub(crate) fn is_dataless(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(target_os = "macos")]
+    return crate::macos::is_dataless(metadata);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 /// Open a local workspace in the Typora bundle shown in the menu.
 pub(crate) fn open_in_typora(root: &Path, application: &Path) -> io::Result<()> {
     winc_backend::ensure_local(root)?;

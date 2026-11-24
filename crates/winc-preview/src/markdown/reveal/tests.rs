@@ -6,7 +6,8 @@ use super::*;
 fn shown(text: &str) -> String {
     let caret = text.find('|').unwrap();
     let text = text.replace('|', "");
-    let (Block::Paragraph(inline) | Block::Heading(_, inline)) = reveal(&text, Some(caret), None)
+    let (Block::Paragraph(inline) | Block::Heading(_, inline)) =
+        reveal(&text, Some(caret), None, None)
     else {
         panic!();
     };
@@ -46,7 +47,7 @@ fn only_the_touched_element_shows_its_markers() {
 fn continuation_lines_drop_container_markers() {
     // 续行的 `>` 和缩进不显示，软换行按通常规则处理（中文之间不加空格）；文字与原文逐字对照。
     let text = "一 **二**\n> 三";
-    let Block::Paragraph(inline) = reveal(text, Some(0), None) else {
+    let Block::Paragraph(inline) = reveal(text, Some(0), None, None) else {
         panic!();
     };
     assert_eq!(inline.text, "一 二三");
@@ -55,12 +56,12 @@ fn continuation_lines_drop_container_markers() {
     let two = inline.text.find('二').unwrap();
     assert_eq!(inline.source_of(two), text.find('二'));
     // 输入法组字排在光标处，其后的文字向后移动。
-    let Block::Paragraph(inline) = reveal("甲乙", Some(3), Some("丙")) else {
+    let Block::Paragraph(inline) = reveal("甲乙", Some(3), Some("丙"), None) else {
         panic!();
     };
     assert_eq!(inline.text, "甲丙乙");
     // 已输入为其他种类的块（尚未重新解析）时逐字显示。
-    let Block::Paragraph(inline) = reveal("- 一\n- 二", Some(0), None) else {
+    let Block::Paragraph(inline) = reveal("- 一\n- 二", Some(0), None, None) else {
         panic!();
     };
     assert_eq!(inline.text, "- 一\n- 二");

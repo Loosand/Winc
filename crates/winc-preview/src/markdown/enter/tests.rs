@@ -9,17 +9,30 @@ fn press(text: &str) -> String {
     let text = text.replace('|', "");
     let start = text[..at].rfind('\n').map_or(0, |i| i + 1);
     let end = text[at..].find('\n').map_or(text.len(), |i| at + i);
-    let next = text.get(end + 1..).and_then(|t| t.split('\n').next());
+    let next = match text.get(end + 1..).and_then(|t| t.split('\n').next()) {
+        Some(line) if !line.trim().is_empty() => {
+            if super::super::parse(&text)
+                .leaves
+                .iter()
+                .any(|leaf| leaf.prose && leaf.range.contains(&at) && leaf.range.end > end + 1)
+            {
+                NextLine::Continuation
+            } else {
+                NextLine::Block
+            }
+        }
+        _ => NextLine::BlankOrEnd,
+    };
     let above = text[..start.saturating_sub(1)].rsplit('\n');
     let above: Vec<&str> = if start == 0 {
         Vec::new()
     } else {
         above.collect()
     };
-    let edit = enter(&text[start..at], &text[at..end], next, above.into_iter());
+    let (edit, trailing) = enter(&text[start..at], &text[at..end], next, above.into_iter());
     let from = at - edit.before;
     let to = at + edit.after;
-    format!("{}{}|{}", &text[..from], edit.text, &text[to..])
+    format!("{}{}|{trailing}{}", &text[..from], edit.text, &text[to..])
 }
 
 #[test]
@@ -28,6 +41,7 @@ fn paragraphs_split() {
     assert_eq!(press("# 标题|"), "# 标题\n\n|");
     // 光标位于多行段落的行尾：下一行成为新的一段。
     assert_eq!(press("第一行|\n第二行"), "第一行\n\n|第二行");
+    assert_eq!(press("# 标题|\n2. 保留"), "# 标题\n\n|\n\n2. 保留");
     assert_eq!(press("a\n|\nb"), "a\n\n|\nb");
 }
 
@@ -110,23 +124,23 @@ fn tab(text: &str, outdent: bool) -> Option<String> {
 #[test]
 fn enter_after_a_fence_closes_it() {
     let close = |line: &str, below: &[&str]| fence(line, "", below.iter().copied());
-    assert_eq!(
-        close("```rust", &[]),
-        Some(("\n".to_owned(), "\n```".to_owned()))
-    );
-    assert_eq!(
-        close("> ~~~~", &["后文"]),
-        Some(("\n> ".to_owned(), "\n> ~~~~".to_owned()))
-    );
-    assert_eq!(
-        close("$$", &["", "$$"]),
-        Some(("\n".to_owned(), "\n$$".to_owned()))
-    );
+    let open = |head: &str, tail: &str| {
+        Some(Fence::Open {
+            head: head.to_owned(),
+            tail: tail.to_owned(),
+        })
+    };
+    assert_eq!(close("```rust", &[]), open("\n", "\n```"));
+    assert_eq!(close("> ~~~~", &["后文"]), open("\n> ", "\n> ~~~~"));
+    assert_eq!(close("$$", &["", "$$"]), open("\n", "\n$$"));
     // 下一个代码块的开围栏不视为闭围栏。
-    assert!(close("```", &["文字", "```js", "x", "```"]).is_some());
+    assert_eq!(
+        close("```", &["文字", "```js", "x", "```"]),
+        open("\n", "\n```")
+    );
     // 已闭合时按普通换行处理。
-    assert_eq!(close("```rust", &["x", "```"]), None);
-    assert_eq!(close("$$", &["x^2", "$$"]), None);
+    assert_eq!(close("```rust", &["x", "```"]), Some(Fence::Closed));
+    assert_eq!(close("$$", &["x^2", "$$"]), Some(Fence::Closed));
     assert_eq!(close("`` `a` ``", &[]), None);
     assert_eq!(close("正文", &[]), None);
     assert_eq!(fence("```", "x", std::iter::empty()), None);

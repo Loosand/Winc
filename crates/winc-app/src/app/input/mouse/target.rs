@@ -69,6 +69,7 @@ impl App {
             l.sidebar_button,
             nav.search,
             nav.tree_menu,
+            self.hits.document_title,
             self.tabs.new_tab,
             l.terminal_divider,
             l.split_divider,
@@ -92,6 +93,7 @@ impl App {
         client.extend(self.hits.terminal.iter().map(|(r, _)| *r));
         client.extend(self.hits.merge.iter().map(|(r, _)| *r));
         client.extend(self.hits.crumbs.iter().map(|(r, _)| *r));
+        client.extend(self.hits.workspace_history);
         client.extend(self.hits.status.iter().map(|(r, _)| *r));
         client.extend(
             [
@@ -243,6 +245,7 @@ impl App {
             Target::TreeTool(tool) => Hover::TreeTool(tool),
             Target::ProjectName => Hover::ProjectName,
             Target::SidebarButton => Hover::SidebarButton,
+            Target::WorkspaceHistory(forward) => Hover::WorkspaceHistory(forward),
             Target::Library(target) => Hover::Library(target),
             Target::Json(target) => Hover::Json(target),
             Target::NewTab => Hover::NewTab,
@@ -261,7 +264,18 @@ impl App {
             Target::RulerChange(hunk) => Hover::RulerChange(hunk),
             Target::Crumb(index) => Hover::Crumb(index),
             Target::Status(item) => Hover::Status(item),
-            Target::Tree(row) => row.map_or(Hover::None, Hover::TreeRow),
+            Target::Tree(row) => row.map_or(Hover::None, |row| {
+                if self
+                    .hits
+                    .cloud_badges
+                    .iter()
+                    .any(|(badge, _)| badge.contains(x, y))
+                {
+                    Hover::CloudBadge(row)
+                } else {
+                    Hover::TreeRow(row)
+                }
+            }),
             Target::Placeholder(action) => Hover::Placeholder(action),
             Target::Diff(target) => Hover::Diff(target),
             Target::Log(target) => Hover::Log(target),
@@ -401,6 +415,17 @@ impl App {
         }
         if l.sidebar_button.contains(x, y) {
             return Target::SidebarButton;
+        }
+        if let Some(index) = self
+            .hits
+            .workspace_history
+            .iter()
+            .position(|r| r.contains(x, y))
+        {
+            return Target::WorkspaceHistory(index == 1);
+        }
+        if self.hits.document_title.contains(x, y) {
+            return Target::Blocked;
         }
         if self.tabs.new_tab.contains(x, y) {
             return Target::NewTab;
@@ -1039,6 +1064,7 @@ pub(super) enum Target {
     TreeTool(crate::layout::TreeTool),
     ProjectName,
     SidebarButton,
+    WorkspaceHistory(bool),
     Library(crate::app::workspace::library::LibraryTarget),
     Json(crate::app::preview::json::Target),
     NewTab,

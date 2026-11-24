@@ -1,4 +1,4 @@
-//! `movement` 模块的测试：字素边界（含 emoji 簇与长行）、按词移动与选词、上下移动保持目标显示列、
+//! `movement` 模块的测试：字素边界（含 emoji 簇与长行）、上下移动保持目标显示列、
 //! 括号配对与智能行首。
 
 use ropey::Rope;
@@ -24,20 +24,6 @@ fn graphemes_on_long_line() {
     assert_eq!(next_grapheme(&text, 5_000), 5_001);
     assert_eq!(prev_grapheme(&text, 5_000), 4_999);
     assert_eq!(next_grapheme(&text, 10_000), 10_000);
-}
-
-#[test]
-fn words() {
-    let text = Rope::from_str("let foo_bar = baz(1);");
-    assert_eq!(next_word(&text, 0), 4);
-    assert_eq!(next_word(&text, 4), 12);
-    assert_eq!(next_word(&text, 12), 14);
-    assert_eq!(prev_word(&text, 12), 4);
-    assert_eq!(prev_word(&text, 4), 0);
-    assert_eq!(prev_word(&text, 17), 14);
-    assert_eq!(word_at(&text, 6), (4, 11));
-    assert_eq!(word_at(&text, 11), (4, 11));
-    assert_eq!(word_at(&text, 21), (19, 21));
 }
 
 #[test]

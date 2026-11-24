@@ -17,7 +17,12 @@ use super::{Block, Inline, Run, SourceMap, Style, options, parse};
 /// `text` 是叶子块的原文，续行带有引用的 `>` 和列表的缩进；`caret` 是光标相对 `text` 的
 /// 字节偏移，为 `None` 时不显示标记；`insert` 是输入法组字，排在光标处并加下划线，没有原文位置。
 /// 对照以 `text` 的开头为准（`Inline::source` 为 0）；原文已不是段落时逐字显示，不带样式。
-pub fn reveal(text: &str, caret: Option<usize>, insert: Option<&str>) -> Block {
+pub fn reveal(
+    text: &str,
+    caret: Option<usize>,
+    insert: Option<&str>,
+    selection: Option<Range<usize>>,
+) -> Block {
     let lines = Lines::strip(text);
     let plain = &lines.plain;
     // 去掉引用标记后没有内容（只输入了 `>`）：逐字显示原文，光标仍有位置可落。
@@ -43,6 +48,7 @@ pub fn reveal(text: &str, caret: Option<usize>, insert: Option<&str>) -> Block {
     let elements = elements(plain);
     let mut out = Out {
         insert: caret.zip(insert).map(|(at, text)| (at, text.to_owned())),
+        selection: selection.map(|range| lines.to_plain(range.start)..lines.to_plain(range.end)),
         ..Out::default()
     };
     let caret = caret.map(|c| lines.to_plain(c));
@@ -229,6 +235,7 @@ struct Out {
     map: SourceMap,
     /// 尚未写入的输入法组字及其在原文中的位置；写入到原文位置不小于该值的第一个字符之前。
     insert: Option<(usize, String)>,
+    selection: Option<Range<usize>>,
 }
 
 impl Out {
@@ -323,13 +330,17 @@ impl Out {
                 continue;
             }
             let at = gap.start + i;
+            let selected = self
+                .selection
+                .as_ref()
+                .is_some_and(|range| range.contains(&at));
             let show = match innermost(elements, at) {
-                Some(e) => touches(e, caret),
+                Some(e) => selected || touches(e, caret),
                 None => {
                     let p = piece(i);
                     let p = gap.start + p.start..gap.start + p.end;
                     // 行首、行尾的空白（续行的缩进、硬换行的两个空格）不视为标记。
-                    !plain[p.clone()].trim().is_empty() && touches(&p, caret)
+                    !plain[p.clone()].trim().is_empty() && (selected || touches(&p, caret))
                 }
             };
             if show {

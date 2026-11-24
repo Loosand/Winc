@@ -296,6 +296,7 @@ impl App {
 
         let writing = self.writing_workspace();
         if writing {
+            self.remember_workspace_visit();
             let canonical = winc_editor::canonical_path(path);
             let keep = self
                 .editor
@@ -340,6 +341,7 @@ impl App {
         self.announce_readonly();
         self.ensure_caret_visible();
         self.reset_blink();
+        self.remember_workspace_visit();
         self.request_redraw();
         true
     }
@@ -425,6 +427,7 @@ impl App {
             .iter_mut()
             .for_each(|(path, _)| relocate(path));
         self.jumps.navigation.relocate(from, to);
+        self.jumps.paths.relocate(from, to);
         self.picker_touched(vec![from.to_path_buf(), to.to_path_buf()]);
         self.files_changed_under_results();
     }

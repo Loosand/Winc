@@ -303,7 +303,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     };
     laid.left = left;
     laid.pad = pad;
-    laid.set_upstream(app.live_upstream());
+    laid.drawn_upstream = app.live_upstream();
     app.note_links.footer_hits.clear();
     let footer = note_footer::height(app);
     app.preview.markdown.height = laid.height + pad * 2.0 + footer;

@@ -51,9 +51,9 @@ pub(crate) struct Laid {
     /// 不能编辑时为 `None`；光标换了叶子块（表格里换了一格）、或者打了字，这一块要重排。
     pub(crate) live: Option<LiveKey>,
     /// 上一次找的光标位置和结果（见 [`point_of`]）：滚动时光标不动，不必每帧在大块里再找。
-    pub(crate) caret: std::cell::Cell<Option<(usize, Option<Point>)>>,
-    /// 应画在上一显示行末尾的光标位置（原文字节偏移），见 [`Laid::set_upstream`]。
-    pub(crate) upstream: std::cell::Cell<Option<usize>>,
+    caret: std::cell::Cell<Option<CachedCaret>>,
+    /// 这一帧画在上一显示行末尾的光标位置（原文字节偏移）。
+    pub(crate) drawn_upstream: Option<usize>,
     /// 内容总高度。
     pub(crate) height: f32,
     /// 上一次画的时候内容的左边缘（窗口坐标，逻辑像素），鼠标定位用。
@@ -71,6 +71,13 @@ pub(crate) struct Laid {
     pub(crate) near: Option<Near>,
     /// 各顶层块作为标题时下面可以收起的一节（见 `Markdown::sections`）。
     pub(crate) sections: Vec<Option<winc_preview::markdown::Section>>,
+}
+
+#[derive(Clone, Copy)]
+struct CachedCaret {
+    source: usize,
+    upstream: bool,
+    point: Option<Point>,
 }
 
 /// One run of blank lines, with equally spaced hit targets and real source offsets.
@@ -333,7 +340,14 @@ pub(crate) struct Leaving {
 /// 包含顶层块、叶子块和文档版本；位于表格或正文中时还包含光标位置（切换单元格需要重排，
 /// 正文中光标接触的标记需要显示）；位于代码块的首尾几行时包含所在的行（围栏行需要显示，
 /// 见 `LiveLeaf::edge`）。
-pub(crate) type LiveKey = (usize, std::ops::Range<usize>, u64, Option<usize>, String);
+pub(crate) type LiveKey = (
+    usize,
+    std::ops::Range<usize>,
+    u64,
+    Option<usize>,
+    String,
+    Option<std::ops::Range<usize>>,
+);
 
 /// `preedit` 是输入法正在组合的文字，在正文中排入光标所在的行，因此其变化同样需要重排。
 pub(crate) fn live_key(live: &crate::app::preview::markdown::LiveLeaf, preedit: &str) -> LiveKey {
@@ -347,6 +361,7 @@ pub(crate) fn live_key(live: &crate::app::preview::markdown::LiveLeaf, preedit: 
         } else {
             String::new()
         },
+        live.selection.clone(),
     )
 }
 
@@ -373,6 +388,10 @@ pub(crate) fn old_caret(
         // A background parse can replace an approximate layout for the same
         // edit. Anchor only its unchanged, visible caret; never chase one the
         // user left offscreen by scrolling or moved since the last frame.
+        let doc = app.editor.active()?;
+        if app.preview.markdown.table_edit_revision == Some((doc.id, doc.revision)) {
+            return None;
+        }
         let (previous, next) = (old.live.as_ref()?, live?);
         let scroll = app.preview.markdown.scroll();
         if previous.2 != next.2
@@ -458,9 +477,13 @@ pub(crate) fn lay_out(
         let preedit =
             ((live.prose || live.table) && !preedit.is_empty()).then(|| Arc::from(preedit));
         let parsed_end = live.parsed_end.saturating_sub(start);
-        Some((
-            live.block, text, leaf, parsed_end, caret, live.prose, preedit,
-        ))
+        let mut raw = Raw::new(text, leaf, parsed_end, caret, live.prose, preedit);
+        raw.selection = live.selection.as_ref().and_then(|range| {
+            let from = range.start.max(start);
+            let to = range.end.min(end);
+            (from < to).then(|| from - start..to - start)
+        });
+        Some((live.block, raw))
     });
     let p = app.palette;
     app.preview
@@ -534,7 +557,11 @@ pub(crate) fn lay_out(
             .is_some_and(|d| app.preview.markdown.checked == Some(d.revision));
     let blank = &parsed.blank_rows;
     let blank_before = |i: usize, offsets: std::ops::Range<usize>| {
-        (checked && !offsets.is_empty() && !hidden[i] && (i == 0 || !hidden[i - 1]))
+        (checked
+            && !offsets.is_empty()
+            && parsed.collapsed_separator_before(i).is_none()
+            && !hidden[i]
+            && (i == 0 || !hidden[i - 1]))
             .then_some(offsets)
     };
     let after = blank.after();
@@ -584,12 +611,10 @@ pub(crate) fn lay_out(
             .filter(|r| !mapped && r.0 == i && !(i == 0 && properties.is_some()));
         // 显示原文的块换一个键存：光标离开后同样内容的块要重新按排版显示。
         let hash = match raw {
-            Some((_, text, leaf, parsed_end, caret, prose, preedit)) => {
-                winc_typeset::memo_key(|h| {
-                    use std::hash::Hash;
-                    (hash, &**text, leaf, parsed_end, caret, prose, preedit).hash(h);
-                })
-            }
+            Some((_, raw)) => winc_typeset::memo_key(|h| {
+                use std::hash::Hash;
+                (hash, raw).hash(h);
+            }),
             None => hash,
         };
         let kept = later.as_ref().and_then(|later| {
@@ -609,16 +634,17 @@ pub(crate) fn lay_out(
         let already = blocks.last().map_or(0.0, |(_, b)| b.editing_blank_height);
         let offsets = blank.before(i);
         let extra_rows = offsets.len().saturating_sub(1 + usize::from(i != 0));
+        let mapped_gap = blank_before(i, offsets);
         let gap = if editable && (i == 0 || !hidden[i - 1]) {
             (extra_rows as f32 * blank_row - already).max(0.0)
         } else {
             0.0
         };
-        let space = below.map_or(0.0, |below: f32| below.max(margin)) + gap;
+        let mut space = below.map_or(0.0, |below: f32| below.max(margin)) + gap;
         if already == 0.0
-            && space > 0.0
-            && let Some(offsets) = blank_before(i, offsets)
+            && let Some(offsets) = mapped_gap
         {
+            space = space.max(blank_row);
             gaps.push(BlankGap::new(offsets, y, space));
         }
         let top = y + space;
@@ -640,16 +666,7 @@ pub(crate) fn lay_out(
             cx.text.clear();
             cx.chars = 0;
             cx.memo.take_touched();
-            cx.raw = raw.map(|(_, text, leaf, parsed_end, caret, prose, preedit)| {
-                Raw::new(
-                    Arc::clone(text),
-                    leaf.clone(),
-                    *parsed_end,
-                    *caret,
-                    *prose,
-                    preedit.clone(),
-                )
-            });
+            cx.raw = raw.map(|(_, raw)| raw.clone());
             cx.preedit = false;
             cx.cell = None;
             let mut flow = cx.block(block, 0.0, 0.0, key.width, env, &mut out);
@@ -790,7 +807,7 @@ pub(crate) fn lay_out(
         blank_offsets: Arc::clone(blank.offsets()),
         live: live.map(|l| live_key(l, app.preedit_at(Focus::Editor))),
         caret: std::cell::Cell::new(None),
-        upstream: std::cell::Cell::new(None),
+        drawn_upstream: None,
         height: y,
         left: 0.0,
         pad: 0.0,
@@ -1064,26 +1081,26 @@ impl Laid {
         }
     }
 
-    /// 原文第 `source` 个字节在预览上的位置（见 [`point_of`]），按上一次的结果缓存。
+    /// 原文第 `source` 个字节按这一帧的光标归属显示的位置。
     pub(crate) fn caret_point(&self, source: usize) -> Option<Point> {
-        if let Some((at, point)) = self.caret.get()
-            && at == source
-        {
-            return point;
-        }
-        let point = point_of(self, source);
-        self.caret.set(Some((source, point)));
-        point
+        self.caret_point_with_affinity(source, self.drawn_upstream == Some(source))
     }
 
-    /// 指定应画在上一显示行末尾的光标位置（原文字节偏移，没有时为 `None`）。
-    ///
-    /// 折行处的原文位置同时是上一行的末尾和下一行的开头，[`point_of`] 默认取下一行的开头；
-    /// 按 End 移到行尾后光标应留在本行。
-    pub(crate) fn set_upstream(&self, source: Option<usize>) {
-        if self.upstream.replace(source) != source {
-            self.caret.set(None);
+    /// 按指定的折行归属定位。`upstream` 为真时，优先取上一显示行末尾。
+    pub(crate) fn caret_point_with_affinity(&self, source: usize, upstream: bool) -> Option<Point> {
+        if let Some(cached) = self.caret.get()
+            && cached.source == source
+            && cached.upstream == upstream
+        {
+            return cached.point;
         }
+        let point = point_of_with_affinity(self, source, upstream);
+        self.caret.set(Some(CachedCaret {
+            source,
+            upstream,
+            point,
+        }));
+        point
     }
 
     /// 正文一栏的宽度（逻辑像素）。
@@ -1342,6 +1359,10 @@ fn is_markup(c: char) -> bool {
 /// 取原文位置不超过 `source` 的最后一个字之前；落在标记里（`**`、链接地址）时就是标记前面
 /// 那个字之后。
 pub(crate) fn point_of(laid: &Laid, source: usize) -> Option<Point> {
+    point_of_with_affinity(laid, source, laid.drawn_upstream == Some(source))
+}
+
+fn point_of_with_affinity(laid: &Laid, source: usize, upstream: bool) -> Option<Point> {
     if let Some(point) = laid.blank_point(source) {
         return Some(point);
     }
@@ -1350,7 +1371,6 @@ pub(crate) fn point_of(laid: &Laid, source: usize) -> Option<Point> {
         .ranges
         .iter()
         .rposition(|r| r.start <= source && source <= r.end)?;
-    let upstream = laid.upstream.get() == Some(source);
     let source = source - laid.ranges[block].start;
     // 光标应画在上一显示行的末尾：取原文位置在它之前的最后一段，该段正好在此结束时用其末尾。
     if upstream

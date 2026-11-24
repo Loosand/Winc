@@ -3,17 +3,67 @@
 use super::*;
 use crate::app::TabHit;
 
-/// Show the current document's path. Keep tabs when recovering multiple drafts or using multi-document tools.
+/// Use path history in writing windows and tabs in multi-document windows.
 pub(in crate::view) fn draw_top_bar(app: &mut App, frame: &mut Frame<'_>) {
     if app.writing_workspace() && app.editor.documents.len() <= 1 {
         app.tabs = Default::default();
-        let bar = app.layout.tabs;
-        crate::view::status::draw_crumbs(app, frame, bar, (bar.w - 24.0).max(0.0));
+        draw_workspace_history(app, frame);
     } else {
         draw_tabs(app, frame);
     }
     draw_preview_button(app, frame);
     draw_browser_button(app, frame);
+}
+
+fn draw_workspace_history(app: &mut App, frame: &mut Frame<'_>) {
+    if app.editor.active().is_none() && !app.library_shown() {
+        return;
+    }
+    let bar = app.layout.tabs;
+    let p = app.palette;
+    let mut x = bar.x + 4.0;
+    for (forward, direction) in [
+        (false, icons::Direction::Left),
+        (true, icons::Direction::Right),
+    ] {
+        let button = Rect::new(x, bar.y + (bar.h - BUTTON) / 2.0, BUTTON, BUTTON);
+        let enabled = app.can_step_workspace_path(forward);
+        let hovered = enabled && app.pointer.hover == Hover::WorkspaceHistory(forward);
+        draw_button(frame, p, button, bar, hovered, false);
+        icons::chevron(
+            frame,
+            center(button),
+            8.0,
+            direction,
+            if enabled {
+                p.text_muted
+            } else {
+                p.text_dim.alpha(0.5)
+            },
+            bar,
+        );
+        app.hits.workspace_history[usize::from(forward)] = button.intersect(bar);
+        x = button.right() + BUTTON_GAP;
+    }
+
+    let Some(doc) = app.editor.active().filter(|_| !app.library_shown()) else {
+        return;
+    };
+    let name = doc
+        .path
+        .as_deref()
+        .map_or_else(|| doc.name(), winc_editor::display_name);
+    let icon_x = x + 2.0;
+    let text_x = icon_x + icons::FILE_WIDTH + 7.0;
+    let room = bar.right() - text_x - 8.0;
+    if room <= 0.0 {
+        return;
+    }
+    let cy = icon_center_y(app, bar, app.fonts.ui);
+    draw_file_icon(frame, p, (icon_x, cy), &name, bar);
+    let name = truncate_end(frame, &name, app.fonts.ui, room);
+    let end = ui_text(frame, app, text_x, bar, &name, p.text_muted, bar);
+    app.hits.document_title = Rect::new(x, bar.y, end + 4.0 - x, bar.h).intersect(bar);
 }
 
 /// 绘制顶栏右端的窗口按钮（最小化、最大化或还原、关闭），由应用绘制标题栏时才有。

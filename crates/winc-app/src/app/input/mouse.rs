@@ -93,6 +93,7 @@ impl App {
             self.finish_image_resize();
         }
         if button == MouseButton::Left && matches!(self.pointer.drag, Drag::MarkdownText) {
+            self.finish_markdown_drag();
             self.offer_selection_toolbar();
         }
         self.pointer.drag = Drag::None;

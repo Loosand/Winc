@@ -101,16 +101,10 @@ fn the_full_preview_edits_the_document() {
         "{}",
         after_caret(&app, 12)
     );
-    // 继续向下：先到空行，再到标题末尾。即使标题前的间距较大也只前进一行。
-    for text in ["\n## 安装", "\n\n1. "] {
-        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
-        paint(&mut app);
-        assert!(
-            after_caret(&app, 12).starts_with(text),
-            "{:?}",
-            after_caret(&app, 12)
-        );
-    }
+    // 跳过段落间距，一次向下就到标题末尾。
+    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
+    paint(&mut app);
+    assert!(after_caret(&app, 12).starts_with("\n\n1. "));
     // ⇧↑ 扩展选区。
     app.pointer.modifiers = winit::keyboard::ModifiersState::SHIFT;
     assert!(app.markdown_key(&Key::Named(NamedKey::ArrowUp), false));
@@ -342,6 +336,44 @@ fn enter_in_the_preview_continues_lists_and_splits_paragraphs() {
 }
 
 #[test]
+fn enter_before_an_adjacent_block_leaves_room_for_a_paragraph() {
+    use winc_editor::Command;
+    use winit::keyboard::{Key, NamedKey};
+
+    for (name, source, before, after) in [
+        ("ordered-list", "## 标题\n2. 保留\n", "## 标题", "2. 保留\n"),
+        ("rule", "## 标题\r\n---\r\n", "## 标题", "---\r\n"),
+        (
+            "fence",
+            "正文\n```\n保留\n```\n",
+            "正文",
+            "```\n保留\n```\n",
+        ),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-enter-before-{name}"), source);
+        let eol = if source.contains('\r') { "\r\n" } else { "\n" };
+        put_caret(&mut app, before.trim_start_matches("## "), true);
+        assert!(app.markdown_key(&Key::Named(NamedKey::Enter), false));
+        settle(&mut app);
+        let empty_paragraph = format!("{before}{eol}{eol}|{eol}{eol}{after}");
+        assert_eq!(with_caret(&app), empty_paragraph, "{name}");
+        app.run(Command::Insert("新段落".into()));
+        settle(&mut app);
+        assert_eq!(
+            doc_text(&app),
+            format!("{before}{eol}{eol}新段落{eol}{eol}{after}"),
+            "{name}"
+        );
+        app.run(Command::Undo);
+        app.run(Command::Undo);
+        assert_eq!(doc_text(&app), source, "{name}");
+        app.run(Command::Redo);
+        assert_eq!(with_caret(&app), empty_paragraph, "{name}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
 fn leaving_a_task_list_and_joining_paragraphs_preserves_the_crlf_note() {
     use winc_editor::Command;
     use winit::keyboard::{Key, NamedKey};
@@ -365,7 +397,7 @@ fn leaving_a_task_list_and_joining_paragraphs_preserves_the_crlf_note() {
 }
 
 #[test]
-fn shift_arrows_cross_a_blank_row_and_ime_replaces_only_the_selection() {
+fn shift_arrows_cross_a_separator_and_ime_replaces_only_the_selection() {
     use winc_core::Selection;
     use winc_editor::Command;
     use winit::{
@@ -384,10 +416,8 @@ fn shift_arrows_cross_a_blank_row_and_ime_replaces_only_the_selection() {
         };
         put_caret(&mut app, from, false);
         app.pointer.modifiers = ModifiersState::SHIFT;
-        for _ in 0..2 {
-            assert!(app.markdown_key(&Key::Named(key), false));
-            paint(&mut app);
-        }
+        assert!(app.markdown_key(&Key::Named(key), false));
+        paint(&mut app);
         app.pointer.modifiers = ModifiersState::empty();
         assert_eq!(app.editor.active().unwrap().selection, expected);
         app.on_ime(Ime::Preedit("ni".into(), Some((2, 2))));
@@ -671,6 +701,38 @@ fn time_single_view_writing() {
 }
 
 #[test]
+fn one_backspace_removes_the_empty_paragraph_created_after_a_heading() {
+    use winc_editor::Command;
+    use winit::keyboard::{Key, NamedKey};
+
+    let enter = Key::Named(NamedKey::Enter);
+    let backspace = Key::Named(NamedKey::Backspace);
+    for (name, source) in [
+        ("list", "# Skills\n\n- 第一项\n"),
+        ("adjacent-crlf", "# Skills\r\n2. 第一项\r\n"),
+        ("end", "# Skills"),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-enter-backspace-{name}"), source);
+        put_caret(&mut app, "Skills", true);
+        assert!(app.markdown_key(&enter, false));
+        settle(&mut app);
+        let empty_paragraph = with_caret(&app);
+        if !app.markdown_key(&backspace, false) {
+            app.run(Command::Backspace { word: false });
+        }
+        settle(&mut app);
+        assert_eq!(doc_text(&app), source, "{name}");
+        assert_eq!(app.live_caret_source(), Some("# Skills".len()), "{name}");
+        app.run(Command::Undo);
+        assert_eq!(with_caret(&app), empty_paragraph, "{name}");
+        app.run(Command::Redo);
+        assert_eq!(doc_text(&app), source, "{name}");
+        assert_eq!(app.live_caret_source(), Some("# Skills".len()), "{name}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
 fn repeated_enter_moves_the_visible_caret_down_one_row_at_a_time() {
     use winit::keyboard::{Key, NamedKey};
     for (name, source) in [
@@ -752,6 +814,167 @@ fn intentional_blank_rows_stay_visible_after_leaving_the_gap_and_reopening() {
     settle(&mut reopened);
     assert!((second(&reopened) - still_expanded).abs() < 1.0);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn block_separators_are_spacing_in_the_editable_preview() {
+    use crate::keymap::Action;
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+    for (name, source, first, second, eol) in [
+        (
+            "paragraph-list",
+            "技巧类\n\n- 第一条\n",
+            "技巧类",
+            "第一条",
+            "\n",
+        ),
+        ("paragraphs", "甲\r\n \t\r\n乙", "甲", "乙", "\r\n"),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-block-separator-{name}"), source);
+        let first_end = source.find(first).unwrap() + first.len();
+        let second_start = source.find(second).unwrap();
+        let blank = first_end + eol.len();
+        let (x, y) = {
+            let laid = app.preview.markdown.layout.as_ref().unwrap();
+            let gap_top = laid.tops[0] + laid.blocks[0].1.height;
+            let gap_bottom = laid.tops[1];
+            (
+                laid.left + 15.0,
+                app.preview.markdown.area.y + laid.pad - app.preview.markdown.scroll()
+                    + (gap_top + gap_bottom) / 2.0,
+            )
+        };
+        super::click(&mut app, (x, y));
+        settle(&mut app);
+        let clicked = app.live_caret_source().unwrap();
+        assert!(
+            clicked < blank || clicked >= second_start,
+            "{name}: {clicked}"
+        );
+
+        put_caret(&mut app, first, true);
+        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowRight), false));
+        assert_eq!(app.live_caret_source(), Some(second_start));
+        settle(&mut app);
+        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowLeft), false));
+        assert_eq!(app.live_caret_source(), Some(first_end));
+
+        put_caret(&mut app, first, false);
+        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
+        assert!(app.live_caret_source().unwrap() >= second_start, "{name}");
+        settle(&mut app);
+        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowUp), false));
+        assert!(app.live_caret_source().unwrap() <= first_end, "{name}");
+
+        put_caret(&mut app, first, true);
+        app.pointer.modifiers = ModifiersState::SHIFT;
+        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowRight), false));
+        app.pointer.modifiers = ModifiersState::empty();
+        assert!(app.run_action(Action::MarkdownCopy));
+        assert_eq!(
+            app.clipboard.copied.as_deref(),
+            Some(&source[first_end..second_start])
+        );
+        assert_eq!(doc_text(&app), source);
+        let id = app.editor.active().unwrap().id;
+        assert!(app.save_document(id, None));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("LIVE.md")).unwrap(),
+            source
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn heading_separators_are_clickable_empty_lines() {
+    use winit::keyboard::{Key, NamedKey};
+
+    for marker in ["#", "##"] {
+        let source = format!("{marker} 技巧类\n\n- 第一条\n");
+        let blank = source.find("\n\n").unwrap() + 1;
+        let (mut app, dir) = live_doc("md-heading-separator", &source);
+        let (x, y) = {
+            let laid = app.preview.markdown.layout.as_ref().unwrap();
+            let top = laid.tops[0] + laid.blocks[0].1.height;
+            (
+                laid.left + 10.0,
+                app.preview.markdown.area.y + laid.pad - app.preview.markdown.scroll()
+                    + (top + laid.tops[1]) / 2.0,
+            )
+        };
+        super::click(&mut app, (x, y));
+        assert_eq!(app.live_caret_source(), Some(blank), "{marker}");
+        put_caret(&mut app, "技巧类", false);
+        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
+        assert_eq!(app.live_caret_source(), Some(blank), "{marker}");
+        assert_eq!(doc_text(&app), source);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn a_click_below_the_body_opens_one_empty_paragraph() {
+    use winc_editor::Command;
+
+    for (name, source, extra) in [
+        ("lf", "正文", "\n\n"),
+        ("crlf-list", "# 标题\r\n\r\n- 最后一项\r\n", "\r\n"),
+    ] {
+        let (mut app, dir) = live_doc(&format!("md-click-below-{name}"), source);
+        let below = |app: &App| {
+            let laid = app.preview.markdown.layout.as_ref().unwrap();
+            (
+                laid.left + 10.0,
+                app.preview.markdown.area.y + laid.height() - app.preview.markdown.scroll() + 20.0,
+            )
+        };
+        let (x, y) = below(&app);
+        app.on_mouse_move(x, y);
+        app.on_mouse_down_with_click_count(MouseButton::Left, Some(1));
+        assert_eq!(doc_text(&app), source);
+        app.on_mouse_up(MouseButton::Left);
+        settle(&mut app);
+        let expected = format!("{source}{extra}");
+        assert_eq!(doc_text(&app), expected, "{name}");
+        assert_eq!(app.live_caret_source(), Some(expected.len()));
+        let at = below(&app);
+        super::click(&mut app, at);
+        assert_eq!(doc_text(&app), expected, "{name}");
+        app.run(Command::Undo);
+        assert_eq!(doc_text(&app), source, "{name}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn a_separator_after_properties_places_the_caret_in_the_body() {
+    use winit::keyboard::{Key, NamedKey};
+
+    let source = "---\nstatus: draft\n---\n\n## 标题\n";
+    let (mut app, dir) = live_doc("md-property-separator", source);
+    let body = source.find("##").unwrap();
+    let (x, y) = {
+        let laid = app.preview.markdown.layout.as_ref().unwrap();
+        let gap_top = laid.tops[0] + laid.blocks[0].1.height;
+        let gap_bottom = laid.tops[1];
+        assert!(gap_bottom > gap_top);
+        (
+            laid.left + 15.0,
+            app.preview.markdown.area.y + laid.pad - app.preview.markdown.scroll()
+                + gap_top
+                + (gap_bottom - gap_top) * 0.25,
+        )
+    };
+    super::click(&mut app, (x, y));
+    settle(&mut app);
+    assert!(app.live_caret_source().unwrap() >= body);
+    put_caret(&mut app, "标题", false);
+    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowUp), false));
+    assert!(app.live_caret_source().unwrap() >= body);
+    assert_eq!(doc_text(&app), source);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -964,63 +1187,26 @@ fn the_live_preview_hides_its_caret_until_clicked_and_ignores_the_margins() {
 }
 
 #[test]
-fn triple_click_keeps_a_wrapped_list_item_selected_during_mouse_movement() {
-    let item = format!(
-        "[组件库](https://example.com) （图赏）：{}末尾。",
-        "这条列表项很长，应该一直选到最后。".repeat(8)
-    );
-    let source = format!("- 前一项\n- {item}\n- 后一项\n");
-    let (mut app, dir) = live_doc("md-triple-wrapped-item", &source);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
-    let point = |needle: &str| point_of(&app, shown[..shown.find(needle).unwrap()].chars().count());
-    let (x, y) = point("图赏");
-    assert!(point("末尾").1 > y, "the list item should wrap");
-    let start = "- 前一项\n- ".chars().count();
-    let expected = start..start + item.chars().count();
-    super::click(&mut app, (x, y));
-    super::click(&mut app, (x, y));
-    app.on_mouse_down(MouseButton::Left);
-    let before_move = app.editor.active().unwrap().selection.range();
-    app.on_mouse_move(x + 2.0, y);
-    app.on_mouse_up(MouseButton::Left);
-    let after_move = app.editor.active().unwrap().selection.range();
-    assert_eq!(after_move, before_move);
-    assert_eq!(after_move, expected);
-    std::fs::remove_dir_all(dir).unwrap();
-}
+fn end_stays_on_the_same_visual_line_after_looking_up_both_sides_of_a_wrap() {
+    use winit::keyboard::{Key, NamedKey};
 
-#[test]
-fn triple_click_drag_extends_by_markdown_paragraphs_in_either_direction() {
-    let first = "前段的开头\r\n前段的结尾";
-    let middle = "中段的开头\r\n中段的结尾";
-    let last = "后段的开头\r\n后段的结尾";
-    let source = format!("{first}\r\n\r\n{middle}\r\n\r\n{last}\r\n");
-    let start = first.chars().count() + 4;
-    let end = start + middle.chars().count();
-    let source_end = source.chars().count() - 2;
-    for (target, expected) in [
-        ("前段的结尾", winc_core::Selection::new(end, 0)),
-        ("后段的开头", winc_core::Selection::new(start, source_end)),
-    ] {
-        let (mut app, dir) = live_doc("md-triple-source-lines", &source);
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
-        let point = |needle: &str| {
-            point_of(
-                &app,
-                shown[..shown.find(needle).unwrap()].chars().count() + 1,
-            )
-        };
-        let origin = point("中段的结尾");
-        let (x, y) = point(target);
-        super::click(&mut app, origin);
-        super::click(&mut app, origin);
-        app.on_mouse_down(MouseButton::Left);
-        assert_eq!(app.editor.active().unwrap().selection.range(), start..end);
-        app.on_mouse_move(x, y);
-        app.on_mouse_up(MouseButton::Left);
-        assert_eq!(app.editor.active().unwrap().selection, expected);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
+    let source = "甲乙丙丁".repeat(60);
+    let (mut app, dir) = live_doc("md-caret-wrap-affinity", &source);
+    let first_y = caret_screen_y(&app);
+    let end = Key::Named(NamedKey::End);
+    assert!(app.markdown_key(&end, false));
+    paint(&mut app);
+    let at = app.live_caret_source().unwrap();
+    assert!((1..source.len()).contains(&at));
+    let laid = app.preview.markdown.layout.as_ref().unwrap();
+    let above = laid.caret_point_with_affinity(at, true).unwrap();
+    let below = laid.caret_point_with_affinity(at, false).unwrap();
+    assert!(above.1 < below.1);
+    assert_eq!(laid.caret_point(at), Some(above));
+    assert!((caret_screen_y(&app) - first_y).abs() < 0.5);
+    assert!(app.markdown_key(&end, false));
+    assert_eq!(app.live_caret_source(), Some(at));
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// 回归：单独成行的公式中没有可定位的文字，点击后光标仍应进入公式的原文，公式随之显示原文、

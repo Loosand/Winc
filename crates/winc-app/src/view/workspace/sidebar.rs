@@ -571,6 +571,13 @@ fn draw_tree(app: &mut App, frame: &mut Frame<'_>) {
         let parts = (row, row_clip, open);
         let width = draw_tree_entry(app, frame, entry, index, parts, &mut segments);
         widest = widest.max(width);
+        if let Some(status) = app.cloud_status(&entry.path) {
+            let badge = cloud_badge_rect(tree, row);
+            draw_cloud_badge(app, frame, status, badge, row_clip);
+            app.hits
+                .cloud_badges
+                .push((badge.intersect(row_clip), status));
+        }
     }
 
     draw_sticky(app, frame, rows, &mut segments);
@@ -618,7 +625,7 @@ fn draw_tree_entry(
     let hovered = index.is_some_and(|i| {
         use crate::app::workspace::notebook::SidebarTarget;
         matches!(app.pointer.hover,
-            Hover::TreeRow(row) | Hover::NotebookNav(SidebarTarget::FolderNew(row) | SidebarTarget::FolderContext(row)) if row == i)
+            Hover::TreeRow(row) | Hover::CloudBadge(row) | Hover::NotebookNav(SidebarTarget::FolderNew(row) | SidebarTarget::FolderContext(row)) if row == i)
             || app.panels.tree.overflow.is_some_and(|(_, o)| o == i)
     });
 
@@ -627,7 +634,12 @@ fn draw_tree_entry(
     let label_x = tree_label_x(row, entry.depth, shift);
     let label = entry.label();
     // 合并显示的一行放不下时折叠中间的各级；鼠标在这一行上时展开完整路径，任意一级都点得到。
-    let room = if app.git.change_of(&entry.path).is_some() {
+    let badge = app
+        .cloud_status(&entry.path)
+        .map(|_| cloud_badge_rect(tree, row));
+    let room = if let Some(badge) = badge {
+        badge.x - 6.0
+    } else if app.git.change_of(&entry.path).is_some() {
         tree.right() - 16.0 - GIT_DOT - 6.0
     } else {
         tree.right() - 12.0
@@ -663,7 +675,7 @@ fn draw_tree_entry(
         None if !hovered => label_x + full,
         _ => label_x + view.width,
     };
-    let overflows = label_overflows(tree, label_end);
+    let overflows = badge.is_none() && label_overflows(tree, label_end);
     let pill = tree_row_pill(row, overflows);
 
     let focused = app.focus == Focus::Tree;
@@ -727,6 +739,7 @@ fn draw_tree_entry(
     // 名字画到哪里为止：有状态时停在状态左边，没有时到侧栏边缘。
     let folder_actions = app.notebook_sidebar() && hovered && entry.kind == EntryKind::Dir;
     let (text_right, cut) = match change {
+        _ if badge.is_some() => (label_x + room, false),
         _ if folder_actions => {
             let right = tree.right() - 60.0;
             (right, label_end > right)
@@ -752,7 +765,12 @@ fn draw_tree_entry(
         } else {
             color.alpha(color.a * view.alpha)
         };
-        ui_text(frame, app, label_x, row, &label, shown, text_clip);
+        let text = if badge.is_some() {
+            truncate_end(frame, &label, app.fonts.ui, room.max(0.0))
+        } else {
+            Cow::Borrowed(label.as_ref())
+        };
+        ui_text(frame, app, label_x, row, &text, shown, text_clip);
     } else {
         let style = (color, selected);
         let parts = folded
@@ -800,6 +818,46 @@ fn draw_tree_entry(
     // 横向滚动范围按折叠后的宽度计算，鼠标移到这一行上时滚动条不变。
     let end = folded.map_or(label_x + full, |(_, width)| label_x + width);
     end - shift - row.x
+}
+
+fn cloud_badge_rect(tree: Rect, row: Rect) -> Rect {
+    Rect::new(tree.right() - 29.0, row.y, 16.0, row.h).intersect(tree)
+}
+
+fn draw_cloud_badge(
+    app: &App,
+    frame: &mut Frame<'_>,
+    status: crate::app::workspace::cloud::CloudStatus,
+    badge: Rect,
+    clip: Rect,
+) {
+    use crate::app::workspace::cloud::CloudStatus;
+    use winc_render::Stroke;
+
+    let p = app.palette;
+    let (x, y) = center(badge);
+    match status {
+        CloudStatus::OnlineOnly => icons::cloud_outline(frame, (x, y), p.text_muted, clip),
+        CloudStatus::Downloading | CloudStatus::Uploading => {
+            let radius = 4.5;
+            frame.stroke(&[Stroke::Circle(x, y, radius)], 1.3, p.separator, clip);
+            let start = -std::f32::consts::FRAC_PI_2;
+            frame.stroke(
+                &[Stroke::Arc(x, y, radius, start, start + 2.2)],
+                1.3,
+                p.text_muted,
+                clip,
+            );
+        }
+        CloudStatus::Failed => {
+            let warning = [
+                Stroke::Circle(x, y, 5.0),
+                Stroke::Line(x, y - 2.5, x, y + 0.4),
+                Stroke::Line(x, y + 2.6, x, y + 2.7),
+            ];
+            frame.stroke(&warning, 1.1, p.error, clip);
+        }
+    }
 }
 
 /// Git 状态在文件树、变更视图里用的颜色。
@@ -1011,6 +1069,9 @@ fn tree_entry_color(app: &App, entry: &Entry, selected: bool) -> Color {
 pub(in crate::view) fn tree_overflow(app: &App, frame: &mut Frame<'_>) -> Option<(Rect, usize)> {
     let index = app.overflow_candidate()?;
     let entry = app.editor.workspace.as_ref()?.rows().get(index)?;
+    if app.cloud_status(&entry.path).is_some() {
+        return None;
+    }
     let tree = app.layout.tree;
     // 固定在顶部的目录在固定的位置继续绘制。
     let row = match app.tree_sticky().into_iter().find(|s| s.index == index) {
@@ -1067,6 +1128,9 @@ pub(in crate::view) fn draw_tree_overflow_closing(app: &App, frame: &mut Frame<'
             continue;
         };
         let entry = &ws.rows()[index];
+        if app.cloud_status(&entry.path).is_some() {
+            continue;
+        }
         let row = overflow_row(app, index);
         let end = tree_label_x(row, entry.depth, -app.panels.tree.scroll_x) + view.width;
         let right = (end + 8.0).min(app.layout.window.right() - 8.0);

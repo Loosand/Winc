@@ -155,6 +155,7 @@ impl App {
             jumps: crate::app::editor::Jumps {
                 name_hint: None,
                 navigation: Default::default(),
+                paths: Default::default(),
                 definitions: None,
             },
             overlays: crate::app::input::Overlays {

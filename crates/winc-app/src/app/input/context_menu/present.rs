@@ -141,10 +141,8 @@ impl App {
         let tab = self
             .tab_at(x, y)
             .and_then(|(index, _)| self.editor.documents.get(index));
-        let current_crumb = self.writing_workspace()
-            && crate::layout::hit(&self.hits.crumbs, x, y)
-                .is_some_and(|index| index + 1 == self.crumbs().len());
-        let document = tab.or_else(|| self.editor.active().filter(|_| current_crumb));
+        let title = self.hits.document_title.contains(x, y);
+        let document = tab.or_else(|| self.editor.active().filter(|_| title));
         let target = if let Some(doc) = document {
             MenuTarget::Tab(doc.id)
         } else if self.panels.sidebar.visible

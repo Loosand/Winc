@@ -78,6 +78,7 @@ fn table_edits_do_not_scroll_the_page() {
     assert!(scroll > view, "表格在第一屏以下");
     // 插入行、删除行、删除表格都是文字修改：上方内容不移动，页面不滚动。
     let key = |app: &mut App, mods: ModifiersState, key: NamedKey| {
+        app.preview.markdown.cost = Some(std::time::Duration::MAX);
         app.pointer.modifiers = mods;
         assert!(app.markdown_key(&Key::Named(key), true));
         app.pointer.modifiers = ModifiersState::empty();
@@ -91,6 +92,7 @@ fn table_edits_do_not_scroll_the_page() {
     let shift = command_modifiers() | ModifiersState::SHIFT;
     key(&mut app, shift, NamedKey::Backspace);
     assert_eq!(app.preview.markdown.scroll(), scroll, "删行");
+    app.preview.markdown.cost = Some(std::time::Duration::MAX);
     assert!(app.live_table_tool("delete"));
     paint(&mut app);
     settle(&mut app);

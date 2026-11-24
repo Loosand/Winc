@@ -73,6 +73,26 @@ pub struct Markdown {
     pub len: usize,
 }
 
+impl Markdown {
+    /// A single separator that only occupies block spacing in the editable view.
+    /// Level-one and level-two headings retain the following source line for editing.
+    pub fn collapsed_separator_before(&self, block: usize) -> Option<Range<usize>> {
+        let previous = self.blocks.get(block.checked_sub(1)?)?;
+        if matches!(previous, Block::Heading(1 | 2, _)) {
+            return None;
+        }
+        self.blank_rows.separator_before(block)
+    }
+
+    /// Source range of the collapsed separator containing `source`, if any.
+    pub fn collapsed_separator_at(&self, source: usize) -> Option<Range<usize>> {
+        let blocks = self.ranges.get(..self.blank_rows.before.len())?;
+        let next = blocks.partition_point(|range| range.start <= source);
+        let separator = self.collapsed_separator_before(next)?;
+        separator.contains(&source).then_some(separator)
+    }
+}
+
 /// Source starts of blank rows. Each nonempty slice ends with the exclusive byte limit.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct BlankRows {
@@ -85,6 +105,14 @@ impl BlankRows {
     /// Indices in [`Self::offsets`] for the gap before the given top-level block.
     pub fn before(&self, block: usize) -> Range<usize> {
         self.before.get(block).cloned().unwrap_or_default()
+    }
+
+    /// Source range of the preceding gap when it consists of exactly one blank line between blocks.
+    fn separator_before(&self, block: usize) -> Option<Range<usize>> {
+        match &self.offsets[self.before(block)] {
+            [start, end] => Some(*start..*end),
+            _ => None,
+        }
     }
 
     /// Indices in [`Self::offsets`] for the gap at the end of the document.
@@ -1362,7 +1390,7 @@ impl Builder<'_> {
 
 /// Recover intentional blank rows without treating hidden definitions or generated blocks as spacing.
 fn blank_rows(source: &str, ranges: &[Range<usize>], main: usize) -> BlankRows {
-    let mut before = vec![0..0; ranges.len()];
+    let mut before = vec![0..0; main];
     let mut offsets = Vec::new();
     let is_white = |b: &u8| matches!(b, b' ' | b'\t' | b'\r' | b'\n');
     let source = source.as_bytes();

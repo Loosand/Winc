@@ -32,6 +32,8 @@ pub(crate) mod laid;
 pub(crate) mod links;
 mod live;
 mod live_caret;
+mod live_selection;
+mod live_structure;
 mod paste;
 pub(crate) mod properties;
 pub(crate) mod resize;
@@ -41,6 +43,7 @@ pub(crate) mod suggest;
 pub(crate) mod toolbar;
 mod viewer;
 mod writing;
+pub(crate) use live_structure::LiveLeaf;
 pub(crate) use viewer::{DiagramLaid, DiagramTool, DiagramView, MAX_ZOOM, MIN_ZOOM};
 pub(crate) use writing::paragraph_lines;
 
@@ -65,40 +68,6 @@ enum Done {
 }
 
 pub(crate) use winc_typeset::ImageSlot;
-
-/// 可编辑的预览中光标所在的叶子块（见 [`Markdown::leaves`]），该块显示原文。
-///
-/// 原文位置均按当前文字计算：解析之后输入的文字都位于该块内（光标在该块中），块的末尾
-/// 按文字长度的变化移动。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LiveLeaf {
-    /// 所在的顶层块（`Markdown::blocks` 的序号）。
-    pub block: usize,
-    /// 所在顶层块当前的范围（字节偏移）。
-    pub range: std::ops::Range<usize>,
-    /// 叶子块当前的范围（字节偏移）；光标位于其后的空行上时延伸到光标所在行，位于其前的
-    /// 块标记上时从光标所在行起算。
-    pub leaf: std::ops::Range<usize>,
-    /// 叶子块在解析结果中的终点（字节偏移）：输入之后、重新解析之前与 `leaf` 的终点不同。
-    pub parsed_end: usize,
-    /// 文档版本号：输入文字后该块需要重排。
-    pub revision: u64,
-    /// 是否为正文（段落、标题），见 `LeafRange::prose`。
-    pub prose: bool,
-    /// 是否为表格；表格按单元格编辑。
-    pub table: bool,
-    /// 光标是否位于段落、标题之后的空行上。
-    pub blank: bool,
-    /// 查找该块所用的位置（字节偏移）。
-    ///
-    /// 通常是光标位置；按住鼠标期间是按下之前的光标位置。表格中该位置所在的单元格显示原文，
-    /// 正文中显示该位置接触到的标记。
-    pub at: usize,
-    /// 光标位于代码块、公式等叶子块的第一行或最后两行时，光标所在的行号。
-    ///
-    /// 围栏行只在光标位于其上时显示，因此光标进出这些行时需要重排；在中间各行移动时不重排。
-    pub edge: Option<usize>,
-}
 
 /// 可编辑的预览在界面线程上解析的时间预算：60 Hz 下一帧（约 16.7 ms）的四分之一。
 ///
@@ -246,7 +215,9 @@ pub(crate) struct MarkdownPreview {
     /// 在右侧滚动时直接对齐左侧，并记录该状态。
     pub synced: Option<(DocumentId, f64, f32)>,
     /// 可编辑的预览中拖动选择文字的状态。
-    live_drag: Option<live_caret::LiveDrag>,
+    live_drag: Option<live_selection::LiveDrag>,
+    /// 回车刚创建的空段，按退格时可整段收回。
+    empty_paragraph: Option<live::EmptyParagraph>,
     /// 可编辑的预览中 ↑↓ 移动的目标横坐标（相对内容左边）和移动后光标的位置（字符偏移）：
     /// 光标仍在该位置时继续按该横坐标移动，经过短行后仍能回到原来的列。
     goal: Option<(f32, usize)>,
@@ -259,6 +230,8 @@ pub(crate) struct MarkdownPreview {
     ///
     /// 输入文字引起的重排不滑动，内容直接到位。
     pub slide: bool,
+    /// 表格工具刚修改的文档版本。该版本的后台排版接手时保持页面滚动位置。
+    table_edit_revision: Option<(DocumentId, u64)>,
     /// 可编辑的预览中上一帧的文档、光标位置和文档版本号：发生变化表示正在编辑，见
     /// [`App::live_editing`]。
     followed: Option<(DocumentId, usize, u64)>,
@@ -414,9 +387,11 @@ impl Default for MarkdownPreview {
             find_serial: 0,
             synced: None,
             live_drag: None,
+            empty_paragraph: None,
             goal: None,
             line_end: None,
             slide: false,
+            table_edit_revision: None,
             followed: None,
             editing: None,
             align: None,
@@ -497,6 +472,8 @@ impl MarkdownPreview {
         self.pending = None;
         self.cost = None;
         self.layout = None;
+        self.empty_paragraph = None;
+        self.table_edit_revision = None;
         self.memo = Default::default();
         self.find_doc = None;
         self.motion = None;
@@ -966,7 +943,12 @@ impl App {
     /// 处理预览上的鼠标按下：获取焦点并从该处开始选择文字；双击选中一个词，按住 ⇧ 时扩展选区。
     ///
     /// 可编辑的预览中改为放置文档的光标，见 [`App::click_live`]。
-    pub(in crate::app) fn click_markdown(&mut self, x: f32, y: f32) {
+    pub(in crate::app) fn click_markdown(
+        &mut self,
+        x: f32,
+        y: f32,
+        native_click_count: Option<u8>,
+    ) {
         self.focus = crate::app::Focus::Editor;
         // 内容一栏两侧的空白：分栏时将键盘焦点交给预览，但不放置光标、不开始选择，保留已有选区。
         if !crate::app::preview::markdown::laid::in_content(self, x) {
@@ -977,7 +959,7 @@ impl App {
             return;
         }
         if self.markdown_live() {
-            self.click_live(x, y);
+            self.click_live(x, y, native_click_count);
             return;
         }
         self.preview.markdown.focused = true;

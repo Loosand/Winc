@@ -171,19 +171,30 @@ fn outer(quote: &str) -> &str {
         .trim_end_matches('\t')
 }
 
-/// 返回在正文里按回车要做的修改。
+/// 光标所在行之后的 Markdown 结构。
+#[derive(Clone, Copy)]
+pub enum NextLine {
+    /// 接下来是空行或文档结束。
+    BlankOrEnd,
+    /// 下一行延续当前段落。
+    Continuation,
+    /// 下一行已经开始了另一个块。
+    Block,
+}
+
+/// 返回在正文里按回车要做的修改，以及要追加在新光标后的换行符。
 ///
 /// `before` 是光标所在的行从行首到光标的文字，`after` 是光标到行尾（不含换行符）的文字，
-/// `next` 是下一行（没有时为 `None`），`above` 从上一行起往上的各行。
+/// `next` 由语法结构决定，`above` 从上一行起往上的各行。
 pub fn enter<'a>(
     before: &str,
     after: &str,
-    next: Option<&str>,
+    next: NextLine,
     above: impl Iterator<Item = &'a str>,
-) -> Edit {
+) -> (Edit, &'static str) {
     let p = parse(before);
     let empty = p.rest.trim().is_empty() && after.trim().is_empty();
-    match &p.marker {
+    let edit = match &p.marker {
         // 空的嵌套项：退到上一层，记号延续上一层的编号。
         Some(m) if empty && !p.indent.is_empty() => {
             let parent = above.take(LOOKBACK).map(parse).find(|q| {
@@ -235,14 +246,20 @@ pub fn enter<'a>(
         // 段落、标题：另起一段。光标在行尾、下一行仍属于同一段时，把这一行和下一行之间的换行
         // 也替换掉，下一行成为新的一段，光标落在它的开头。
         None => {
-            let joined = after.is_empty() && next.is_some_and(|l| !l.trim().is_empty());
-            Edit {
+            let (joined, trailing) = match (after.is_empty(), next) {
+                (true, NextLine::Continuation) => (true, ""),
+                (true, NextLine::Block) => (false, "\n"),
+                _ => (false, ""),
+            };
+            let edit = Edit {
                 before: 0,
                 after: usize::from(joined),
                 text: "\n\n".to_owned(),
-            }
+            };
+            return (edit, trailing);
         }
-    }
+    };
+    (edit, "")
 }
 
 /// 返回有序列表中新增一项之后，其后同一层各项需要修改的序号。
@@ -294,6 +311,13 @@ pub fn renumber<S: AsRef<str>>(
 pub fn indent(line: &str) -> usize {
     let (quote, indent) = margins(line);
     quote + indent
+}
+
+/// Range of a list marker and its following spacing on the source line.
+pub fn list_prefix(line: &str) -> Option<std::ops::Range<usize>> {
+    let prefix = parse(line);
+    prefix.marker?;
+    Some(prefix.quote.len() + prefix.indent.len()..line.len() - prefix.rest.len())
 }
 
 /// 返回 `line` 开头引用标记（`>`）的长度和其后缩进的长度（字节）。
@@ -486,16 +510,26 @@ fn list_continuation(p: &Prefix<'_>) -> String {
     })
 }
 
-/// 返回在开围栏（```` ```rust ````、`~~~`、`$$`）末尾按回车时要插入到光标前后的文字。
+/// 开围栏后是否已有闭围栏，以及需要补全时应插入的内容。
+#[derive(Debug, PartialEq, Eq)]
+pub enum Fence {
+    /// 后面已有闭围栏，回车按代码或公式内容里的普通换行处理。
+    Closed,
+    /// 插入开围栏之后的换行及闭围栏，光标留在两段之间。
+    Open {
+        /// 光标之前的换行与续行前缀。
+        head: String,
+        /// 光标之后的换行与闭围栏。
+        tail: String,
+    },
+}
+
+/// 识别光标是否位于开围栏（```` ```rust ````、`~~~`、`$$`）末尾，并检查是否已闭合。
 ///
-/// 插入后光标位于两行围栏之间的空行。不是围栏、光标后还有文字、下方已有闭围栏时返回 `None`。
+/// 非围栏或光标后还有文字时返回 `None`。
 /// `below` 是下方的各行：代码块下方第一个围栏行只含反引号或波浪号时为闭围栏，带语言标识时是
 /// 下一个代码块的开头，当前代码块未闭合。公式在下一个空行之前出现 `$$` 即为已闭合。
-pub fn fence<'a>(
-    before: &str,
-    after: &str,
-    below: impl Iterator<Item = &'a str>,
-) -> Option<(String, String)> {
+pub fn fence<'a>(before: &str, after: &str, below: impl Iterator<Item = &'a str>) -> Option<Fence> {
     if !after.trim().is_empty() {
         return None;
     }
@@ -510,7 +544,10 @@ pub fn fence<'a>(
         let closed = below
             .take_while(|l| !l.trim().is_empty())
             .any(|l| l.trim_end().ends_with("$$"));
-        (!closed).then(|| "$$".to_owned())?
+        if closed {
+            return Some(Fence::Closed);
+        }
+        "$$".to_owned()
     } else {
         let c = body.chars().next().filter(|c| matches!(c, '`' | '~'))?;
         let n = body.chars().take_while(|&x| x == c).count();
@@ -524,10 +561,16 @@ pub fn fence<'a>(
             let l = l.trim_end();
             l.chars().all(|x| x == c) && l.len() >= n
         });
-        (!closed).then(|| c.to_string().repeat(n))?
+        if closed {
+            return Some(Fence::Closed);
+        }
+        c.to_string().repeat(n)
     };
     let prefix = format!("{}{}", p.quote, list_continuation(&p));
-    Some((format!("\n{prefix}"), format!("\n{prefix}{fence}")))
+    Some(Fence::Open {
+        head: format!("\n{prefix}"),
+        tail: format!("\n{prefix}{fence}"),
+    })
 }
 
 #[cfg(test)]

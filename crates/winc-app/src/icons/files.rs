@@ -171,6 +171,18 @@ pub fn cloud(frame: &mut Frame<'_>, (x, y): (f32, f32), color: Color, clip: Rect
     frame.rect_clipped(Rect::new(x + 4.0, y + 2.0, 7.0, 7.0), color, 3.5, clip);
 }
 
+pub fn cloud_outline(frame: &mut Frame<'_>, (cx, cy): (f32, f32), color: Color, clip: Rect) {
+    let x = cx - 7.5;
+    let bottom = cy + 4.0;
+    let strokes = [
+        Stroke::Arc(x + 3.7, cy + 0.8, 3.2, FRAC_PI_2, 3.0 * FRAC_PI_2),
+        Stroke::Arc(x + 7.2, cy - 0.6, 4.0, -2.68, -0.1),
+        Stroke::Arc(x + 11.2, cy + 1.5, 2.5, -FRAC_PI_2, FRAC_PI_2),
+        Stroke::Line(x + 3.7, bottom, x + 11.2, bottom),
+    ];
+    frame.stroke(&strokes, 1.2, color, clip);
+}
+
 /// 绘制一组目录的图标，15×12，左上角在 `(x, y)`：下面一个圆角矩形，上面两道逐渐变短的横线，
 /// 表示叠在一起的多个目录。
 pub fn folders(frame: &mut Frame<'_>, (x, y): (f32, f32), color: Color, clip: Rect) {

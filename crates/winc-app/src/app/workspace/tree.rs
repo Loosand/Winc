@@ -1029,6 +1029,7 @@ impl App {
 
 /// 文件树的界面状态：滚动位置、工具栏与行的命中区域、展开收起与拖动的过程。
 pub struct TreeState {
+    pub(crate) cloud: crate::app::workspace::cloud::CloudRows,
     /// 鼠标所在文件树行的名字显示不全时，叠加在编辑区上方绘制的区域，以及该行的序号。
     pub(crate) overflow: Option<(Rect, usize)>,
     /// 文件树的纵向滚动量（逻辑像素）。
@@ -1060,6 +1061,7 @@ pub struct TreeState {
 impl Default for TreeState {
     fn default() -> Self {
         Self {
+            cloud: Default::default(),
             overflow: None,
             scroll: 0.0,
             scroll_x: 0.0,

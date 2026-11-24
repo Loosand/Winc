@@ -82,7 +82,9 @@ pub(super) fn load(root: &Path, path: &Path, kind: AttachmentKind) -> Option<Att
     reason = "Library cards read a bounded prefix of a local regular file"
 )]
 fn read_preview(root: &Path, path: &Path, limit: u64) -> Option<Vec<u8>> {
-    if !fs::symlink_metadata(path).ok()?.is_file()
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file()
+        || crate::system::is_dataless(&metadata)
         || !winc_config::files::canonicalize(path)
             .ok()?
             .starts_with(root)

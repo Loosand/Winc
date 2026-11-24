@@ -130,6 +130,7 @@ impl ApplicationHandler<UserEvent> for App {
                 crate::macos::hide_titlebar_separator(&window);
             }
             crate::macos::capture_inserted_text(&window);
+            crate::macos::capture_left_click_count(&window);
         }
 
         // 窗口初始即为最大化时无法测量还原后的大小，先使用记录的大小。
@@ -429,6 +430,15 @@ impl ApplicationHandler<UserEvent> for App {
                 self.on_mouse_move(position.x as f32 / scale, position.y as f32 / scale);
             }
             WindowEvent::CursorLeft { .. } => self.cursor_left(),
+            #[cfg(target_os = "macos")]
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => self.on_mouse_down_with_click_count(
+                winit::event::MouseButton::Left,
+                crate::macos::take_left_click_count(),
+            ),
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
@@ -473,6 +483,8 @@ impl App {
             UserEvent::RemoteHealth => self.request_redraw(),
             UserEvent::RemoteClosed(target) => self.remote_closed(&target),
             UserEvent::ReleaseNotes(notes) => self.show_release_notes(notes),
+            #[cfg(target_os = "macos")]
+            UserEvent::CloudRows => self.finished(UserEvent::CloudRows),
             done @ (UserEvent::GitStatus
             | UserEvent::GitContent
             | UserEvent::GitCommit
@@ -693,6 +705,7 @@ impl App {
             }
         }
         earliest(&mut wake, self.reading_tick(now));
+        earliest(&mut wake, self.cloud_rows_tick(now));
         earliest(&mut wake, self.terminal_settle_tick(now));
         earliest(&mut wake, self.auto_save_tick(now));
         let copying = self.copy_tick(now);

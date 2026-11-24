@@ -31,6 +31,8 @@ pub struct Hits {
     pub(crate) status: Vec<(Rect, StatusItem)>,
     /// 状态栏路径中各段的可点击区域，以及段序号。
     pub(crate) crumbs: Vec<(Rect, usize)>,
+    pub(crate) workspace_history: [Rect; 2],
+    pub(crate) document_title: Rect,
     /// 文件树工具栏各按钮的位置，绘制时填入，点击时使用。
     pub(crate) tree_tools: Vec<(Rect, TreeTool)>,
     /// 工具栏收起后「⋯」按钮的位置；所有按钮都放得下时为 `None`。
@@ -39,6 +41,7 @@ pub struct Hits {
     ///
     /// 各项依次为所在行的下标、左右边界（逻辑像素）和目录路径。
     pub(crate) tree_segments: Vec<(usize, f32, f32, PathBuf)>,
+    pub(crate) cloud_badges: Vec<(Rect, workspace::cloud::CloudStatus)>,
     /// 选择面板本帧绘制的按钮区域，点击和悬停据此判定目标。
     pub(crate) picker_parts: Vec<(Rect, PickerPart)>,
     /// 各标签的位置，按绘制顺序排列。
@@ -129,9 +132,12 @@ impl Hits {
             diff,
             status,
             crumbs,
+            workspace_history,
+            document_title,
             tree_tools,
             tree_more,
             tree_segments,
+            cloud_badges,
             picker_parts,
             tabs,
             outline,
@@ -178,9 +184,12 @@ impl Hits {
         diff.clear();
         status.clear();
         crumbs.clear();
+        *workspace_history = Default::default();
+        *document_title = Rect::default();
         tree_tools.clear();
         *tree_more = None;
         tree_segments.clear();
+        cloud_badges.clear();
         picker_parts.clear();
         tabs.clear();
         outline.clear();
