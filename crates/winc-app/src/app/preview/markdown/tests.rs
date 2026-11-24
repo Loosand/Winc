@@ -3,6 +3,11 @@
 use super::*;
 
 impl MarkdownPreview {
+    /// The revision whose parsed Markdown has been applied to the preview.
+    pub(crate) fn parsed_revision(&self) -> Option<u64> {
+        self.checked
+    }
+
     /// 测试用：后台还有没做完的解析、读图或画图。
     pub fn is_busy(&self) -> bool {
         self.pending.is_some()

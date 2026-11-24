@@ -405,5 +405,13 @@ fn a_table_cell_in_verbatim_layout_displays_ime_preedit() {
     paint(&mut app);
     assert!(full_text(&app).unwrap().contains("> 待补nihao"));
     assert_eq!(doc_text(&app), source);
+
+    app.on_ime(Ime::Commit("你好".into()));
+    settle(&mut app);
+    assert_eq!(
+        with_caret(&app),
+        "| A | B |\n|---|---|\n| > 待补你好| | normal |\n"
+    );
+    assert!(!full_text(&app).unwrap().contains("nihao"));
     std::fs::remove_dir_all(dir).unwrap();
 }

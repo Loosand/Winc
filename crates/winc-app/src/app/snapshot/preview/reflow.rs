@@ -54,12 +54,18 @@ fn background_markdown_reflow_keeps_the_visible_editing_line_in_place() {
         .markdown
         .set_scroll(app.preview.markdown.scroll() + off);
     paint(&mut app);
-    let original = app.editor.active().unwrap().selection.head;
+    let doc = app.editor.active().unwrap();
+    let original = doc.selection.head;
+    let old_revision = doc.revision;
+    assert_eq!(app.preview.markdown.parsed_revision(), Some(old_revision));
     // Force the asynchronous path rather than depending on a machine-specific parse time.
     app.preview.markdown.cost = Some(Duration::from_secs(1));
     app.run(Command::Insert("\n\n# 新的标题\n\n继续输入".into()));
     paint(&mut app);
     let before = caret_screen_y(&app);
+    let edited_revision = app.editor.active().unwrap().revision;
+    assert_ne!(edited_revision, old_revision);
+    assert_eq!(app.preview.markdown.parsed_revision(), Some(old_revision));
     let from_top = before - app.preview.markdown.area.y;
     assert!(
         (0.0..app.preview.markdown.area.h).contains(&from_top),
@@ -74,7 +80,12 @@ fn background_markdown_reflow_keeps_the_visible_editing_line_in_place() {
     let selection = app.editor.active().unwrap().selection;
     assert!(selection.head > original && !selection.is_empty());
     let before = caret_screen_y(&app);
-    settle(&mut app);
+    app.wait_for_markdown();
+    assert_eq!(
+        app.preview.markdown.parsed_revision(),
+        Some(edited_revision)
+    );
+    paint(&mut app);
     let after = caret_screen_y(&app);
     assert_eq!(app.editor.active().unwrap().selection, selection);
     assert!(
@@ -106,13 +117,12 @@ fn reflow_after_ime_commit_does_not_scroll_back_to_an_offscreen_caret() {
     app.on_ime(Ime::Preedit("xin".into(), Some((3, 3))));
     paint(&mut app);
     assert_eq!(app.editor.active().unwrap().selection, selection);
-    let old = app.preview.markdown.parsed.clone().unwrap();
+    let old_revision = app.editor.active().unwrap().revision;
+    assert_eq!(app.preview.markdown.parsed_revision(), Some(old_revision));
     app.on_ime(Ime::Commit("新字".into()));
-    paint(&mut app); // enqueue this revision; do not drain the result
-    assert!(std::sync::Arc::ptr_eq(
-        &old,
-        app.preview.markdown.parsed.as_ref().unwrap()
-    ));
+    paint(&mut app);
+    assert_ne!(app.editor.active().unwrap().revision, old_revision);
+    assert_eq!(app.preview.markdown.parsed_revision(), Some(old_revision));
     for text in ["👩‍💻", "e\u{301}"] {
         app.on_ime(Ime::Commit(text.into()));
     }
@@ -121,9 +131,18 @@ fn reflow_after_ime_commit_does_not_scroll_back_to_an_offscreen_caret() {
     paint(&mut app);
     app.scroll_markdown_to(0.0);
     paint(&mut app);
-    settle(&mut app);
+    let edited_revision = app.editor.active().unwrap().revision;
+    assert_eq!(app.preview.markdown.parsed_revision(), Some(old_revision));
+    let before = app.preview.markdown.scroll();
+    assert!(before <= 2.0, "the user scrolled away from the caret");
+    app.wait_for_markdown();
+    assert_eq!(
+        app.preview.markdown.parsed_revision(),
+        Some(edited_revision)
+    );
+    paint(&mut app);
     assert!(
-        app.preview.markdown.scroll() <= 2.0,
+        (app.preview.markdown.scroll() - before).abs() <= 2.0,
         "a reparse chased an offscreen caret"
     );
     assert_eq!(doc_text(&app), expected);

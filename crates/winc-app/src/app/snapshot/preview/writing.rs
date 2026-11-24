@@ -906,3 +906,50 @@ fn slash_list_scrolls_and_remembers_recent_commands() {
     assert_eq!(hits[0], Hit::Command(Slash::Heading(1)));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn focus_keeps_a_reordered_footnote_at_normal_contrast() {
+    let source = "ref[^a]\n\n[^a]: Notes here\n\nPlain paragraph\n\nFinal paragraph\n";
+    let (mut app, dir) = live_doc("md-focus-reordered-footnote", source);
+    put_caret(&mut app, "Notes here", true);
+    app.start_live_editing();
+    paint(&mut app);
+
+    let contrast = |app: &App, needle: &str| {
+        let preview = &app.preview.markdown;
+        let laid = preview.layout.as_ref().unwrap();
+        let (top, _, x, baseline, size, span, _, _) = laid
+            .spans(0..laid.blocks.len())
+            .find(|&(.., text)| text.starts_with(needle))
+            .expect("the target text has a rendered span");
+        let left = laid.left + x;
+        let baseline = preview.area.y + laid.pad - preview.scroll() + top + baseline;
+        let to_pixel = |coord: f32| (coord * SCALE).round() as usize;
+        let image = app.frame.renderer.as_ref().unwrap().image().unwrap();
+        let width = image.width as usize;
+        let first = to_pixel(baseline - size);
+        let last = to_pixel(baseline + size * 0.25);
+        let from = to_pixel(left);
+        // Sample the first two glyphs so the caret and the footnote backlink are outside the crop.
+        let to = to_pixel(left + span.advances[..2].iter().sum::<f32>());
+        assert!(first < last && last < image.height as usize && from < to && to < width);
+        let background = (image.pixels[first * width + from - 1] & 0xff) as u8;
+        (first..last)
+            .flat_map(|y| &image.pixels[y * width + from..y * width + to])
+            .map(|&pixel| u32::from(((pixel & 0xff) as u8).abs_diff(background)))
+            .sum::<u32>()
+    };
+
+    let footnote = contrast(&app, "Notes here");
+    let paragraph = contrast(&app, "Plain paragraph");
+    assert!(
+        footnote > 0 && paragraph > 0,
+        "both blocks must paint visible text"
+    );
+
+    assert!(app.run_action(Action::MarkdownFocusMode));
+    paint(&mut app);
+    assert_eq!(contrast(&app, "Notes here"), footnote);
+    assert!(contrast(&app, "Plain paragraph") < paragraph);
+    std::fs::remove_dir_all(dir).unwrap();
+}

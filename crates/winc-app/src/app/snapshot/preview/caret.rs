@@ -620,62 +620,83 @@ fn arrows_skip_the_hidden_block_markers() {
 }
 
 #[test]
-fn arrow_keys_follow_display_lines_and_document_end_scrolls_into_view() {
+fn vertical_arrows_follow_wrapped_rows_in_one_source_line() {
     use winit::keyboard::{Key, NamedKey};
 
-    let (mut app, dir) = readme("md-live-arrow-navigation", false, PreviewMode::Preview);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
-    let at = shown[..shown.find("启动快").unwrap()].chars().count();
-    let point = point_of(&app, at);
-    super::click(&mut app, point);
-    app.run(winc_editor::Command::Insert("很".into()));
-    settle(&mut app);
+    let source = "甲".repeat(100);
+    let (mut app, dir) = live_doc("md-arrow-wrapped-row", &source);
+    app.start_live_editing();
+    paint(&mut app);
+    let second_row = {
+        let laid = app.preview.markdown.layout.as_ref().unwrap();
+        let mut spans = laid.spans(0..1);
+        let (_, _, _, first_baseline, ..) = spans.next().expect("first display row");
+        let (_, _, _, _, _, span, _, _) = spans
+            .find(|&(_, _, _, baseline, ..)| baseline > first_baseline)
+            .expect("the paragraph wraps within one source line");
+        span.source.expect("the wrapped row maps to the source") as usize
+    };
+    assert!(second_row > 0 && source.is_char_boundary(second_row));
 
-    // ↓ 按显示行向下移动，移出该段后到达下一段；↑ 返回。
-    let start = app.live_caret_source().unwrap();
+    assert_eq!(app.live_caret_source(), Some(0));
     assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
     paint(&mut app);
-    let down = app.live_caret_source().unwrap();
-    assert!(down > start);
-    // 继续向下：经过提示块的标题（没有对应的原文，取块的开头），到达其正文的最后一行；保持
-    // 原来的横坐标，落在该行末尾。一段折成几行取决于字体，因此逐行移动到该处，每一步都向前。
-    let mut last = down;
-    for _ in 0..8 {
-        if after_caret(&app, 12).starts_with("\n\n## 安装") {
-            break;
-        }
-        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
-        paint(&mut app);
-        let now = app.live_caret_source().unwrap();
-        assert!(now > last);
-        last = now;
-    }
-    assert!(
-        after_caret(&app, 12).starts_with("\n\n## 安装"),
-        "{}",
-        after_caret(&app, 12)
-    );
-    // 跳过段落间距，一次向下就到标题末尾。
-    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
-    paint(&mut app);
-    assert!(after_caret(&app, 12).starts_with("\n\n1. "));
-    // ⇧↑ 扩展选区。
-    app.pointer.modifiers = winit::keyboard::ModifiersState::SHIFT;
+    assert_eq!(app.live_caret_source(), Some(second_row));
     assert!(app.markdown_key(&Key::Named(NamedKey::ArrowUp), false));
-    app.pointer.modifiers = winit::keyboard::ModifiersState::empty();
     paint(&mut app);
-    assert!(!app.editor.active().unwrap().selection.is_empty());
-    // 其他键交给编辑区。
-    assert!(!app.markdown_key(&Key::Character("x".into()), false));
-    assert!(!app.markdown_key(&Key::Named(NamedKey::ArrowLeft), false));
+    assert_eq!(app.live_caret_source(), Some(0));
 
-    // 光标到达文末：预览滚动到光标可见。
+    // Horizontal movement and typing still reach the regular editing commands.
+    assert!(!app.markdown_key(&Key::Named(NamedKey::ArrowLeft), false));
+    assert!(!app.markdown_key(&Key::Character("x".into()), false));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn shift_up_preserves_the_anchor_across_a_displayed_line_break() {
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+    let first = "甲甲  \n";
+    let (mut app, dir) = live_doc("md-shift-up-hard-break", &format!("{first}乙乙"));
+    put_caret(&mut app, "乙", true);
+    let anchor = first.chars().count() + 1;
+    assert_eq!(
+        app.editor.active().unwrap().selection,
+        winc_core::Selection::point(anchor)
+    );
+
+    app.pointer.modifiers = ModifiersState::SHIFT;
+    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowUp), false));
+    app.pointer.modifiers = ModifiersState::empty();
+    paint(&mut app);
+    assert_eq!(
+        app.editor.active().unwrap().selection,
+        winc_core::Selection::new(anchor, 1)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn document_end_scrolls_an_offscreen_last_paragraph_into_view() {
+    let source = "前文\n\n".repeat(80) + "最后一段";
+    let (mut app, dir) = live_doc("md-scroll-to-document-end", &source);
+    put_caret(&mut app, "前文", false);
+    let top = app.preview.markdown.scroll();
+    let (last_top, viewport_height) = {
+        let laid = app.preview.markdown.layout.as_ref().unwrap();
+        (
+            laid.tops.last().unwrap() + laid.pad,
+            app.preview.markdown.area.h,
+        )
+    };
+    assert!(last_top > top + viewport_height);
+
     app.run(winc_editor::Command::DocEnd { extend: false });
     paint(&mut app);
-    paint(&mut app);
+    assert_eq!(app.live_caret_source(), Some(source.len()));
+    assert!(app.preview.markdown.scroll() > top);
     let y = caret_screen_y(&app);
     let area = app.preview.markdown.area;
-    assert!(y >= area.y && y < area.bottom(), "{y} {area:?}");
-
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!((area.y..area.bottom()).contains(&y), "{y} {area:?}");
+    std::fs::remove_dir_all(dir).unwrap();
 }

@@ -614,3 +614,44 @@ fn dragging_across_blocks_keeps_the_layout_still() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn backward_drag_over_multiline_emphasis_deletes_hidden_markers_and_restores_selection_on_undo() {
+    use winc_core::Selection;
+    use winc_editor::Command;
+
+    let source = "前 **甲\r\n乙** 后";
+    let (mut app, dir) = live_doc("md-drag-multiline-bold", source);
+    let preview = &app.preview.markdown;
+    let laid = preview.layout.as_ref().unwrap();
+    // Pick a point in each target glyph on the appropriate side of its midpoint.
+    let glyph_edge = |needle, fraction| {
+        let (top, _, x, baseline, size, span, _, text) = laid
+            .spans(0..1)
+            .find(|&(.., text)| text.contains(needle))
+            .expect("the selected text is visible in the rendered paragraph");
+        let glyph = text.chars().position(|c| c == needle).unwrap();
+        let leading: f32 = span.advances[..glyph].iter().sum();
+        (
+            laid.left + x + leading + fraction * span.advances[glyph],
+            preview.area.y + laid.pad - preview.scroll() + top + baseline - size * 0.3,
+        )
+    };
+    let from = glyph_edge('乙', 0.75);
+    let to = glyph_edge('甲', 0.25);
+    app.on_mouse_move(from.0, from.1);
+    app.on_mouse_down_with_click_count(MouseButton::Left, Some(1));
+    app.on_mouse_move(to.0, to.1);
+    app.on_mouse_up(MouseButton::Left);
+    settle(&mut app);
+
+    let at = |needle| source[..source.find(needle).unwrap()].chars().count();
+    let expected = Selection::new(at("** 后"), at("甲"));
+    assert_eq!(app.editor.active().unwrap().selection, expected);
+    app.run(Command::Delete { word: false });
+    assert_eq!(doc_text(&app), "前  后");
+    app.run(Command::Undo);
+    assert_eq!(doc_text(&app), source);
+    assert_eq!(app.editor.active().unwrap().selection, expected);
+    std::fs::remove_dir_all(dir).unwrap();
+}
