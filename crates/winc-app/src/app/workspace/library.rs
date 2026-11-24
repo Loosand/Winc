@@ -1,25 +1,26 @@
 //! 本地笔记库：浏览真实目录，在后台读取卡片的摘要，不导入或改写文件。
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 
-use winc_editor::{EntryKind, Reading, list_dir};
+use winc_editor::{DirEntry, EntryKind, Reading, list_dir};
 use winc_i18n::t;
 use winc_preview::markdown::{self, Block, IMAGE_MARK, is_markdown};
 
 use super::*;
 use crate::app::scroll::ScrollTarget;
 
-pub(in crate::app) const MIN_REFRESH: Duration = Duration::from_millis(500);
-
+mod attachment;
 mod motion;
+pub(crate) use attachment::{AttachmentKind, AttachmentPreview, JsonExcerpt};
 use motion::FolderMotion;
 pub(crate) use motion::FolderPose;
 
 pub(in crate::app) const HOME_ROW: f32 = 34.0;
-const GRID_TOP: f32 = 104.0;
+const GRID_TOP: f32 = 78.0;
 const PREVIEW_BYTES: u64 = 4096;
 const PREVIEW_LINES: usize = 14;
 const LINE_CHARS: usize = 200;
@@ -27,8 +28,6 @@ const LINE_CHARS: usize = 200;
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum LibraryTarget {
     Root,
-    Parent,
-    Refresh,
     Card(usize),
     NewInFolder(usize),
     FolderMenu(usize),
@@ -121,19 +120,29 @@ impl Card {
     fn is_folder(&self) -> bool {
         matches!(self.content, CardContent::Folder(_))
     }
+
+    fn attachment(&self) -> Option<(&Path, AttachmentKind)> {
+        match &self.content {
+            CardContent::Attachment(kind) => Some((&self.path, *kind)),
+            CardContent::Folder(Some(folder)) => folder.front.as_deref()?.attachment(),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) enum CardContent {
     Note(Vec<PreviewLine>),
+    Attachment(AttachmentKind),
+    File,
     Folder(Option<FolderPreview>),
 }
 
 pub(crate) struct FolderPreview {
     pub(crate) count: usize,
-    /// 叠放的纸张最多三张，只读最前面一份文档的开头。
+    /// 叠放的纸张最多三张，只预览最前面的一份文件。
     pub(crate) papers: usize,
     pub(crate) seeds: [u64; 3],
-    pub(crate) front: Option<(String, Vec<PreviewLine>)>,
+    pub(crate) front: Option<Box<Card>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,17 +155,24 @@ pub(crate) enum PreviewLine {
     Rule,
 }
 
-type Scan = (u64, io::Result<Vec<Card>>);
+#[derive(Default)]
+struct Snapshot {
+    cards: Vec<Card>,
+    attachments: HashMap<PathBuf, AttachmentPreview>,
+}
+
+type Scan = (u64, io::Result<Snapshot>);
 
 pub(crate) struct Library {
     pub(crate) folder: Option<PathBuf>,
     pub(crate) cards: Vec<Card>,
+    attachments: HashMap<PathBuf, AttachmentPreview>,
     pub(crate) error: Option<String>,
     pub(crate) scroll: f32,
-    pub(crate) manual_refresh: Option<Instant>,
     folders: FolderMotion,
     pressed: Option<PathBuf>,
-    generation: u64,
+    /// Changes only on navigation. Same-directory refreshes are queued without canceling the scan.
+    generation: Arc<AtomicU64>,
     queued: bool,
     running: bool,
     scans: (mpsc::Sender<Scan>, mpsc::Receiver<Scan>),
@@ -167,12 +183,12 @@ impl Default for Library {
         Self {
             folder: None,
             cards: Vec::new(),
+            attachments: HashMap::new(),
             error: None,
             scroll: 0.0,
-            manual_refresh: None,
             folders: FolderMotion::default(),
             pressed: None,
-            generation: 0,
+            generation: Arc::default(),
             queued: false,
             running: false,
             scans: mpsc::channel(),
@@ -187,6 +203,10 @@ impl Library {
 
     pub(crate) fn folder_pose(&self, card: usize) -> FolderPose {
         self.folders.pose(card)
+    }
+
+    pub(crate) fn attachment_preview(&self, path: &Path) -> Option<&AttachmentPreview> {
+        self.attachments.get(path)
     }
 
     pub(in crate::app) fn animating(&self) -> bool {
@@ -235,23 +255,18 @@ impl App {
     }
 
     pub(crate) fn library_home_button(&self) -> Rect {
-        if self.library_root().is_none() || self.panels.sidebar.view != SidebarView::Files {
+        if self.writing_workspace()
+            || self.library_root().is_none()
+            || self.panels.sidebar.view != SidebarView::Files
+        {
             return Rect::default();
         }
         let r = self.layout.sidebar_header;
         Rect::new(
             r.x + 8.0,
-            if self.notebook_sidebar() {
-                r.y + 5.0
-            } else {
-                r.bottom() + 2.0
-            },
+            r.bottom() + 2.0,
             (r.w - 16.0).max(0.0),
-            if self.notebook_sidebar() {
-                30.0
-            } else {
-                HOME_ROW - 6.0
-            },
+            HOME_ROW - 6.0,
         )
         .intersect(self.layout.sidebar)
     }
@@ -261,10 +276,17 @@ impl App {
         let Some(root) = self.library_root().map(Path::to_path_buf) else {
             return;
         };
+        self.browse_library_folder(root, Focus::Editor);
+    }
+
+    fn browse_library_folder(&mut self, folder: PathBuf, focus: Focus) {
         if self.writing_workspace() && !self.library_shown() && !self.prepare_writing_switch(None) {
             return;
         }
-        self.set_library_folder(root);
+        if self.notebook_sidebar() && focus == Focus::Editor {
+            self.reveal_path(&folder);
+        }
+        self.set_library_folder(folder);
         if !self.library_shown() {
             let tab = self
                 .editor
@@ -279,7 +301,7 @@ impl App {
                     .show_reading(t!("workspace-library-home"), Reading::Library);
             }
         }
-        self.focus = Focus::Editor;
+        self.focus = focus;
         self.relayout();
         self.request_redraw();
     }
@@ -294,23 +316,6 @@ impl App {
         }
         match target {
             LibraryTarget::Root => unreachable!(),
-            LibraryTarget::Parent => {
-                let parent = self
-                    .library
-                    .folder
-                    .as_deref()
-                    .and_then(Path::parent)
-                    .filter(|p| self.library_root().is_some_and(|root| p.starts_with(root)));
-                if let Some(parent) = parent {
-                    self.set_library_folder(parent.to_path_buf());
-                }
-            }
-            LibraryTarget::Refresh => {
-                if self.library.manual_refresh.is_none() {
-                    self.library.manual_refresh = Some(Instant::now() + MIN_REFRESH);
-                    self.refresh_library();
-                }
-            }
             LibraryTarget::NewInFolder(index) => {
                 if let Some(card) = self.library.cards.get(index).filter(|c| c.is_folder()) {
                     self.create_folder_note(card.path.clone());
@@ -346,26 +351,6 @@ impl App {
         self.request_redraw();
     }
 
-    pub(in crate::app) fn library_refresh_tick(&mut self, now: Instant) -> Option<Instant> {
-        let earliest = self.library.manual_refresh?;
-        if now < earliest {
-            return Some(earliest);
-        }
-        if !self.library.loading() {
-            self.library.manual_refresh = None;
-            if let Some(error) = &self.library.error {
-                self.notify(
-                    NoticeKind::Warning,
-                    t!("workspace-library-failed", error = error.as_str()),
-                );
-            } else {
-                self.notify(NoticeKind::Done, t!("workspace-library-refreshed"));
-            }
-            self.request_redraw();
-        }
-        None
-    }
-
     pub(in crate::app) fn take_pressed_folder(&mut self) -> Option<PathBuf> {
         self.library.pressed.take()
     }
@@ -377,8 +362,7 @@ impl App {
             .get(index)
             .is_some_and(|c| c.is_folder() && c.path == pressed)
         {
-            self.set_library_folder(pressed.to_path_buf());
-            self.request_redraw();
+            self.browse_library_folder(pressed.to_path_buf(), Focus::Editor);
         }
     }
 
@@ -428,14 +412,29 @@ impl App {
         );
     }
 
-    /// 在左侧文件树点击目录时，如果正在主页浏览，也在右侧显示同一个目录。
-    pub(in crate::app) fn browse_library_tree_folder(&mut self, path: &Path) {
-        if self.library_shown()
+    /// 切换目录时保留展开状态，再次选中当前目录时只切换侧栏的展开状态。
+    pub(in crate::app) fn activate_tree_folder(&mut self, index: usize) {
+        let Some(ws) = &self.editor.workspace else {
+            return;
+        };
+        let Some(entry) = ws.rows().get(index) else {
+            return;
+        };
+        let path = ws
+            .segment()
+            .filter(|_| ws.selected == Some(index))
+            .unwrap_or(&entry.path);
+        let browsing = self.library_shown();
+        let notebook = self.notebook_sidebar();
+        let can_browse = (notebook || browsing)
             && self
                 .library_root()
-                .is_some_and(|root| path.starts_with(root))
-        {
-            self.set_library_folder(path.to_path_buf());
+                .is_some_and(|root| path.starts_with(root));
+        let current = browsing && self.library.folder.as_deref() == Some(path);
+        let destination = (can_browse && !current).then(|| path.to_path_buf());
+        self.set_dir_expanded(index, (notebook && destination.is_some()).then_some(true));
+        if let Some(folder) = destination {
+            self.browse_library_folder(folder, Focus::Tree);
         }
     }
 
@@ -455,26 +454,29 @@ impl App {
     pub(in crate::app) fn reset_library(&mut self) {
         self.note_links = Default::default();
         self.library.folder = None;
-        self.library.manual_refresh = None;
         self.library.cards.clear();
+        self.library.attachments.clear();
         self.library.error = None;
         self.library.scroll = 0.0;
         self.library.folders = FolderMotion::default();
         self.library.pressed = None;
-        self.library.generation += 1;
+        self.library.generation.fetch_add(1, Ordering::Relaxed);
         self.library.queued = false;
     }
 
     fn set_library_folder(&mut self, folder: PathBuf) {
-        if self.library.folder.as_ref() != Some(&folder) {
-            self.library.folder = Some(folder);
-            self.library.cards.clear();
-            self.library.error = None;
-            self.library.scroll = 0.0;
-            self.library.folders = FolderMotion::default();
-            self.library.pressed = None;
-            self.hits.library.clear();
+        if self.library.folder.as_ref() == Some(&folder) {
+            return;
         }
+        self.library.generation.fetch_add(1, Ordering::Relaxed);
+        self.library.folder = Some(folder);
+        self.library.cards.clear();
+        self.library.attachments.clear();
+        self.library.error = None;
+        self.library.scroll = 0.0;
+        self.library.folders = FolderMotion::default();
+        self.library.pressed = None;
+        self.hits.library.clear();
         self.refresh_library();
     }
 
@@ -485,7 +487,9 @@ impl App {
                 || paths.iter().any(|p| {
                     folder.starts_with(p)
                         || p.parent() == Some(folder)
-                        || (p.starts_with(folder) && is_markdown(p))
+                        || p.parent().and_then(Path::parent) == Some(folder)
+                        || (p.starts_with(folder)
+                            && (is_markdown(p) || AttachmentKind::of(p).is_some()))
                 })
         }) {
             self.refresh_library();
@@ -494,10 +498,38 @@ impl App {
 
     pub(in crate::app) fn refresh_library(&mut self) {
         if self.library.folder.is_some() {
-            self.library.generation += 1;
             self.library.queued = true;
             self.start_library_scan();
         }
+    }
+
+    /// Replace the grid and its previews together, keeping the previous grid during a refresh.
+    fn show_library_snapshot(&mut self, snapshot: io::Result<Snapshot>) {
+        let library = &mut self.library;
+        let snapshot = match snapshot {
+            Ok(snapshot) => {
+                library.error = None;
+                snapshot
+            }
+            Err(error) => {
+                library.error = Some(error.to_string());
+                Snapshot::default()
+            }
+        };
+        if !library
+            .cards
+            .iter()
+            .map(|c| &c.path)
+            .eq(snapshot.cards.iter().map(|c| &c.path))
+        {
+            library.folders = FolderMotion::default();
+            library.pressed = None;
+            self.hits.library.clear();
+        }
+        library.cards = snapshot.cards;
+        library.attachments = snapshot.attachments;
+        self.set_pane_scroll(ScrollTarget::Library, self.library.scroll);
+        self.request_redraw();
     }
 
     fn start_library_scan(&mut self) {
@@ -509,85 +541,125 @@ impl App {
         };
         self.library.queued = false;
         self.library.running = true;
-        let generation = self.library.generation;
+        let generation = Arc::clone(&self.library.generation);
+        let version = generation.load(Ordering::Relaxed);
         let root = self.library_root().map(Path::to_path_buf);
+        let show_hidden = self.panels.sidebar.show_hidden_files;
+        let reverse = self.panels.sidebar.reverse_name_order;
         let sender = self.library.scans.0.clone();
         self.spawn_then(UserEvent::LibraryScanned, move || {
-            let cards = match (root, winc_config::files::canonicalize(&folder)) {
-                (Some(root), Ok(path)) if path == folder && path.starts_with(&root) => {
-                    scan_cards(&folder)
+            let snapshot = match (root, winc_config::files::canonicalize(&folder)) {
+                (Some(root), Ok(path)) if folder.starts_with(&root) && path.starts_with(&root) => {
+                    scan_library(&root, &folder, show_hidden, reverse, || {
+                        generation.load(Ordering::Relaxed) != version
+                    })
                 }
                 (_, Err(error)) => Err(error),
                 _ => Err(io::Error::from(io::ErrorKind::PermissionDenied)),
             };
-            let _ = sender.send((generation, cards));
+            let _ = sender.send((version, snapshot));
         });
     }
 
     pub(in crate::app) fn poll_library(&mut self) {
-        while let Ok((generation, cards)) = self.library.scans.1.try_recv() {
+        if let Ok((version, snapshot)) = self.library.scans.1.try_recv() {
             self.library.running = false;
-            if generation == self.library.generation {
-                self.hits.library.clear();
-                match cards {
-                    Ok(cards) => {
-                        if !self
-                            .library
-                            .cards
-                            .iter()
-                            .map(|c| &c.path)
-                            .eq(cards.iter().map(|c| &c.path))
-                        {
-                            self.library.folders = FolderMotion::default();
-                        }
-                        self.library.cards = cards;
-                        self.library.error = None;
-                    }
-                    Err(error) => {
-                        self.library.cards.clear();
-                        self.library.folders = FolderMotion::default();
-                        self.library.error = Some(error.to_string());
-                    }
-                }
-                self.set_pane_scroll(ScrollTarget::Library, self.library.scroll);
-                self.request_redraw();
+            if version == self.library.generation.load(Ordering::Relaxed) {
+                self.show_library_snapshot(snapshot);
             }
         }
         self.start_library_scan();
     }
 }
 
-fn scan_cards(folder: &Path) -> io::Result<Vec<Card>> {
-    Ok(entries(folder)?
-        .into_iter()
-        .map(|entry| {
-            let (name, content) = if entry.kind == EntryKind::Dir {
-                (entry.name, CardContent::Folder(folder_preview(&entry.path)))
-            } else {
-                (note_name(&entry), CardContent::Note(read_page(&entry.path)))
-            };
+fn scan_library(
+    root: &Path,
+    folder: &Path,
+    show_hidden: bool,
+    reverse: bool,
+    canceled: impl Fn() -> bool,
+) -> io::Result<Snapshot> {
+    let mut entries = visible_entries(folder, show_hidden)?;
+    if reverse {
+        let split = entries.partition_point(|entry| entry.kind == EntryKind::Dir);
+        entries[..split].reverse();
+        entries[split..].reverse();
+    }
+    let mut snapshot = Snapshot {
+        cards: Vec::with_capacity(entries.len()),
+        attachments: HashMap::new(),
+    };
+    for entry in entries {
+        if canceled() {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        let card = if entry.kind == EntryKind::Dir {
+            let preview = (!entry.symlink
+                && winc_config::files::canonicalize(&entry.path)
+                    .is_ok_and(|path| path.starts_with(root))
+                && winc_backend::fs::symlink_metadata(&entry.path).is_ok_and(|meta| meta.is_dir()))
+            .then(|| folder_preview(root, &entry.path, show_hidden))
+            .flatten();
             Card {
                 path: entry.path,
-                name,
-                content,
+                name: entry.name,
+                content: CardContent::Folder(preview),
             }
-        })
-        .collect())
+        } else {
+            file_card(root, entry)
+        };
+        if let Some((path, kind)) = card.attachment()
+            && let Some(preview) = attachment::load(root, path, kind)
+        {
+            snapshot.attachments.insert(path.to_path_buf(), preview);
+        }
+        snapshot.cards.push(card);
+    }
+    Ok(snapshot)
 }
 
-pub(super) fn entries(folder: &Path) -> io::Result<Vec<winc_editor::DirEntry>> {
-    // 不跟随符号链接，原文件树行为不变。
-    Ok(list_dir(folder)?
+fn file_card(root: &Path, entry: DirEntry) -> Card {
+    let (name, content) = if !entry.symlink && is_markdown(&entry.path) {
+        (
+            note_name(&entry),
+            CardContent::Note(read_page(root, &entry.path)),
+        )
+    } else {
+        let content = if !entry.symlink
+            && let Some(kind) = AttachmentKind::of(&entry.path)
+        {
+            CardContent::Attachment(kind)
+        } else {
+            CardContent::File
+        };
+        (entry.name, content)
+    };
+    Card {
+        path: entry.path,
+        name,
+        content,
+    }
+}
+
+fn visible_entries(folder: &Path, show_hidden: bool) -> io::Result<Vec<DirEntry>> {
+    let mut entries = list_dir(folder)?;
+    if !show_hidden {
+        entries.retain(|entry| !entry.name.starts_with('.'));
+    }
+    Ok(entries)
+}
+
+pub(super) fn entries(folder: &Path) -> io::Result<Vec<DirEntry>> {
+    // 笔记索引只包含可见的 Markdown 文件，不跟随符号链接。
+    Ok(visible_entries(folder, false)?
         .into_iter()
         .filter(|entry| {
-            !entry.symlink
-                && !entry.name.starts_with('.')
-                && (entry.kind == EntryKind::Dir || is_markdown(&entry.path))
+            !entry.symlink && (entry.kind == EntryKind::Dir || is_markdown(&entry.path))
         })
         .collect())
 }
 
-fn note_name(entry: &winc_editor::DirEntry) -> String {
+fn note_name(entry: &DirEntry) -> String {
     entry
         .path
         .file_stem()
@@ -596,49 +668,54 @@ fn note_name(entry: &winc_editor::DirEntry) -> String {
         .to_owned()
 }
 
-fn folder_preview(folder: &Path) -> Option<FolderPreview> {
+fn folder_preview(root: &Path, folder: &Path, show_hidden: bool) -> Option<FolderPreview> {
     use std::collections::VecDeque;
     use std::hash::BuildHasher;
 
-    let children = entries(folder).ok()?;
+    let children = visible_entries(folder, show_hidden).ok()?;
     let count = children.len();
     // Quiet MD picks the most recent real documents, including descendants. Bound disk work
     // in Minc because it does not keep Quiet's whole document store in memory.
     let mut pending = VecDeque::from([(children, 0)]);
-    let mut notes = Vec::new();
+    let mut files = Vec::new();
     let mut dirs = 0;
     while let Some((children, depth)) = pending.pop_front() {
         for entry in children {
+            if entry.symlink {
+                continue;
+            }
             if entry.kind == EntryKind::Dir && dirs < 32 && depth < 8 {
                 dirs += 1;
-                if let Ok(children) = entries(&entry.path) {
+                if let Ok(children) = visible_entries(&entry.path, show_hidden) {
                     pending.push_back((children, depth + 1));
                 }
             } else if entry.kind == EntryKind::File
+                && (is_markdown(&entry.path) || AttachmentKind::of(&entry.path).is_some())
                 && let Ok(meta) = winc_backend::fs::symlink_metadata(&entry.path)
                 && meta.is_file()
             {
-                notes.push((meta.modified, entry));
-                if notes.len() >= 512 {
+                files.push((meta.modified, entry));
+                if files.len() >= 512 {
                     break;
                 }
             }
         }
-        if notes.len() >= 512 {
+        if files.len() >= 512 {
             break;
         }
     }
-    notes.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
-    let papers = notes.len().min(3);
+    files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
+    let papers = files.len().min(3);
     let seeds = std::array::from_fn(|i| {
-        notes.get(i).map_or(1, |(_, entry)| {
+        files.get(i).map_or(1, |(_, entry)| {
             std::hash::BuildHasherDefault::<std::collections::hash_map::DefaultHasher>::default()
                 .hash_one(&entry.path)
         })
     });
-    let front = notes
-        .first()
-        .map(|(_, entry)| (note_name(entry), read_page(&entry.path)));
+    let front = files
+        .into_iter()
+        .next()
+        .map(|(_, entry)| Box::new(file_card(root, entry)));
     Some(FolderPreview {
         count,
         papers,
@@ -651,8 +728,10 @@ fn folder_preview(folder: &Path) -> Option<FolderPreview> {
     clippy::disallowed_methods,
     reason = "笔记库只浏览本机目录，按字节上限读取缩略页"
 )]
-fn read_page(path: &Path) -> Vec<PreviewLine> {
-    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
+fn read_page(root: &Path, path: &Path) -> Vec<PreviewLine> {
+    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+        || !winc_config::files::canonicalize(path).is_ok_and(|path| path.starts_with(root))
+    {
         return Vec::new();
     }
     let mut bytes = Vec::new();

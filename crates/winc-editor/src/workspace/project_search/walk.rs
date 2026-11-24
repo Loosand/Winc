@@ -27,6 +27,7 @@ impl ProjectSearch {
             extra: Arc::clone(&self.labelled),
             literal: self.query.as_ref().and_then(literal),
             matcher: matcher.clone(),
+            file_names: self.query.as_ref().is_some_and(|query| query.file_names),
             source,
             dirty,
             cancel: Arc::clone(&job.cancel),
@@ -46,6 +47,9 @@ impl ProjectSearch {
 /// [`regex_literal`]）。文字跨行、或不区分大小写而含有 ASCII 以外的字符时不用：远端的 `grep`
 /// 按行比较，大小写的规则也随它的语言环境变化，可能漏掉文件。
 fn literal(query: &Query) -> Option<(String, bool)> {
+    if query.file_names {
+        return None;
+    }
     let found;
     let text = if !query.required.is_empty() {
         &query.required
@@ -145,6 +149,7 @@ pub(super) struct Walk {
     /// 候选的文件。
     literal: Option<(String, bool)>,
     matcher: Matcher,
+    file_names: bool,
     source: Source,
     dirty: Arc<HashMap<PathBuf, Rope>>,
     cancel: Arc<AtomicBool>,
@@ -378,9 +383,13 @@ impl<'a> Worker<'a> {
             return WalkState::Quit;
         }
 
-        let file = match self.walk.dirty.get(path) {
-            Some(rope) => self.search_rope(path, rope),
-            None => self.search_file(path),
+        let file = if self.walk.file_names {
+            name_result((&self.walk.root, &self.walk.extra), &self.matcher, path)
+        } else {
+            match self.walk.dirty.get(path) {
+                Some(rope) => self.search_rope(path, rope),
+                None => self.search_file(path),
+            }
         };
 
         let Some(mut file) = file else {
@@ -388,14 +397,15 @@ impl<'a> Worker<'a> {
         };
 
         // 多个线程共同计数：使总数超过上限的线程截去多出的部分，并通知所有线程停止。
-        let before = self.walk.count.fetch_add(file.matches.len(), Relaxed);
+        let count = file.matches.len().max(1);
+        let before = self.walk.count.fetch_add(count, Relaxed);
 
         if before >= MAX_RESULTS {
             self.walk.truncated.store(true, Relaxed);
             return WalkState::Quit;
         }
 
-        let full = before + file.matches.len() >= MAX_RESULTS;
+        let full = before + count >= MAX_RESULTS;
         file.matches.truncate(MAX_RESULTS - before);
 
         if self.sender.send(Message::File(file)).is_err() {

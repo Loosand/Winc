@@ -617,7 +617,7 @@ impl App {
         }
     }
 
-    /// 打开文件树中选中的条目：目录切换展开状态，文件在编辑区打开，选中了多项时打开其中的
+    /// 打开文件树中选中的条目：在笔记库里浏览目录、在编辑区打开文件，选中了多项时打开其中的
     /// 各个文件。
     ///
     /// `keep_focus` 为真时焦点保留在文件树，便于继续用方向键选择下一项。
@@ -634,7 +634,11 @@ impl App {
         };
         let entry = &ws.rows()[index];
         if entry.kind == EntryKind::Dir {
-            self.set_dir_expanded(index, None);
+            if self.notebook_sidebar() {
+                self.activate_tree_folder(index);
+            } else {
+                self.set_dir_expanded(index, None);
+            }
             return;
         }
         let path = entry.path.clone();

@@ -228,7 +228,8 @@ impl App {
         self.release_folder_lock();
         self.reset_folder_views();
         self.watch_folder();
-        self.set_sidebar(false);
+        self.set_sidebar_view(SidebarView::Files);
+        self.set_sidebar(self.writing_workspace());
         self.focus = Focus::Editor;
         self.set_window_title(crate::layout::PRODUCT_NAME);
         self.relayout();
@@ -246,6 +247,9 @@ impl App {
         self.bars.goto_input = None;
         self.panels.tree.drag = None;
         self.panels.global.engine.clear();
+        if !self.notebook_sidebar() {
+            self.panels.global.file_names = false;
+        }
         self.panels.global.collapsed.clear();
         self.panels.global.selected = None;
         self.panels.global.due = None;

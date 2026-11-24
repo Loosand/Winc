@@ -128,6 +128,8 @@ pub struct GlobalSearch {
     pub whole_word: bool,
     /// 是否按正则表达式搜索。
     pub regex: bool,
+    /// Search file names instead of contents.
+    pub file_names: bool,
     /// 是否也搜索被忽略的文件。
     pub include_ignored: bool,
     /// 查找、替换输入框的文字折成的行数。
@@ -216,6 +218,7 @@ impl GlobalSearch {
             case_sensitive: self.case_sensitive,
             whole_word: self.whole_word,
             regex: self.regex,
+            file_names: self.file_names,
             include_ignored: self.include_ignored,
             include: self.include.text().to_owned(),
             exclude: self.exclude.text().to_owned(),
@@ -344,13 +347,17 @@ impl App {
         let summary =
             (!g.query.text().is_empty() && !self.no_search_results()) || g.engine.error().is_some();
         let (replace, details) = (g.replace_share(), g.details_share());
-        PanelParts::new(
-            self.panel_rect(),
-            replace,
-            details,
-            summary,
-            g.field_heights(),
-        )
+        let panel = self.panel_rect();
+        let heights = g.field_heights();
+        if self.notebook_sidebar() {
+            let mut parts = PanelParts::notebook(panel, replace, details, summary, heights);
+            if g.file_names {
+                parts.expand = Rect::default();
+            }
+            parts
+        } else {
+            PanelParts::new(panel, replace, details, summary, heights)
+        }
     }
 
     /// 记下查找、替换输入框折成的行数；变化时框高从当前高度过渡到新高度。
@@ -429,7 +436,7 @@ impl App {
     pub(crate) fn no_search_results(&self) -> bool {
         let g = &self.panels.global;
         !g.query.text().is_empty()
-            && g.engine.total() == 0
+            && g.engine.results.is_empty()
             && !g.engine.is_running()
             && g.due.is_none()
             && g.engine.error().is_none()
@@ -483,6 +490,11 @@ impl App {
     /// 有合适的选区（没有选区时为光标所在的词）时，用它作为查找内容。`replace` 为 `true` 时
     /// 同时展开替换行；此时如果已有查找内容，焦点放进替换输入框。没有打开目录时在状态栏提示。
     pub(in crate::app) fn open_global_search(&mut self, replace: bool) {
+        let seed = self.search_seed();
+        self.focus_global_search(replace, seed);
+    }
+
+    pub(in crate::app) fn focus_global_search(&mut self, replace: bool, seed: Option<String>) {
         if self.editor.workspace.is_none() {
             self.flash(t!("workspace-open-folder-first"));
             return;
@@ -494,7 +506,8 @@ impl App {
             self.set_sidebar(true);
         }
 
-        if let Some(seed) = self.search_seed()
+        let switched_scope = replace && std::mem::take(&mut self.panels.global.file_names);
+        if let Some(seed) = seed
             && seed != self.panels.global.query.text()
         {
             self.panels.global.query.remember();
@@ -502,6 +515,9 @@ impl App {
             self.global_changed(true);
         } else {
             self.panels.global.query.select_all();
+            if switched_scope {
+                self.run_global_search();
+            }
         }
 
         if replace {
@@ -544,7 +560,11 @@ impl App {
         let query = self.panels.global.current_query();
 
         // 有未保存修改的文档按内存中的内容搜索。
-        let dirty = self.dirty_ropes();
+        let dirty = if query.file_names {
+            Vec::new()
+        } else {
+            self.dirty_ropes()
+        };
 
         let proxy = self.link.proxy.clone();
         let wake = move || {
@@ -685,7 +705,18 @@ impl App {
                 g.rebuild_rows();
                 g.scroll = 0.0;
             }
-            PanelButton::Expand => {
+            PanelButton::Scope { file_names } => {
+                if g.file_names != file_names {
+                    g.file_names = file_names;
+                    if file_names {
+                        g.replace_open = false;
+                        self.focus = Focus::GlobalQuery;
+                    }
+                    self.global_changed(true);
+                    self.relayout();
+                }
+            }
+            PanelButton::Expand if !g.file_names => {
                 g.replace_open = !g.replace_open;
                 self.focus = if g.replace_open {
                     Focus::GlobalReplace
@@ -717,6 +748,7 @@ impl App {
                 }
             }
             PanelButton::ReplaceAll => self.ask_replace_all(),
+            PanelButton::Expand => {}
         }
 
         self.clamp_results_scroll();
@@ -1099,6 +1131,9 @@ impl App {
         self.panels.global.select_row(index);
 
         match self.panels.global.rows().get(index) {
+            Some(&ResultRow::File(_)) if self.panels.global.file_names => {
+                self.open_result(index, double, double);
+            }
             Some(&ResultRow::File(f)) => {
                 let path = &self.panels.global.engine.results[f].path;
                 let collapse = !self.panels.global.collapsed.contains(path);

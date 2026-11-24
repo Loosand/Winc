@@ -9,7 +9,7 @@
 )]
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// 返回「显示文件所在位置」按钮上的文字（按当前界面语言）。
@@ -45,6 +45,39 @@ pub fn open_with_default_app(path: &Path) -> io::Result<()> {
         )
     } else {
         spawn(Command::new("xdg-open").arg(path))
+    }
+}
+
+/// Locate the installed macOS Typora bundle, including the newer edition.
+pub(crate) fn typora_app() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    return ["abnerworks.Typora", "io.appmakes.typora"]
+        .into_iter()
+        .find_map(crate::macos::application_path);
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+/// macOS stores iCloud Drive and app containers under the user's Library/Mobile Documents.
+pub(crate) fn is_icloud_folder(path: &Path) -> bool {
+    cfg!(target_os = "macos")
+        && path
+            .ancestors()
+            .any(|dir| dir.ends_with("Library/Mobile Documents"))
+}
+
+/// Open a local workspace in the Typora bundle shown in the menu.
+pub(crate) fn open_in_typora(root: &Path, application: &Path) -> io::Result<()> {
+    winc_backend::ensure_local(root)?;
+    if cfg!(target_os = "macos") {
+        spawn(
+            Command::new("/usr/bin/open")
+                .arg("-a")
+                .arg(application)
+                .arg(root),
+        )
+    } else {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
     }
 }
 

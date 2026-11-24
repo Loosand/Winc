@@ -333,6 +333,14 @@ impl App {
             self.gutter_width(),
             status_height,
         );
+        if self.writing_workspace() && crate::layout::traffic_lights_end() > 0.0 {
+            // Keep one small gap from the native window buttons in both sidebar states.
+            let l = &mut self.layout;
+            l.sidebar_button.x -= LIGHTS_GAP - 8.0;
+            let right = l.tabs.right();
+            l.tabs.x = (l.top_bar.x + TAB_INSET).max(l.sidebar_button.right() + TAB_GAP);
+            l.tabs.w = (right - l.tabs.x).max(0.0);
+        }
         // 差异标签：查找条放在差异的标题栏下面，不盖住标题栏右端的按钮。
         if self.layout.search.h > 0.0 && self.editor.active().is_some_and(|d| d.diff.is_some()) {
             self.layout.search.y += crate::app::diff::DIFF_HEADER;

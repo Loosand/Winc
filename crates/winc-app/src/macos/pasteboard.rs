@@ -71,7 +71,17 @@ unsafe fn png_on(board: &AnyObject) -> Option<Vec<u8>> {
         }
 
         let tiff: *mut AnyObject = msg_send![board, dataForType: &*tiff_type];
-        let tiff = tiff.as_ref()?;
+        tiff_png(tiff.as_ref()?)
+    }
+}
+
+/// Convert TIFF bytes in an `NSData` into PNG bytes.
+///
+/// # Safety
+/// `tiff` must point to a live `NSData`.
+pub(super) unsafe fn tiff_png(tiff: &AnyObject) -> Option<Vec<u8>> {
+    // SAFETY: AppKit keeps the bitmap and PNG data alive in the current autorelease pool.
+    unsafe {
         let rep: *mut AnyObject = msg_send![class!(NSBitmapImageRep), imageRepWithData: tiff];
         let rep = rep.as_ref()?;
         let properties: *mut AnyObject = msg_send![class!(NSDictionary), dictionary];

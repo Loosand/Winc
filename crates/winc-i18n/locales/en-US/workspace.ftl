@@ -133,14 +133,14 @@ workspace-notebook-search-results = Search results
 workspace-notebook-search-empty = No matching notes
 workspace-notebook-search-keys = ↑ ↓  Select      ↵  Open      Esc  Close
 workspace-notebook-search-limited = Some content was skipped in long notes or large libraries
-workspace-library-up = Up One Level
-workspace-library-refresh = Refresh
-workspace-library-refreshing = Refreshing…
-workspace-library-refreshed = Home refreshed
 workspace-library-notes = My Documents
 workspace-add-notebook = Open Folder…
-workspace-switch-notebook = Switch Workspace
-workspace-forget-notebook = Remove from Workspace List
+workspace-open-in-typora = Open in Typora
+workspace-work-directory = Working Directory
+workspace-show-in-finder = Show in Finder
+workspace-open-with = Open With
+workspace-file-sync = File Sync
+workspace-open-in-typora-failed = Could not open in Typora: { $error }
 workspace-library-folder = Folder
 workspace-library-count =
     { $count ->
@@ -149,8 +149,8 @@ workspace-library-count =
     }
 workspace-library-blank = Blank note
 workspace-library-create-failed = Could not create the note: { $error }
-workspace-library-loading = Loading notes…
-workspace-library-empty = No Markdown notes or folders here yet.
+workspace-library-loading = Loading folder…
+workspace-library-empty = This folder is empty.
 workspace-library-failed = Could not read folder: { $error }
 workspace-start-open = Open File or Folder
 workspace-start-open-file = Open File
@@ -578,3 +578,19 @@ workspace-stdin-read-failed = Couldn’t read standard input: { $error }
 workspace-stdin-truncated = Only the first { $size } MB of standard input was read
 workspace-backup-locked = This folder is open in another Winc window; unsaved changes in this window won’t be backed up automatically
 workspace-backup-failed = Couldn’t back up unsaved changes: { $error }
+workspace-notebook-more-folders = More Folders…
+workspace-notebook-tree-menu = File Tree Options
+workspace-search-scope-name = File name
+workspace-search-scope-content = Full text
+workspace-search-name-results =
+    { $files ->
+        [one] { $files }{ $more } matching file
+       *[other] { $files }{ $more } matching files
+    }
+workspace-notebook-open-folder = Open Folder…
+workspace-search-scope = Scope
+workspace-search-start-name = Search file names
+workspace-search-start-content = Search file contents
+workspace-tree-name-ascending = Name · A to Z
+workspace-tree-name-descending = Name · Z to A
+workspace-tree-show-hidden = Show Hidden Files

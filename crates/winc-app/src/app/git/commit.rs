@@ -1041,11 +1041,10 @@ impl Default for CommitState {
 }
 
 impl App {
-    /// 当前能用的侧栏视图：文件、搜索，Git 模块开着且目录在仓库里时再加提交。
+    /// 项目侧栏顶栏的视图按钮。笔记侧栏在目录栏提供自己的入口。
     pub(crate) fn sidebar_views(&self) -> Vec<crate::layout::SidebarView> {
-        use crate::layout::SidebarView;
-        if self.notebook_sidebar() {
-            return vec![SidebarView::Files, SidebarView::Outline];
+        if self.writing_workspace() {
+            return Vec::new();
         }
         let mut views = crate::layout::BASE_VIEWS.to_vec();
         if self.git.root.is_some() {
@@ -1060,7 +1059,7 @@ impl App {
     pub(crate) fn sidebar_tabs(&self) -> Vec<(Rect, crate::layout::SidebarView)> {
         use crate::layout::SidebarView;
         let mut views = self.sidebar_views();
-        if !self.notebook_sidebar()
+        if !self.writing_workspace()
             && !views.contains(&SidebarView::Commit)
             && self.view_tab_share(SidebarView::Commit) > 0.0
         {

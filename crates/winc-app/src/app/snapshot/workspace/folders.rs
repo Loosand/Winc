@@ -89,9 +89,6 @@ fn notebook_switches_roots_and_creates_in_the_selected_folder() {
     assert_eq!(app.library.folder.as_deref(), Some(main.as_path()));
     assert_eq!(app.state.notebook_workspaces, [main.clone(), wiki.clone()]);
     assert!(!wiki.join(main.file_name().unwrap()).exists());
-    menu(&mut app);
-    app.run_menu_command(MenuCommand::ForgetNotebookWorkspace(1));
-    assert_eq!(app.state.notebook_workspaces, [main.clone()]);
     assert_eq!(std::fs::read_to_string(&wiki_note).unwrap(), "# Wiki\n");
     for path in [main, wiki] {
         let _ = std::fs::remove_dir_all(path);

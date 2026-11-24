@@ -163,7 +163,6 @@ fn notebook_sidebar_context_menu_creates_markdown_and_only_offers_available_past
     app.panels.sidebar.legacy_chrome = false;
     App::apply_preview_state(&mut app.editor, &app.state);
     app.open_path(&root);
-    app.panels.sidebar.documents_closed = true;
     paint(&mut app);
 
     let items = |app: &App| {
@@ -193,7 +192,6 @@ fn notebook_sidebar_context_menu_creates_markdown_and_only_offers_available_past
         ]
     );
     app.run_menu_command(MenuCommand::NewFile);
-    assert!(app.notebook_documents_open());
     let input = app.panels.name_input.as_mut().unwrap();
     assert_eq!(input.dir, root);
     assert_eq!(input.field.text(), "Untitled.md");

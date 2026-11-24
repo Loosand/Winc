@@ -139,6 +139,7 @@ pub struct Workspace {
     compact: bool,
     /// Hide dot-prefixed entries in the notebook tree without changing the filesystem.
     hide_dot_entries: bool,
+    reverse_name_order: bool,
     /// 已展开的目录（绝对路径）。
     expanded: HashSet<PathBuf>,
     /// 读过的目录内容，已排序。
@@ -280,6 +281,7 @@ impl Workspace {
             segment: None,
             compact: true,
             hide_dot_entries: false,
+            reverse_name_order: false,
             expanded: HashSet::from([root]),
             children: HashMap::new(),
             missing: Missing::default(),
@@ -293,6 +295,14 @@ impl Workspace {
     pub fn set_hide_dot_entries(&mut self, hide: bool) {
         if self.hide_dot_entries != hide {
             self.hide_dot_entries = hide;
+            self.rebuild();
+        }
+    }
+
+    /// Reverse the natural name order within directories and within files.
+    pub fn set_reverse_name_order(&mut self, reverse: bool) {
+        if self.reverse_name_order != reverse {
+            self.reverse_name_order = reverse;
             self.rebuild();
         }
     }
@@ -800,7 +810,12 @@ impl Workspace {
             &mut self.children,
             &mut self.missing,
             &self.expanded,
-            (self.compact, top.1, self.hide_dot_entries),
+            (
+                self.compact,
+                top.1,
+                self.hide_dot_entries,
+                self.reverse_name_order,
+            ),
             top.0,
             None,
             &mut rows,
@@ -870,14 +885,27 @@ fn flatten(
     cache: &mut HashMap<PathBuf, Rc<[DirEntry]>>,
     missing: &mut Missing,
     expanded: &HashSet<PathBuf>,
-    (compact, merge, hide_dot_entries): (bool, bool, bool),
+    (compact, merge, hide_dot_entries, reverse): (bool, bool, bool, bool),
     children: Rc<[DirEntry]>,
     parent: Option<usize>,
     rows: &mut Vec<Entry>,
 ) {
     let depth = parent.map_or(0, |p| rows[p].depth + 1);
 
-    for index in 0..children.len() {
+    // Directories stay above files. Each group can be scanned backward without copying the cache.
+    let folders = if reverse {
+        children.partition_point(|entry| entry.kind == EntryKind::Dir)
+    } else {
+        0
+    };
+    for slot in 0..children.len() {
+        let index = if !reverse {
+            slot
+        } else if slot < folders {
+            folders - 1 - slot
+        } else {
+            children.len() - 1 - (slot - folders)
+        };
         if hide_dot_entries && children[index].name.starts_with('.') {
             continue;
         }
@@ -912,7 +940,7 @@ fn flatten(
 
         if open {
             let inner = cached_children(cache, missing, &tail);
-            let compact = (compact, compact, hide_dot_entries);
+            let compact = (compact, compact, hide_dot_entries, reverse);
             flatten(cache, missing, expanded, compact, inner, Some(row), rows);
             rows[row].end = rows.len();
         }

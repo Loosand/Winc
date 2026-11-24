@@ -237,7 +237,7 @@ impl App {
             Target::Search => self.click_search(x, y),
             // 双击分隔条恢复默认宽度。
             Target::Splitter if self.click_count(x, y) == 2 => {
-                self.panels.sidebar.width = DEFAULT_PANEL_WIDTH;
+                self.panels.sidebar.width = self.default_sidebar_width();
                 self.remember_panel_width();
                 self.relayout();
                 self.request_redraw();

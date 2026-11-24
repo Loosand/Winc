@@ -7,7 +7,17 @@ use super::*;
 impl App {
     /// 返回命令 `command` 的菜单项文字。
     pub(crate) fn menu_label(&self, command: MenuCommand) -> MenuLabel {
+        let workspace_menu = matches!(
+            self.overlays.context_menu.as_ref().map(|menu| &menu.target),
+            Some(MenuTarget::NotebookWorkspaces { .. })
+        );
         match command {
+            MenuCommand::Reveal if workspace_menu && cfg!(target_os = "macos") => {
+                MenuLabel::plain(t!("workspace-show-in-finder"))
+            }
+            MenuCommand::NewFolder | MenuCommand::NewFile if workspace_menu => {
+                MenuLabel::plain(command.label().trim_end_matches('…'))
+            }
             MenuCommand::CopyPath
                 if matches!(
                     self.overlays.context_menu.as_ref().map(|m| &m.target),
@@ -25,8 +35,8 @@ impl App {
                 };
                 MenuLabel::plain(value)
             }
-            MenuCommand::SwitchNotebookWorkspace(i) | MenuCommand::ForgetNotebookWorkspace(i) => {
-                let Some(MenuTarget::NotebookWorkspaces(roots)) =
+            MenuCommand::SwitchNotebookWorkspace(i) => {
+                let Some(MenuTarget::NotebookWorkspaces { roots, .. }) =
                     self.overlays.context_menu.as_ref().map(|menu| &menu.target)
                 else {
                     return MenuLabel::plain("");
@@ -34,6 +44,14 @@ impl App {
                 let Some(path) = roots.get(i) else {
                     return MenuLabel::plain("");
                 };
+                let full = winc_editor::display_path(path, None);
+                if i == 0 {
+                    return MenuLabel {
+                        title: full.replace(['\n', '\r', '\t'], " "),
+                        subtitle: None,
+                        tooltip: Some(full),
+                    };
+                }
                 let name = winc_editor::display_name(path);
                 let duplicate = roots
                     .iter()
@@ -41,12 +59,12 @@ impl App {
                     .count()
                     > 1;
                 MenuLabel {
-                    title: name.into_owned(),
+                    title: name.replace(['\n', '\r', '\t'], " "),
                     subtitle: path
                         .parent()
                         .filter(|_| duplicate)
                         .map(|p| winc_editor::display_path(p, None)),
-                    tooltip: Some(winc_editor::display_path(path, None)),
+                    tooltip: Some(full),
                 }
             }
             MenuCommand::OpenRecent(i) => self.recent_label(i),

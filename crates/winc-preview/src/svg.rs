@@ -115,6 +115,18 @@ pub fn load(
     })
 }
 
+/// Render an SVG thumbnail using only the drawing and assets embedded in it.
+///
+/// # Errors
+/// Returns an error if the SVG cannot be parsed.
+pub fn thumbnail(text: &str, glyphs: Option<Arc<dyn Glyphs>>, edge: u32) -> Result<Pixels, String> {
+    let drawing = Drawing::parse_with_images(text, None, glyphs, false)?;
+    let edge = edge.clamp(1, MAX_EDGE) as f32;
+    let scale = edge / drawing.width.max(drawing.height);
+    let fit = |size: f32| (size * scale).round().clamp(1.0, edge) as u32;
+    Ok(drawing.render(fit(drawing.width), fit(drawing.height)))
+}
+
 /// `preserveAspectRatio` 的解析结果：`viewBox` 如何放进视口。
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Aspect {
@@ -364,6 +376,7 @@ struct Parser<'a, 'input> {
     /// 正在展开的图案的层数，见 [`MAX_PATTERN_NESTING`]。
     patterns: usize,
     base: Option<PathBuf>,
+    external_images: bool,
     /// 已解码的位图，按 `href` 索引：同一张图被多次引用（`<use>`）时只解码一次，内存中也只
     /// 保留一个副本。
     images: HashMap<&'a str, Option<Arc<Pixels>>>,
@@ -389,6 +402,15 @@ impl Drawing {
         text: &str,
         base: Option<&Path>,
         glyphs: Option<Arc<dyn Glyphs>>,
+    ) -> Result<Drawing, String> {
+        Self::parse_with_images(text, base, glyphs, true)
+    }
+
+    fn parse_with_images(
+        text: &str,
+        base: Option<&Path>,
+        glyphs: Option<Arc<dyn Glyphs>>,
+        external_images: bool,
     ) -> Result<Drawing, String> {
         // 先展开 DOCTYPE 中的实体，之后的 XML 解析不支持 DTD（见 `dtd`）。
         let text = dtd::expand(text)?;
@@ -449,6 +471,7 @@ impl Drawing {
             inside_effect: 0,
             patterns: 0,
             base: base.map(Path::to_path_buf),
+            external_images,
             images: HashMap::new(),
             image_bytes: 0,
             ramps: HashMap::new(),

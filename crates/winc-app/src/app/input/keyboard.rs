@@ -519,9 +519,13 @@ impl App {
         self.request_redraw();
     }
 
-    /// 处理 `Esc`：离开搜索面板，焦点回到编辑区；没有打开的文档时回到搜索输入框。
+    /// 处理 `Esc`：在笔记侧栏返回文件树，项目搜索交还编辑区焦点。
     fn leave_panel(&mut self) {
         self.ime.field_preedit.clear();
+        if self.notebook_sidebar() {
+            self.show_files();
+            return;
+        }
         self.focus = if self.editor.active.is_some() {
             Focus::Editor
         } else {

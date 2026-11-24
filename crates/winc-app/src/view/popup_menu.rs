@@ -10,6 +10,8 @@ use crate::icons::Direction;
 pub(super) const ROW: f32 = 24.0;
 /// 标题下面还有一行小字时，一行的高度（逻辑像素）。
 const ROW_TALL: f32 = 40.0;
+const WORKSPACE_ROW: f32 = 28.0;
+const WORKSPACE_INSET: f32 = 14.0;
 /// 分隔线那一行的高度（逻辑像素）。
 const SEPARATOR: f32 = 9.0;
 /// 文字右边到快捷键、箭头的最小间距（逻辑像素）。
@@ -30,6 +32,9 @@ pub(super) fn band_ink(p: &Palette) -> (Color, Color) {
 
 /// 绘制窗口内的菜单（打开着时），并把各级菜单的位置记回菜单。
 pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
+    let workspace =
+        app.notebook_menu_open(crate::app::workspace::notebook::SidebarTarget::FolderMenu);
+    let row_base = if workspace { WORKSPACE_ROW } else { ROW };
     let Some(mut popup) = app
         .overlays
         .context_menu
@@ -40,8 +45,14 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     };
     let window = app.layout.window;
     for l in 0..popup.levels.len() {
-        let (w, content) = measure(app, frame, &popup.levels[l].rows);
-        let w = if l == 0 { w.max(popup.min_width) } else { w };
+        let (w, content) = measure(app, frame, &popup.levels[l].rows, row_base);
+        let w = if l == 0 && workspace {
+            popup.min_width
+        } else if l == 0 {
+            w.max(popup.min_width)
+        } else {
+            w
+        };
         // 宽高不超过窗口减去两侧的边距；窗口比两侧边距还小时为 0。
         let w = w.min(window.w - 2.0 * MARGIN).max(0.0);
         let h = content.min(window.h - 2.0 * MARGIN).max(0.0);
@@ -88,12 +99,12 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
             .rows
             .iter()
             .map(|row| {
-                let rect = Rect::new(x, top, w, row_height(row));
+                let rect = Rect::new(x, top, w, row_height(row, row_base));
                 top += rect.h;
                 rect
             })
             .collect();
-        draw_level(app, frame, level);
+        draw_level(app, frame, level, workspace, popup.app_icon.as_ref());
     }
     if let Some(menu) = app.overlays.context_menu.as_mut() {
         menu.popup = Some(popup);
@@ -101,16 +112,17 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
 }
 
 /// 一级菜单需要的宽度和内容高度（逻辑像素）。
-fn measure(app: &App, frame: &mut Frame<'_>, rows: &[PopupRow]) -> (f32, f32) {
+fn measure(app: &App, frame: &mut Frame<'_>, rows: &[PopupRow], row_base: f32) -> (f32, f32) {
     let size = app.fonts.ui;
     let small = app.fonts.ui_small;
     let mut w: f32 = 0.0;
     let mut h = 2.0 * POPUP_PAD;
     let lead = CHECK_COLUMN + icon_column(rows);
     for row in rows {
-        h += row_height(row);
+        h += row_height(row, row_base);
         let text = match row {
             PopupRow::Separator => continue,
+            PopupRow::Heading(text) => frame.measure(FontKind::Ui, small, text),
             PopupRow::Item { label, key, .. } => {
                 let title = frame.measure(FontKind::Ui, size, &label.title);
                 let subtitle = label
@@ -152,11 +164,12 @@ fn icon_column(rows: &[PopupRow]) -> f32 {
 }
 
 /// 一行的高度。
-fn row_height(row: &PopupRow) -> f32 {
+fn row_height(row: &PopupRow, row_base: f32) -> f32 {
     match row {
         PopupRow::Separator => SEPARATOR,
+        PopupRow::Heading(_) => 20.0,
         PopupRow::Item { label, .. } if label.subtitle.is_some() => ROW_TALL,
-        _ => ROW,
+        _ => row_base,
     }
 }
 
@@ -168,15 +181,21 @@ fn checked_offset(rows: &[PopupRow]) -> Option<f32> {
             row,
             PopupRow::Item { checked: true, .. } | PopupRow::Entry { checked: true, .. }
         ) {
-            return Some(top + row_height(row) / 2.0);
+            return Some(top + row_height(row, ROW) / 2.0);
         }
-        top += row_height(row);
+        top += row_height(row, ROW);
     }
     None
 }
 
 /// 绘制一级菜单：卡片、各行的悬停底色、勾、文字、快捷键和子菜单箭头。
-fn draw_level(app: &App, frame: &mut Frame<'_>, level: &PopupLevel) {
+fn draw_level(
+    app: &App,
+    frame: &mut Frame<'_>,
+    level: &PopupLevel,
+    workspace: bool,
+    app_icon: Option<&winc_preview::image::Pixels>,
+) {
     let p = app.palette;
     let card = level.rect;
     draw_card(frame, p, card, RADIUS_POPUP, p.popup_bg);
@@ -187,6 +206,18 @@ fn draw_level(app: &App, frame: &mut Frame<'_>, level: &PopupLevel) {
             continue;
         }
         let (title, subtitle, icon, checked, enabled, key, submenu) = match row {
+            PopupRow::Heading(label) => {
+                ui_text_small(
+                    frame,
+                    app,
+                    rect.x + WORKSPACE_INSET,
+                    *rect,
+                    label,
+                    p.text_dim,
+                    clip,
+                );
+                continue;
+            }
             PopupRow::Separator => {
                 let y = (rect.y + rect.h / 2.0).round();
                 let line = Rect::new(
@@ -211,7 +242,7 @@ fn draw_level(app: &App, frame: &mut Frame<'_>, level: &PopupLevel) {
                 *icon,
                 *checked,
                 *enabled,
-                key.as_str(),
+                if workspace { "" } else { key.as_str() },
                 false,
             ),
             PopupRow::Submenu {
@@ -251,31 +282,70 @@ fn draw_level(app: &App, frame: &mut Frame<'_>, level: &PopupLevel) {
         let hovered = level.hover == Some(i);
         if hovered {
             let band = rect.inset(ROW_INSET, 1.0);
-            frame.rect_clipped(band, p.accent_fill, RADIUS_ROW, clip);
+            let fill = if workspace { p.hover } else { p.accent_fill };
+            frame.rect_clipped(band, fill, RADIUS_ROW, clip);
         }
-        let (ink, dim) = if hovered {
+        let current_path = matches!(icon, Some(MenuIcon::NotebookFolder { current: true }));
+        let (ink, dim) = if hovered && !workspace {
             band_ink(p)
+        } else if current_path {
+            (p.text_muted, p.text_dim)
         } else if enabled {
             (p.text, p.text_dim)
         } else {
             (p.text_dim, p.text_dim)
         };
-        let title_row = Rect::new(rect.x, rect.y, rect.w, ROW);
+        let title_row = Rect::new(
+            rect.x,
+            rect.y,
+            rect.w,
+            if workspace { WORKSPACE_ROW } else { ROW },
+        );
         if checked {
             let cy = icon_center_y(app, title_row, app.fonts.ui);
             icons::check(frame, (rect.x + 13.0, cy), 9.0, ink, clip);
         }
-        if let Some(icon) = icon {
+        let leading_icon = icon.filter(|icon| *icon != MenuIcon::ICloud);
+        if let Some(icon) = leading_icon {
             let (w, h) = icon.size();
             let cy = icon_center_y(app, title_row, app.fonts.ui);
-            let at = (
-                rect.x + CHECK_COLUMN + (ICON_COLUMN - 6.0 - w) / 2.0,
-                cy - h / 2.0,
-            );
-            app.draw_menu_icon(frame, icon, at, clip);
+            let x = if workspace {
+                WORKSPACE_INSET
+            } else {
+                CHECK_COLUMN + (ICON_COLUMN - 6.0 - w) / 2.0
+            };
+            let at = (rect.x + x, cy - h / 2.0);
+            if icon == MenuIcon::Typora
+                && let Some(pixels) = app_icon
+            {
+                frame.pixels_scaled(
+                    Rect::new(at.0, at.1, w, h),
+                    pixels.width,
+                    pixels.height,
+                    &pixels.rgba,
+                    clip,
+                );
+            } else {
+                app.draw_menu_icon(frame, icon, at, clip);
+            }
         }
-        let text_x = rect.x + CHECK_COLUMN + icons;
-        let right = rect.right() - RIGHT_PAD;
+        let text_x = rect.x
+            + if workspace {
+                WORKSPACE_INSET
+                    + if leading_icon.is_some() {
+                        ICON_COLUMN
+                    } else {
+                        0.0
+                    }
+            } else {
+                CHECK_COLUMN + icons
+            };
+        let right = rect.right()
+            - if workspace {
+                WORKSPACE_INSET
+            } else {
+                RIGHT_PAD
+            };
         let mut room = right - text_x;
         if !key.is_empty() {
             let w = frame.measure(FontKind::Ui, app.fonts.ui_small, key);
@@ -287,7 +357,27 @@ fn draw_level(app: &App, frame: &mut Frame<'_>, level: &PopupLevel) {
             icons::chevron(frame, (right - 3.0, cy), 6.0, Direction::Right, dim, clip);
             room -= KEY_GAP / 2.0;
         }
-        let title = ellipsize(frame, title, app.fonts.ui, room.max(0.0));
+        if icon == Some(MenuIcon::ICloud) {
+            let provider = "iCloud";
+            let width = frame.measure(FontKind::Ui, app.fonts.ui, provider);
+            let at = right - width - 18.0;
+            let cy = icon_center_y(app, title_row, app.fonts.ui);
+            app.draw_menu_icon(frame, MenuIcon::ICloud, (at - 18.0, cy - 6.0), clip);
+            ui_text(frame, app, at, title_row, provider, p.text_muted, clip);
+            let x = right - 2.0;
+            let strokes = [
+                winc_render::Stroke::Line(x - 5.0, cy + 2.5, x, cy - 2.5),
+                winc_render::Stroke::Line(x - 5.0, cy - 2.5, x, cy - 2.5),
+                winc_render::Stroke::Line(x, cy - 2.5, x, cy + 2.5),
+            ];
+            frame.stroke(&strokes, 1.1, p.text_dim, clip);
+            room = (at - text_x - 24.0).max(0.0);
+        }
+        let title = if workspace {
+            truncate_end(frame, title, app.fonts.ui, room.max(0.0))
+        } else {
+            ellipsize(frame, title, app.fonts.ui, room.max(0.0))
+        };
         ui_text(frame, app, text_x, title_row, &title, ink, clip);
         if let Some(subtitle) = subtitle {
             let line = Rect::new(rect.x, rect.y + ROW - 6.0, rect.w, ROW - 4.0);

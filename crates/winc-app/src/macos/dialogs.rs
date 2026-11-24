@@ -270,6 +270,18 @@ unsafe fn fill_menu(
     checked
 }
 
+pub(crate) fn application_icon_pixels(path: &Path) -> Option<winc_preview::image::Pixels> {
+    let file = ns_string(path.to_str()?)?;
+    // SAFETY: NSWorkspace owns the returned NSImage, and the TIFF data lives in this autorelease pool.
+    let png = unsafe {
+        let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let icon: *mut AnyObject = msg_send![workspace.as_ref()?, iconForFile: &*file];
+        let tiff: *mut AnyObject = msg_send![icon.as_ref()?, TIFFRepresentation];
+        super::pasteboard::tiff_png(tiff.as_ref()?)?
+    };
+    winc_preview::image::decode_thumbnail(path, &png, 32).ok()
+}
+
 /// 把图标转成 NSImage：像素拷贝进一张 sRGB 位图，图片的大小取逻辑尺寸，Retina 屏上按位图的
 /// 像素绘制。
 ///

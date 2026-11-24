@@ -58,6 +58,11 @@ const TAB_LIST_ICON: f32 = 16.0;
 pub(crate) enum MenuIcon {
     /// 最近打开的目录：与文件树中的目录相同的图标和颜色。
     Folder,
+    NotebookFolder {
+        current: bool,
+    },
+    ICloud,
+    Typora,
     /// 最近打开的一组目录：两个叠放的目录。
     Folders,
     /// 标签列表的第几项：标签上的图标（文件类型图标，日志标签为 Git 图标）。
@@ -70,8 +75,13 @@ impl MenuIcon {
     /// 图标位的逻辑尺寸（宽，高）。
     pub(crate) fn size(self) -> (f32, f32) {
         match self {
-            MenuIcon::Tab(_) | MenuIcon::File(..) => (TAB_LIST_ICON, TAB_LIST_ICON),
-            MenuIcon::Folder | MenuIcon::Folders => MENU_ICON,
+            MenuIcon::Tab(_) | MenuIcon::File(..) | MenuIcon::Typora => {
+                (TAB_LIST_ICON, TAB_LIST_ICON)
+            }
+            MenuIcon::Folder
+            | MenuIcon::Folders
+            | MenuIcon::NotebookFolder { .. }
+            | MenuIcon::ICloud => MENU_ICON,
         }
     }
 }
@@ -141,7 +151,7 @@ impl App {
             && self.layout.sidebar.contains(x, y)
             && self
                 .notebook_folder_heading()
-                .is_some_and(|r| y >= r.y && !self.layout.tree.contains(x, y))
+                .is_some_and(|r| r.contains(x, y))
         {
             if let Some(ws) = &mut self.editor.workspace {
                 ws.select(None);
@@ -405,29 +415,43 @@ impl App {
                 self.add_folder_entries(&mut menu);
                 menu
             }
-            MenuTarget::NotebookWorkspaces(roots) => {
-                let mut menu = vec![
-                    MenuEntry::Item(MenuCommand::NewFile, true),
-                    MenuEntry::Item(MenuCommand::AddNotebookWorkspace, true),
-                    MenuEntry::Item(MenuCommand::Reveal, true),
+            MenuTarget::NotebookWorkspaces { roots, typora } => {
+                let mut menu = vec![MenuEntry::Item(
+                    MenuCommand::SwitchNotebookWorkspace(0),
+                    true,
+                )];
+                if roots
+                    .first()
+                    .is_some_and(|path| crate::system::is_icloud_folder(path))
+                {
+                    menu.push(MenuEntry::Item(MenuCommand::NotebookCloud, true));
+                }
+                menu.extend([
                     MenuEntry::Item(MenuCommand::CopyPath, true),
-                    MenuEntry::Item(MenuCommand::CloseFolder, true),
-                    MenuEntry::Separator,
-                    MenuEntry::Item(MenuCommand::NotebookWorkspaceList, false),
-                ];
-                menu.extend(
-                    (0..roots.len())
-                        .map(|i| MenuEntry::Item(MenuCommand::SwitchNotebookWorkspace(i), true)),
-                );
-                if roots.len() > 1 {
-                    menu.push(MenuEntry::Separator);
+                    MenuEntry::Item(MenuCommand::Reveal, true),
+                ]);
+                if typora.is_some() {
                     menu.push(MenuEntry::Submenu(
-                        t!("workspace-forget-notebook").to_owned(),
-                        (1..roots.len())
-                            .map(|i| MenuEntry::Item(MenuCommand::ForgetNotebookWorkspace(i), true))
-                            .collect(),
+                        t!("workspace-open-with").to_owned(),
+                        vec![MenuEntry::Item(MenuCommand::NotebookTypora, true)],
                     ));
                 }
+                menu.extend([
+                    MenuEntry::Separator,
+                    MenuEntry::Item(MenuCommand::AddNotebookWorkspace, true),
+                ]);
+                menu.extend(
+                    (1..roots.len())
+                        .map(|i| MenuEntry::Item(MenuCommand::SwitchNotebookWorkspace(i), true)),
+                );
+                menu.extend([
+                    MenuEntry::Separator,
+                    MenuEntry::Item(MenuCommand::NotebookSearch, true),
+                    MenuEntry::Item(MenuCommand::NewFolder, true),
+                    MenuEntry::Item(MenuCommand::NewFile, true),
+                    MenuEntry::Separator,
+                    MenuEntry::Item(MenuCommand::NotebookCloseWindow, true),
+                ]);
                 menu
             }
             MenuTarget::Tree(path) => self.tree_menu_entries(path.as_deref()),
@@ -824,9 +848,14 @@ impl App {
             MenuTarget::Font(setting) => Some(setting),
             _ => None,
         };
-        let min_width = control
-            .and_then(|setting| self.settings_layout().row(setting).map(|row| row.control.w))
-            .unwrap_or(0.0);
+        let workspace_menu = matches!(target, MenuTarget::NotebookWorkspaces { .. });
+        let min_width = if workspace_menu {
+            NOTEBOOK_MENU_WIDTH
+        } else {
+            control
+                .and_then(|setting| self.settings_layout().row(setting).map(|row| row.control.w))
+                .unwrap_or(0.0)
+        };
 
         // 菜单项是否打勾、显示什么取决于目标，因此先记录目标，再准备菜单项。
         let (branches, stashes) = match target {
@@ -850,11 +879,25 @@ impl App {
 
         // 没有系统菜单（macOS 以外的平台，以及没有窗口的测试中）：在窗口里画出来，由应用自己
         // 处理悬停、点击和按键，打开期间菜单按钮保持按下的样子。
-        if !cfg!(target_os = "macos") || self.window.handle.is_none() {
-            let rows = self.popup_rows(&entries, context, &mut 0);
+        if workspace_menu || !cfg!(target_os = "macos") || self.window.handle.is_none() {
+            let mut rows = self.popup_rows(&entries, context, &mut 0);
+            if workspace_menu {
+                rows.insert(
+                    0,
+                    PopupRow::Heading(t!("workspace-work-directory").to_owned()),
+                );
+            }
             if let Some(menu) = &mut self.overlays.context_menu {
                 let mut popup = PopupMenu::new(rows, at, (at_checked, right_aligned));
                 popup.min_width = min_width;
+                #[cfg(target_os = "macos")]
+                if let MenuTarget::NotebookWorkspaces {
+                    typora: Some(path), ..
+                } = &menu.target
+                    && self.window.handle.is_some()
+                {
+                    popup.app_icon = crate::macos::application_icon_pixels(path);
+                }
                 menu.popup = Some(popup);
             }
             self.request_redraw();
@@ -943,8 +986,11 @@ impl App {
     /// 状态栏缩进、行尾、编码菜单中当前使用的那一项打勾；「排除的语言」菜单中已被排除的语言打勾；
     /// 格式化工具菜单中当前使用的那一项打勾。
     pub(in crate::app) fn menu_checked(&self, command: MenuCommand) -> bool {
-        if let MenuCommand::SwitchNotebookWorkspace(i) = command {
-            return i == 0;
+        if let MenuCommand::NotebookNameOrder(reverse) = command {
+            return self.panels.sidebar.reverse_name_order == reverse;
+        }
+        if command == MenuCommand::NotebookShowHidden {
+            return self.panels.sidebar.show_hidden_files;
         }
         if let MenuCommand::PropertyOption(i) = command
             && let Some(MenuTarget::NoteProperty(menu)) =
@@ -1181,9 +1227,12 @@ impl App {
                 })
             }
             MenuCommand::OpenGroup(_) => Some(MenuIcon::Folders),
-            MenuCommand::GroupFolder(..) | MenuCommand::SwitchNotebookWorkspace(_) => {
-                Some(MenuIcon::Folder)
+            MenuCommand::GroupFolder(..) => Some(MenuIcon::Folder),
+            MenuCommand::SwitchNotebookWorkspace(i) => {
+                Some(MenuIcon::NotebookFolder { current: i == 0 })
             }
+            MenuCommand::NotebookCloud => Some(MenuIcon::ICloud),
+            MenuCommand::NotebookTypora => Some(MenuIcon::Typora),
             MenuCommand::ShowTab(i) => self.editor.documents.get(i).map(|_| MenuIcon::Tab(i)),
             _ => None,
         }
@@ -1203,6 +1252,14 @@ impl App {
         let (w, h) = icon.size();
         match icon {
             MenuIcon::Folder => icons::folder(frame, (x, y), false, self.palette.folder, clip),
+            MenuIcon::NotebookFolder { .. } => {
+                icons::solid_folder(frame, (x, y), self.palette.text_muted, clip)
+            }
+            MenuIcon::ICloud => icons::cloud(frame, (x, y), self.palette.accent, clip),
+            MenuIcon::Typora => {
+                let (glyph, color) = self.palette.file_icon("note.md");
+                icons::file(frame, (x + 2.0, y + 0.5), glyph, color, clip);
+            }
             MenuIcon::Folders => icons::folders(frame, (x, y), self.palette.folder, clip),
             MenuIcon::File(glyph, [dark, light]) => {
                 let color = winc_render::Color::hex(if self.palette.dark { dark } else { light });
@@ -1248,6 +1305,23 @@ impl App {
 
     /// 文件树工具栏「⋯」的菜单：列出收起的各个工具，按工具栏中的顺序排列。
     pub(super) fn tree_tools_menu(&self) -> Vec<MenuEntry> {
+        if self.notebook_sidebar() {
+            use MenuCommand::*;
+            use MenuEntry::{Item, Separator};
+            return vec![
+                Item(NotebookNameOrder(false), true),
+                Item(NotebookNameOrder(true), true),
+                Separator,
+                Item(NotebookShowHidden, true),
+                Separator,
+                Item(TreeLocate, true),
+                Item(TreeCollapseAll, true),
+                Item(NotebookOutline, true),
+                Separator,
+                Item(NewFolder, true),
+                Item(TreeRefresh, true),
+            ];
+        }
         crate::layout::folded_tools(self.hits.tree_tools.len())
             .iter()
             .map(|&tool| {

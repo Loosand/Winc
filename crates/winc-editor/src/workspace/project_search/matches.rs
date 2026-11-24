@@ -94,6 +94,24 @@ pub(super) fn file_result(
     })
 }
 
+pub(super) fn name_result(
+    (root, extra): (&Path, &[(String, PathBuf)]),
+    matcher: &Matcher,
+    path: &Path,
+) -> Option<FileResult> {
+    let name = path.file_name()?.to_string_lossy();
+    (matcher
+        .find_all(&name, |_, _| ControlFlow::Break(()))
+        .is_break()
+        && winc_backend::fs::is_file(path))
+    .then(|| FileResult {
+        path: path.to_path_buf(),
+        relative: crate::workspace::tree::labelled_path(root, extra, path),
+        matches: Vec::new(),
+        lossy: false,
+    })
+}
+
 /// 把第 `index` 行（从 0 起）中的匹配追加到 `out`，`out` 收满 `limit` 处时返回 `Break`。
 pub(super) fn collect(
     matcher: &Matcher,

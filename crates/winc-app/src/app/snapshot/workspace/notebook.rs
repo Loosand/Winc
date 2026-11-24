@@ -3,6 +3,145 @@ use crate::app::OutlineTarget;
 use crate::layout::SidebarView;
 
 #[test]
+fn notebook_sidebar_toggle_stays_beside_the_window_buttons() {
+    use crate::app::animation::{Clock, SIDEBAR_ANIMATION};
+    use crate::app::workspace::tree::SidebarMotion;
+    use crate::theme::{BUTTON_GAP, TAB_GAP};
+
+    let (mut app, root) = note_app("minc-sidebar-toggle");
+    app.restore_panel_width();
+    app.open_path(&root.join("薄荷.md"));
+    paint(&mut app);
+    let toggle = app.layout.sidebar_button;
+    let nav = &app.panels.sidebar.navigation;
+    let lights = crate::layout::traffic_lights_end();
+    if lights > 0.0 {
+        let icon_left = toggle.x + (toggle.w - crate::icons::SIDEBAR_WIDTH) / 2.0;
+        assert_eq!(icon_left, lights + 8.0);
+    }
+    assert_eq!(nav.tree_menu.right(), app.layout.sidebar.right() - 8.0);
+    assert_eq!(nav.search.right() + BUTTON_GAP, nav.tree_menu.x);
+    assert!(nav.search.x >= toggle.right() + BUTTON_GAP);
+    assert_eq!(nav.tree_menu.y, toggle.y);
+    let controls = app.caption_controls();
+    assert!(controls.contains(&nav.tree_menu) && controls.contains(&nav.search));
+
+    for open in [false, true] {
+        press(&mut app, toggle);
+        assert_eq!(app.sidebar_open(), open);
+        app.panels.sidebar.motion = Some(SidebarMotion {
+            from: if open { 0.0 } else { 1.0 },
+            clock: Clock::stopped(SIDEBAR_ANIMATION, SIDEBAR_ANIMATION / 4),
+        });
+        paint(&mut app);
+        assert!((0.0..1.0).contains(&app.sidebar_shown()));
+        assert_eq!(app.layout.sidebar_button, toggle);
+        assert_eq!(app.pointer.hover, Hover::SidebarButton);
+
+        app.panels.sidebar.motion = None;
+        paint(&mut app);
+        assert_eq!(app.layout.sidebar_button, toggle);
+        assert_eq!(app.pointer.hover, Hover::SidebarButton);
+        assert!(app.layout.tabs.x >= toggle.right() + TAB_GAP);
+    }
+
+    app.panels.sidebar.width = crate::theme::DEFAULT_PANEL_WIDTH;
+    paint(&mut app);
+    let at = (app.layout.splitter.x + 1.0, 200.0);
+    click(&mut app, at);
+    click(&mut app, at);
+    assert_eq!(app.panels.sidebar.width, crate::theme::MIN_PANEL_WIDTH);
+    assert_eq!(app.layout.sidebar_button, toggle);
+
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn notebook_menu_has_a_full_width_trigger_and_a_single_workspace_path_row() {
+    use crate::app::{MenuIcon, PopupRow};
+
+    let dir = sample_folder("minc-compact-workspace-menu");
+    let root = dir
+        .join("Library/Mobile Documents")
+        .join("A long parent directory name that would otherwise make the dropdown much wider")
+        .join("仓库");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut app = blank_app(false);
+    app.panels.sidebar.legacy_chrome = false;
+    app.open_path(&root);
+    let root = app.library_root().unwrap().to_path_buf();
+    paint(&mut app);
+    let heading = app.panels.sidebar.navigation.folder_menu;
+    assert_eq!(heading.w, app.layout.sidebar.w - 16.0);
+    click(
+        &mut app,
+        (heading.right() - 3.0, heading.y + heading.h / 2.0),
+    );
+    assert!(app.notebook_menu_open(crate::app::workspace::notebook::SidebarTarget::FolderMenu));
+    app.dismiss_popup();
+    let recent = dir.join("最近目录");
+    let root_menu = || MenuTarget::NotebookWorkspaces {
+        roots: vec![root.clone(), recent.clone()],
+        typora: Some(PathBuf::from("/Applications/Typora.app")),
+    };
+    app.open_context_menu(root_menu(), (heading.x, heading.bottom()));
+    paint(&mut app);
+    let label = app.menu_label(MenuCommand::SwitchNotebookWorkspace(0));
+    let path = winc_editor::display_path(&root, None);
+    assert_eq!(label.title, path);
+    assert!(label.subtitle.is_none());
+    assert_eq!(label.tooltip.as_deref(), Some(path.as_str()));
+    let menu = app.overlays.context_menu.as_ref().unwrap();
+    let level = &menu.popup.as_ref().unwrap().levels[0];
+    assert_eq!(level.rect.w, 268.0);
+    assert!(matches!(&level.rows[0], PopupRow::Heading(_)));
+    assert!(matches!(
+        level.rows[1],
+        PopupRow::Item {
+            checked: false,
+            icon: Some(MenuIcon::NotebookFolder { current: true }),
+            ..
+        }
+    ));
+    assert!(level.rows.iter().any(|row| matches!(
+        row,
+        PopupRow::Item {
+            icon: Some(MenuIcon::NotebookFolder { current: false }),
+            ..
+        }
+    )));
+    assert_eq!(
+        level.rows.iter().any(|row| matches!(
+            row,
+            PopupRow::Item {
+                icon: Some(MenuIcon::ICloud),
+                ..
+            }
+        )),
+        cfg!(target_os = "macos")
+    );
+    let open_with = level
+        .rows
+        .iter()
+        .position(|row| matches!(row, PopupRow::Submenu { .. }))
+        .unwrap();
+    let at = level.row_rects[open_with];
+    app.on_mouse_move(at.x + 17.0, at.y + at.h / 2.0);
+    paint(&mut app);
+    assert!(matches!(
+        app.popup().unwrap().levels[1].rows[0],
+        PopupRow::Item {
+            icon: Some(MenuIcon::Typora),
+            ..
+        }
+    ));
+    assert!(super::menu_commands(&app).contains(&(MenuCommand::NotebookTypora, true)));
+    app.run_menu_command(MenuCommand::NotebookTypora);
+    assert_eq!(app.library_root(), Some(root.as_path()));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn notebook_tree_hides_dot_files_and_subdirectories_without_removing_them() {
     let (mut app, root) = note_app("minc-hidden-files");
     let tea = root.join("Recipes/茶.md");
@@ -33,31 +172,105 @@ fn notebook_tree_hides_dot_files_and_subdirectories_without_removing_them() {
 }
 
 #[test]
-fn notebook_documents_can_collapse_and_outline_headings_jump() {
+fn notebook_sidebar_reaches_search_creation_and_outline() {
     let (mut app, root) = note_app("minc-navigation");
     paint(&mut app);
     assert!(app.hits.tree_tools.is_empty() && app.hits.tree_more.is_none());
     assert!(app.layout.outline.h == 0.0);
-    let views: Vec<_> = app
-        .sidebar_tabs()
-        .into_iter()
-        .map(|(_, view)| view)
-        .collect();
-    assert_eq!(views, [SidebarView::Files, SidebarView::Outline]);
-    let docs = app.panels.sidebar.navigation.documents;
-    let fold = Rect::new(docs.x, docs.y, 20.0, docs.h);
-    press(&mut app, fold);
-    assert!(!app.notebook_documents_open());
-    assert_eq!(app.layout.tree.h, 0.0);
-    press(&mut app, fold);
-    assert!(app.layout.tree.h > 0.0);
+    assert!(app.sidebar_tabs().is_empty());
+    let nav = &app.panels.sidebar.navigation;
+    assert!(nav.folder_menu.bottom() <= app.layout.tree.y);
+    assert!(nav.new_file.y >= app.layout.tree.bottom());
+    let search = nav.search;
+    let menu = nav.tree_menu;
+    assert_eq!(
+        app.tree_row_top(1) - app.tree_row_top(0),
+        app.tree_row_height()
+    );
+    press(&mut app, menu);
+    app.run_menu_command(MenuCommand::NotebookNameOrder(true));
+    let workspace = app.editor.workspace.as_ref().unwrap();
+    assert_eq!(workspace.rows()[0].kind, winc_editor::EntryKind::Dir);
+    assert_eq!(workspace.rows()[1].path, root.join("薄荷.md"));
+    press(&mut app, menu);
+    app.run_menu_command(MenuCommand::NotebookShowHidden);
+    assert!(
+        app.editor
+            .workspace
+            .as_ref()
+            .unwrap()
+            .row_of(&root.join(".hidden.md"))
+            .is_some()
+    );
+    press(&mut app, menu);
+    app.run_menu_command(MenuCommand::NotebookShowHidden);
+    press(&mut app, search);
+    assert_eq!(app.panels.sidebar.view, SidebarView::Search);
+    assert_eq!(app.focus, Focus::GlobalQuery);
+    let parts = app.panel_parts();
+    assert_eq!(parts.query.y, app.panels.sidebar.navigation.back.y);
+    assert!(parts.query.right() < app.panels.sidebar.navigation.back.x);
+    assert!(parts.scope_label.y > parts.query.bottom());
+    assert!(parts.tools.iter().all(|(rect, _)| rect.w == 0.0));
+    app.panels.global.query.set_text("薄荷");
+    let [names, contents] = app.panel_parts().scope;
+    press(&mut app, names);
+    app.panels.global.engine.wait();
+    paint(&mut app);
+    let results = &app.panels.global.engine.results;
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].path, root.join("薄荷.md"));
+    assert!(results[0].matches.is_empty());
+
+    press(&mut app, contents);
+    app.panels.global.engine.wait();
+    paint(&mut app);
+    let results = &app.panels.global.engine.results;
+    assert!(
+        results
+            .iter()
+            .any(|file| file.path == root.join("Recipes/茶.md"))
+    );
+    let back = app.panels.sidebar.navigation.back;
+    press(&mut app, back);
+    assert_eq!(app.panels.sidebar.view, SidebarView::Files);
+
+    let folder = root.join("Recipes");
+    let row = app
+        .editor
+        .workspace
+        .as_ref()
+        .unwrap()
+        .row_of(&folder)
+        .unwrap();
+    let (x, y) = tree_row_center(&app, row);
+    app.on_mouse_move(x, y);
+    let (_, add, more) = app.notebook_folder_actions(x, y).unwrap();
+    press(&mut app, more);
+    assert_eq!(
+        app.overlays.context_menu.as_ref().unwrap().target,
+        MenuTarget::Tree(Some(folder.clone()))
+    );
+    app.dismiss_popup();
+    press(&mut app, add);
+    assert_eq!(app.panels.name_input.as_ref().unwrap().dir, folder);
+    app.close_name_input();
+
+    let create = app.panels.sidebar.navigation.new_file;
+    press(&mut app, create);
+    let field = app.panels.name_input.as_ref().unwrap();
+    assert_eq!(field.dir, root);
+    assert_eq!(field.field.text(), "Untitled.md");
+    app.close_name_input();
 
     let tea = root.join("Recipes/茶.md");
     app.open_path(&tea);
     paint(&mut app);
 
-    let outline = app.sidebar_tabs()[1].0;
-    press(&mut app, outline);
+    let menu = app.panels.sidebar.navigation.tree_menu;
+    press(&mut app, menu);
+    app.run_menu_command(MenuCommand::NotebookOutline);
+    paint(&mut app);
     assert_eq!(app.panels.sidebar.view, SidebarView::Outline);
     assert!(app.layout.tree.h == 0.0 && app.layout.outline.h > 200.0);
     let items: Vec<_> = app
@@ -304,6 +517,21 @@ fn notebook_preserves_the_open_document_if_switching_cannot_save_it() {
         std::fs::read_to_string(&tea).unwrap(),
         "An external process replaced this note.\n"
     );
+
+    let recipes = root.join("Recipes");
+    let row = app
+        .editor
+        .workspace
+        .as_ref()
+        .unwrap()
+        .row_of(&recipes)
+        .unwrap();
+    let at = tree_row_center(&app, row);
+    paint(&mut app);
+    click(&mut app, at);
+    assert!(!app.library_shown());
+    assert_eq!(app.editor.active().unwrap().id, tea_id);
+    assert!(app.editor.active().unwrap().is_dirty());
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
@@ -332,25 +560,49 @@ fn notebook_restores_only_the_active_file_from_a_clean_legacy_session() {
 #[test]
 #[ignore = "manual notebook UI snapshots"]
 fn shoot_notebook_navigation() {
+    let mut empty = blank_app(false);
+    empty.panels.sidebar.legacy_chrome = false;
+    empty.restore_panel_width();
+    empty.restore_sidebar_for_window();
+    empty.state.recent = vec![
+        PathBuf::from("/tmp/写作笔记"),
+        PathBuf::from("/tmp/项目资料"),
+    ];
+    empty.relayout();
+    shoot(&mut empty, "notebook-sidebar-empty");
     let (mut app, root) = note_app("minc-notebook-snapshots");
+    app.restore_panel_width();
+    app.relayout();
     let tea = root.join("Recipes/茶.md");
     let mint = root.join("薄荷.md");
     std::fs::write(&mint, "# 薄荷\n\n参见 [[茶]] 的冲泡步骤。\n").unwrap();
+    app.refresh_library();
+    shoot(&mut app, "notebook-library-root");
+    let heading = app.panels.sidebar.navigation.folder_menu;
+    press(&mut app, heading);
+    shoot(&mut app, "notebook-workspace-menu");
+    app.dismiss_popup();
     app.open_path(&tea);
     for _ in 0..4 {
         app.wait_for_markdown();
         paint(&mut app);
     }
     shoot(&mut app, "notebook-sidebar");
-    let outline = app.sidebar_tabs()[1].0;
-    press(&mut app, outline);
+    let toggle = app.layout.sidebar_button;
+    press(&mut app, toggle);
+    shoot(&mut app, "notebook-sidebar-collapsed");
+    press(&mut app, toggle);
+    let menu = app.panels.sidebar.navigation.tree_menu;
+    press(&mut app, menu);
+    app.run_menu_command(MenuCommand::NotebookOutline);
     app.on_mouse_move(300.0, 120.0);
     paint(&mut app);
     shoot(&mut app, "notebook-outline");
-    app.open_notebook_search();
-    paint(&mut app);
+    app.show_files();
+    let search = app.panels.sidebar.navigation.search;
+    press(&mut app, search);
     shoot(&mut app, "notebook-search");
-    app.close_picker();
+    app.show_files();
     app.open_path(&tea);
     for _ in 0..3 {
         app.wait_for_markdown();

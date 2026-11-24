@@ -16,7 +16,7 @@ use crate::app::animation::stage;
 use crate::app::{DropZone, Focus, LabelCause, LabelView, NameInput, TreeMotion};
 use crate::icons::Direction;
 use crate::layout::{
-    SidebarView, TREE_NAME_MIN, TreeTool, folding_tools, hscrollbar_thumb, tree_row_slot,
+    SidebarView, TREE_NAME_MIN, TreeTool, folding_tools, hscrollbar_thumb, tree_row_slot_at_height,
     tree_tools,
 };
 use crate::theme::SCROLLBAR_HIT;
@@ -33,9 +33,13 @@ pub(in crate::view) fn draw_sidebar(app: &mut App, frame: &mut Frame<'_>) {
     panel::draw_view_tabs(app, frame);
 
     if app.panels.sidebar.view == SidebarView::Search {
-        let right = app.panel_parts().tools[0].0.x - 4.0;
-        let bar = ContextBar::new(app, frame);
-        draw_context_bar(app, frame, &bar, right);
+        if app.notebook_sidebar() {
+            super::notebook::draw_back_button(app, frame);
+        } else {
+            let right = app.panel_parts().tools[0].0.x - 4.0;
+            let bar = ContextBar::new(app, frame);
+            draw_context_bar(app, frame, &bar, right);
+        }
         if let Some(caret) = panel::draw_panel(app, frame) {
             app.ime.cursor = Some(caret);
         }
@@ -50,9 +54,10 @@ pub(in crate::view) fn draw_sidebar(app: &mut App, frame: &mut Frame<'_>) {
 
     if app.panels.sidebar.view == SidebarView::Outline {
         outline::draw_outline(app, frame);
+        super::notebook::draw_back_button(app, frame);
         return;
     }
-    if app.notebook_sidebar() {
+    if app.writing_workspace() {
         super::notebook::draw_navigation(app, frame);
     } else {
         draw_project_header(app, frame);
@@ -60,6 +65,7 @@ pub(in crate::view) fn draw_sidebar(app: &mut App, frame: &mut Frame<'_>) {
     }
     if app.layout.tree.h > 0.0 {
         draw_tree(app, frame);
+        super::notebook::draw_folder_actions(app, frame);
     }
     outline::draw_outline(app, frame);
 }
@@ -414,6 +420,7 @@ fn draw_tree(app: &mut App, frame: &mut Frame<'_>) {
     };
 
     let rows = ws.rows();
+    let row_height = app.tree_row_height();
 
     // 目录为空时居中显示一句提示，说明新建文件的方式，与搜索、提交视图的空列表相同；
     // 双击空白处即在根目录新建文件（见 `click_tree`）。正在输入新建的名称时不显示提示。
@@ -450,13 +457,13 @@ fn draw_tree(app: &mut App, frame: &mut Frame<'_>) {
     let block = motion.map(TreeMotion::block);
     let removed: &[Entry] = motion.map_or(&[], |m| m.removed.as_slice());
     let reveal = motion.map_or(1.0, TreeMotion::reveal);
-    let hidden = motion.map_or(0.0, TreeMotion::hidden);
+    let hidden = motion.map_or(0.0, |m| m.hidden(row_height));
     let total = rows.len() + removed.len() + usize::from(inserted.is_some());
 
     // 内容高度与点击、拖动滚动条使用的相同（见 `tree_max_scroll`：末尾多留一行），动画中减去
     // 尚未露出的高度。行数变少之后（收起目录、外部删除了文件），滚动位置在这里夹回有效范围；
     // 收起动画中，滚动位置随露出的高度平滑回收。
-    let content = (total + 1) as f32 * TREE_ROW - hidden;
+    let content = app.tree_content_height(total) - hidden;
     let scroll = app
         .panels
         .tree
@@ -502,8 +509,16 @@ fn draw_tree(app: &mut App, frame: &mut Frame<'_>) {
                         return None;
                     }
                     let first = start + usize::from(merged);
-                    let (top, _) = tree_row_slot(tree, scroll, first, block, hidden);
-                    let (last, clip) = tree_row_slot(tree, scroll, start + count, block, hidden);
+                    let (top, _) =
+                        tree_row_slot_at_height(tree, scroll, first, block, hidden, row_height);
+                    let (last, clip) = tree_row_slot_at_height(
+                        tree,
+                        scroll,
+                        start + count,
+                        block,
+                        hidden,
+                        row_height,
+                    );
                     let bottom = last.bottom().min(clip.bottom());
                     Some(Rect::new(
                         tree.x + 8.0,
@@ -518,15 +533,15 @@ fn draw_tree(app: &mut App, frame: &mut Frame<'_>) {
         }
     }
 
-    let first = (scroll / TREE_ROW).floor().max(0.0) as usize;
-    let visible = (tree.h / TREE_ROW).ceil() as usize + 1 + (hidden / TREE_ROW).ceil() as usize;
+    let first = (scroll / row_height).floor().max(0.0) as usize;
+    let visible = (tree.h / row_height).ceil() as usize + 1 + (hidden / row_height).ceil() as usize;
     // 横向滚动使缩进、图标和名称一起左移；底色的圆角矩形不动。
     let shift = -app.panels.tree.scroll_x;
     let mut segments = Vec::new();
     let mut widest: f32 = 0.0;
 
     for v in first..(first + visible).min(total) {
-        let (row, row_clip) = tree_row_slot(tree, scroll, v, block, hidden);
+        let (row, row_clip) = tree_row_slot_at_height(tree, scroll, v, block, hidden, row_height);
 
         // 输入行（重命名时是原条目所在的行）改为绘制输入框，不绘制条目。
         if editing == Some(v) {
@@ -601,7 +616,9 @@ fn draw_tree_entry(
     let ws = app.editor.workspace.as_ref();
     let selected = index.is_some_and(|i| ws.is_some_and(|w| w.is_selected(i)));
     let hovered = index.is_some_and(|i| {
-        app.pointer.hover == Hover::TreeRow(i)
+        use crate::app::workspace::notebook::SidebarTarget;
+        matches!(app.pointer.hover,
+            Hover::TreeRow(row) | Hover::NotebookNav(SidebarTarget::FolderNew(row) | SidebarTarget::FolderContext(row)) if row == i)
             || app.panels.tree.overflow.is_some_and(|(_, o)| o == i)
     });
 
@@ -708,7 +725,12 @@ fn draw_tree_entry(
     let mark_x = tree.right() - 16.0 - mark_w;
     let change = change.filter(|_| !(hovered && label_end > mark_x - 6.0));
     // 名字画到哪里为止：有状态时停在状态左边，没有时到侧栏边缘。
+    let folder_actions = app.notebook_sidebar() && hovered && entry.kind == EntryKind::Dir;
     let (text_right, cut) = match change {
+        _ if folder_actions => {
+            let right = tree.right() - 60.0;
+            (right, label_end > right)
+        }
         Some(_) => (mark_x - 6.0, label_end > mark_x - 6.0),
         None => (tree.right(), overflows),
     };
@@ -756,7 +778,7 @@ fn draw_tree_entry(
     // （[`draw_tree_overflow`]），淡出会使两段接不上。
     // 收回途中名字还连着编辑区上方那一段，到最后才淡出，名字不会先变暗、再缩回来。
     let reach = NAME_FADE * stage(view.progress, FADE_FROM, 1.0);
-    if cut && !hovered && reach > 0.0 {
+    if cut && (!hovered || folder_actions) && reach > 0.0 {
         let solid = background.map_or(p.sidebar_bg, |c| panel::over(p.sidebar_bg, c));
         let edge = Rect::new(text_right - reach, row.y, reach, row.h);
         frame.within(clip, |frame| fade(frame, edge, solid, false));
@@ -994,12 +1016,13 @@ pub(in crate::view) fn tree_overflow(app: &App, frame: &mut Frame<'_>) -> Option
     let row = match app.tree_sticky().into_iter().find(|s| s.index == index) {
         Some(sticky) => sticky.rect,
         None => {
-            tree_row_slot(
+            tree_row_slot_at_height(
                 tree,
                 drawn_scroll(app.panels.tree.scroll),
                 app.tree_slot_of(index),
                 None,
                 0.0,
+                app.tree_row_height(),
             )
             .0
         }
@@ -1060,12 +1083,13 @@ fn overflow_row(app: &App, index: usize) -> Rect {
     match app.tree_sticky().into_iter().find(|s| s.index == index) {
         Some(sticky) => sticky.rect,
         None => {
-            tree_row_slot(
+            tree_row_slot_at_height(
                 tree,
                 drawn_scroll(app.panels.tree.scroll),
                 app.tree_slot_of(index),
                 None,
                 0.0,
+                app.tree_row_height(),
             )
             .0
         }

@@ -27,6 +27,7 @@ pub use app_menu::{
     add_install_command_menu, add_release_notes_menu, add_settings_menu, intercept_quit,
     on_menu_command, on_open_files, on_reopen, suspend_menu_shortcuts,
 };
+pub(crate) use dialogs::application_icon_pixels;
 pub use dialogs::{
     AlertButton, MOD_COMMAND, MenuIcon, MenuItem, MenuPlace, Panel, alert, key_equivalent,
     popup_menu, show_panel,
@@ -35,6 +36,7 @@ pub use display_link::DisplayLink;
 #[cfg_attr(test, allow(unused_imports))]
 pub use drag::drag_files;
 pub use drag::dragging_out;
+pub(crate) use files::application_path;
 pub use files::{default_browser, move_to_trash};
 pub use folder_menu::{FolderItem, on_folder_menu, popup_folder_menu};
 // 测试中由 `App` 上的字段代替剪贴板，不使用这两个函数。

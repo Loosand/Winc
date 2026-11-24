@@ -6,7 +6,8 @@ use winc_render::{Faux, Stroke};
 use super::panel::over;
 use super::*;
 use crate::app::workspace::library::{
-    CardContent, FolderPose, FolderPreview, Grid, LibraryTarget, PreviewLine,
+    AttachmentPreview, CardContent, FolderPose, FolderPreview, Grid, JsonExcerpt, Library,
+    LibraryTarget, PreviewLine,
 };
 
 pub(super) fn draw_home_button(app: &App, frame: &mut Frame<'_>) {
@@ -59,52 +60,10 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         p.text,
         title_rect,
     );
-
-    let y = area.y + 54.0;
-    let row = Rect::new(x, y, grid.body.w, 28.0).intersect(area);
-    let busy = app.library.manual_refresh.is_some();
-    let (idle, loading) = (
-        t!("workspace-library-refresh"),
-        t!("workspace-library-refreshing"),
-    );
-    let refresh = if busy { loading } else { idle };
-    let refresh_w = (frame
-        .measure(FontKind::Ui, app.fonts.ui, idle)
-        .max(frame.measure(FontKind::Ui, app.fonts.ui, loading))
-        + 22.0)
-        .min(row.w);
-    let refresh_rect = Rect::new(row.right() - refresh_w, y, refresh_w, row.h).intersect(row);
-    if busy {
-        draw_button(frame, p, refresh_rect, row, false, false);
-        ui_text(
-            frame,
-            app,
-            refresh_rect.x + 11.0,
-            refresh_rect,
-            refresh,
-            p.text_muted,
-            refresh_rect,
-        );
-    } else {
-        button(app, frame, refresh_rect, refresh, LibraryTarget::Refresh);
-    }
-    let remaining = Rect::new(x, y, (refresh_rect.x - x - 8.0).max(0.0), row.h);
     if is_root {
-        let label = ellipsize(frame, &name, app.fonts.ui, remaining.w);
-        ui_text(
-            frame,
-            app,
-            remaining.x,
-            remaining,
-            &label,
-            p.text_muted,
-            remaining,
-        );
-    } else {
-        let caption = t!("workspace-library-up");
-        let width = frame.measure(FontKind::Ui, app.fonts.ui, caption) + 22.0;
-        let control = Rect::new(x, y, width, row.h).intersect(remaining);
-        button(app, frame, control, caption, LibraryTarget::Parent);
+        let subtitle = Rect::new(x, title_rect.bottom(), grid.body.w, 20.0).intersect(area);
+        let label = ellipsize(frame, &name, app.fonts.ui, subtitle.w);
+        ui_text(frame, app, x, subtitle, &label, p.text_muted, subtitle);
     }
 
     if app.library.cards.is_empty() {
@@ -151,11 +110,21 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         match &c.content {
             CardContent::Note(lines) => {
                 brush.sheet(frame, rect, brush.edge(), 16.0);
-                brush.page(frame, rect, &c.name, lines, false);
+                brush.page(frame, rect, &c.name, lines, true);
+            }
+            CardContent::File | CardContent::Attachment(_) => {
+                brush.sheet(frame, rect, brush.edge(), 16.0);
+                brush.attachment(
+                    frame,
+                    rect,
+                    &c.name,
+                    app.library.attachment_preview(&c.path),
+                    false,
+                );
             }
             CardContent::Folder(info) => {
                 let pose = app.library.folder_pose(index);
-                brush.folder(frame, rect, &c.name, info.as_ref(), pose);
+                brush.folder(frame, rect, &c.name, info.as_ref(), pose, &app.library);
                 // Same footer controls as Quiet MD, drawn before the card hit so they win.
                 let reveal = pose.flap.clamp(0.0, 1.0);
                 if reveal > 0.01 {
@@ -228,13 +197,171 @@ impl CardBrush<'_> {
         );
     }
 
+    fn file(&self, frame: &mut Frame<'_>, rect: Rect, name: &str) {
+        let margin = (rect.w * 0.075).clamp(10.0, 22.0);
+        let body = rect.inset(margin, margin);
+        let clip = self.clip.intersect(body);
+        let icon = Rect::new(body.x, body.y, 32.0, 32.0);
+        frame.rect_clipped(icon, self.p.hover, 8.0, clip);
+        draw_file_icon(
+            frame,
+            self.p,
+            (center(icon).0 - icons::FILE_WIDTH / 2.0, center(icon).1),
+            name,
+            clip,
+        );
+        let size = (rect.w * 0.065).clamp(12.0, 17.0);
+        let lines = crate::layout::wrap_text(name, body.w, |s| {
+            frame.measure_faux(FontKind::Ui, BOLD, size, s)
+        });
+        let mut y = icon.bottom() + 9.0 + size;
+        for line in lines.iter().take(2) {
+            frame.text_faux(FontKind::Ui, BOLD, size, body.x, y, line, self.p.text, clip);
+            y += size * 1.18;
+        }
+    }
+
+    fn attachment(
+        &self,
+        frame: &mut Frame<'_>,
+        rect: Rect,
+        name: &str,
+        preview: Option<&AttachmentPreview>,
+        inset: bool,
+    ) {
+        let Some(preview) = preview else {
+            self.file(frame, rect, name);
+            return;
+        };
+        let margin = (rect.w * 0.075).clamp(10.0, 22.0);
+        let body = rect.inset(margin, margin);
+        let clip = self.clip.intersect(body);
+        let title_size = (rect.w * 0.065).clamp(12.0, 17.0);
+        let title = ellipsize(frame, name, title_size, body.w - 3.0);
+        let title_y = match preview {
+            AttachmentPreview::Image(pixels) => {
+                let height = if inset {
+                    body.h * 0.62
+                } else {
+                    body.h - title_size - 12.0
+                };
+                let panel = Rect::new(body.x, body.y, body.w, height.max(0.0));
+                frame.rect_clipped(panel, self.p.hover, 8.0, clip);
+                let room = panel.inset(6.0, 6.0);
+                let (w, h) = (pixels.width as f32, pixels.height as f32);
+                let fit = (room.w / w).min(room.h / h);
+                let (w, h) = (w * fit, h * fit);
+                let (x, y) = center(room);
+                frame.pixels_scaled(
+                    Rect::new(x - w / 2.0, y - h / 2.0, w, h),
+                    pixels.width,
+                    pixels.height,
+                    &pixels.rgba,
+                    clip,
+                );
+                panel.bottom() + 9.0 + title_size
+            }
+            AttachmentPreview::Json(excerpt) => {
+                let header = title_size + 10.0;
+                let panel = Rect::new(body.x, body.y + header, body.w, (body.h - header).max(0.0));
+                self.json_excerpt(frame, panel, excerpt);
+                body.y + title_size
+            }
+        };
+        frame.text_faux(
+            FontKind::Ui,
+            BOLD,
+            title_size,
+            body.x,
+            title_y,
+            &title,
+            self.p.text,
+            clip,
+        );
+    }
+
+    fn json_excerpt(&self, frame: &mut Frame<'_>, panel: Rect, excerpt: &JsonExcerpt) {
+        let clip = self.clip.intersect(panel);
+        if clip.w <= 0.0 || clip.h <= 0.0 {
+            return;
+        }
+        frame.rect_clipped(panel, self.p.hover, 8.0, clip);
+        let text = panel.inset(9.0, 7.0);
+        let clip = clip.intersect(text);
+        let size = (panel.w * 0.065).clamp(8.0, 11.0);
+        let stride = size * 1.5;
+        let capacity = ((text.h + stride - size) / stride).floor() as usize;
+        let y_at = |i: usize| text.y + size + i as f32 * stride;
+        match excerpt {
+            JsonExcerpt::Fields { rows, more } => {
+                use crate::view::preview::json::value_text;
+                let details = Rect::new(text.x + text.w * 0.54, text.y, text.w * 0.46, text.h);
+                let labels = Rect::new(text.x, text.y, (details.x - text.x - 6.0).max(0.0), text.h);
+                let overflow = *more || rows.len() > capacity;
+                let n = capacity
+                    .saturating_sub(usize::from(overflow))
+                    .min(rows.len());
+                for (i, row) in rows[..n].iter().enumerate() {
+                    let y = y_at(i);
+                    let (value, kind) = value_text(&row.value);
+                    let value_area = if row.key.is_empty() { text } else { details };
+                    if !row.key.is_empty() {
+                        frame.text(
+                            FontKind::Mono,
+                            size,
+                            text.x,
+                            y,
+                            &row.key,
+                            self.p.syntax_property,
+                            clip.intersect(labels),
+                        );
+                    }
+                    let ink = kind.map_or(self.p.text_muted, |kind| self.p.token(kind));
+                    frame.text(
+                        FontKind::Mono,
+                        size,
+                        value_area.x,
+                        y,
+                        &value,
+                        ink,
+                        clip.intersect(value_area),
+                    );
+                }
+                if overflow && capacity > 0 {
+                    frame.text(
+                        FontKind::Mono,
+                        size,
+                        text.x,
+                        y_at(n),
+                        "…",
+                        self.p.text_muted,
+                        clip,
+                    );
+                }
+            }
+            JsonExcerpt::Source(lines) => {
+                for (i, line) in lines.iter().take(capacity).enumerate() {
+                    frame.text(
+                        FontKind::Mono,
+                        size,
+                        text.x,
+                        y_at(i),
+                        line,
+                        self.p.text_muted,
+                        clip,
+                    );
+                }
+            }
+        }
+    }
+
     fn page(
         &self,
         frame: &mut Frame<'_>,
         rect: Rect,
         title: &str,
         lines: &[PreviewLine],
-        inset: bool,
+        show_blank: bool,
     ) {
         let margin = (rect.w * 0.075).clamp(10.0, 22.0);
         let body = rect.inset(margin, margin);
@@ -260,7 +387,7 @@ impl CardBrush<'_> {
             );
             y += title_size * 1.18;
         }
-        if lines.is_empty() && !inset {
+        if lines.is_empty() && show_blank {
             let size = title_size * 0.62;
             frame.text(
                 FontKind::Ui,
@@ -356,6 +483,7 @@ impl CardBrush<'_> {
         title: &str,
         info: Option<&FolderPreview>,
         pose: FolderPose,
+        library: &Library,
     ) {
         // 背板和前袋轮廓来自 Quiet MD home_folder.rs；MIT 署名见 NOTICE。
         let base = Rect::new(rect.x, rect.y + pose.lift(), rect.w, rect.h);
@@ -380,7 +508,7 @@ impl CardBrush<'_> {
         );
 
         if let Some(info) = info
-            && let Some((name, lines)) = &info.front
+            && let Some(card) = &info.front
         {
             for i in (0..info.papers).rev() {
                 let (dx, top, angle) = pose.paper(i, rect.w, rect.h);
@@ -390,9 +518,20 @@ impl CardBrush<'_> {
                     rect.w * 0.8,
                     rect.h * 0.64,
                 );
-                self.tilted_sheet(frame, sheet, angle, info.seeds[i], i != 0);
+                let note = matches!(card.content, CardContent::Note(_));
+                self.tilted_sheet(frame, sheet, angle, info.seeds[i], i != 0 && note);
                 if i == 0 {
-                    self.page(frame, sheet, name, lines, true);
+                    if let CardContent::Note(lines) = &card.content {
+                        self.page(frame, sheet, &card.name, lines, false);
+                    } else {
+                        self.attachment(
+                            frame,
+                            sheet,
+                            &card.name,
+                            library.attachment_preview(&card.path),
+                            true,
+                        );
+                    }
                 }
             }
         }
@@ -667,22 +806,6 @@ fn rounded_surface(
         map((x + r * c, y + r * s))
     });
     frame.polygon(&outline, color, clip);
-}
-
-fn button(app: &mut App, frame: &mut Frame<'_>, rect: Rect, label: &str, target: LibraryTarget) {
-    if rect.w <= 0.0 || rect.h <= 0.0 {
-        return;
-    }
-    let p = app.palette;
-    let hover = app.pointer.hover == Hover::Library(target);
-    frame.rect_clipped(
-        rect,
-        if hover { p.selected } else { p.hover },
-        RADIUS_ROW,
-        rect,
-    );
-    ui_text(frame, app, rect.x + 11.0, rect, label, p.text, rect);
-    app.hits.library.push((rect, target));
 }
 
 pub(super) fn home_icon(frame: &mut Frame<'_>, (x, y): (f32, f32), color: Color, clip: Rect) {

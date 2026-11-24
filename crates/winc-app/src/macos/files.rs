@@ -65,6 +65,18 @@ pub fn default_browser() -> Option<PathBuf> {
     }
 }
 
+/// Look up an installed application through Launch Services without launching it.
+pub(crate) fn application_path(bundle_id: &str) -> Option<PathBuf> {
+    let bundle = ns_string(bundle_id)?;
+    // SAFETY: NSWorkspace returns an autoreleased NSURL or nil. Copy its path while it is alive.
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let app: *mut AnyObject =
+            msg_send![workspace.as_ref()?, URLForApplicationWithBundleIdentifier: &*bundle];
+        url_path(app.as_ref()?)
+    }
+}
+
 /// 把 Rust 字符串转成 NSString（不要求以 NUL 结尾）；创建失败时返回 `None`。
 pub(super) fn ns_string(text: &str) -> Option<Retained<AnyObject>> {
     // NSUTF8StringEncoding = 4。

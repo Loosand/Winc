@@ -44,10 +44,11 @@ pub struct Sidebar {
     /// 切换侧栏视图时，视图切换器中选中的一段从上一个视图滑入：记录上一个视图和动画时钟。
     pub(crate) view_slide: Option<(SidebarView, crate::app::animation::Clock)>,
     pub(crate) navigation: notebook::Navigation,
+    pub(in crate::app) show_hidden_files: bool,
+    pub(in crate::app) reverse_name_order: bool,
     /// Explicit compatibility mode for the original Winc UI tests.
     #[cfg(test)]
     pub(in crate::app) legacy_chrome: bool,
-    pub(in crate::app) documents_closed: bool,
 }
 
 impl Default for Sidebar {
@@ -59,9 +60,10 @@ impl Default for Sidebar {
             view: SidebarView::Files,
             view_slide: None,
             navigation: notebook::Navigation::default(),
+            show_hidden_files: false,
+            reverse_name_order: false,
             #[cfg(test)]
             legacy_chrome: false,
-            documents_closed: false,
         }
     }
 }

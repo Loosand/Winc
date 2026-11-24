@@ -295,14 +295,18 @@ impl App {
 
     pub(in crate::app) fn card_grid_key(&mut self, key: &winit::keyboard::Key, cmd: bool) -> bool {
         use winit::keyboard::{Key, NamedKey};
-        let Some((target, track, from, content)) = self.card_grid_scrollbar() else {
+        if !self.library_shown() {
             return false;
-        };
+        }
+        let grid =
+            crate::app::workspace::library::Grid::new(self.layout.editor, &self.library.cards);
+        let from = self.library.scroll;
+        let end = grid.content_height(self.library.cards.len());
         let line = self.fonts.line_height * 2.0;
-        let page = track.h * 0.9;
+        let page = grid.body.h * 0.9;
         let to = match key {
             Key::Named(NamedKey::Home) => 0.0,
-            Key::Named(NamedKey::End) => content,
+            Key::Named(NamedKey::End) => end,
             Key::Named(NamedKey::ArrowUp) => {
                 if cmd {
                     0.0
@@ -312,7 +316,7 @@ impl App {
             }
             Key::Named(NamedKey::ArrowDown) => {
                 if cmd {
-                    content
+                    end
                 } else {
                     from + line
                 }
@@ -328,7 +332,7 @@ impl App {
             }
             _ => return false,
         };
-        self.set_pane_scroll(target, to);
+        self.set_pane_scroll(ScrollTarget::Library, to);
         self.request_redraw();
         true
     }
@@ -392,7 +396,7 @@ impl App {
             ScrollTarget::Results => self.results_max_scroll(),
             ScrollTarget::Tree => {
                 let rows = self.editor.workspace.as_ref().map_or(0, |w| w.rows().len());
-                tree_max_scroll(self.layout.tree, rows)
+                self.tree_max_scroll(rows)
             }
             ScrollTarget::Library if self.library_shown() => {
                 let grid = crate::app::workspace::library::Grid::new(

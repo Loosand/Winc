@@ -74,6 +74,8 @@ pub struct Query {
     pub whole_word: bool,
     /// 是否按正则匹配。
     pub regex: bool,
+    /// Match file names without reading file contents.
+    pub file_names: bool,
     /// 只搜索匹配的文件：逗号分隔的 glob，例如 `src, *.rs`；为空时不限制。
     pub include: String,
     /// 是否也搜索被 `.gitignore`、`.ignore` 和全局规则忽略的文件。
@@ -450,19 +452,22 @@ impl ProjectSearch {
         let Some(matcher) = &self.matcher else {
             return;
         };
-        let found = match rope {
-            Some(rope) => Some((search_lines(matcher, rope, MAX_RESULTS), false)),
-            None => search_disk(
-                matcher,
-                &mut Vec::new(),
-                path,
-                MAX_RESULTS,
-                &AtomicBool::new(false),
-            ),
+        let roots = (self.root.as_path(), self.labelled.as_ref());
+        let fresh = if self.query.as_ref().is_some_and(|query| query.file_names) {
+            name_result(roots, matcher, path)
+        } else {
+            let found = match rope {
+                Some(rope) => Some((search_lines(matcher, rope, MAX_RESULTS), false)),
+                None => search_disk(
+                    matcher,
+                    &mut Vec::new(),
+                    path,
+                    MAX_RESULTS,
+                    &AtomicBool::new(false),
+                ),
+            };
+            found.and_then(|(matches, lossy)| file_result(roots, path, matches, lossy))
         };
-        let fresh = found.and_then(|(matches, lossy)| {
-            file_result((&self.root, &self.labelled), path, matches, lossy)
-        });
 
         if let Some(refresh) = self.job.as_mut().and_then(|job| job.refresh.as_mut()) {
             refresh.files.remove(path);

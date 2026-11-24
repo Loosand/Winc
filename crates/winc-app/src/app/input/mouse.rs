@@ -20,7 +20,7 @@ use winc_render::Renderer;
 
 use crate::app::{
     App, Click, DOUBLE_CLICK, Drag, Focus, Hover, MenuCommand, TreeDrag, WindowControl,
-    resize_cursor, tree_max_scroll,
+    resize_cursor,
 };
 use crate::layout::{
     RowAction, Scrollbar, SearchParts, SettingControl, SettingsPart, SidebarView, hit,

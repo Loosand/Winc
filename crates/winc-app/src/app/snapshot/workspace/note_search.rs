@@ -9,8 +9,8 @@ fn notebook_search_dialog_does_not_leave_a_gap_in_the_scrim_during_opening() {
 
     let (mut app, root) = note_app("minc-search-scrim");
     paint(&mut app);
-    let search = app.panels.sidebar.navigation.search;
-    press(&mut app, search);
+    app.open_notebook_search();
+    paint(&mut app);
     assert!(app.overlays.picker.notebook.is_some());
 
     let card = app.layout.picker;
@@ -51,8 +51,8 @@ fn notebook_search_dialog_matches_titles_and_body_and_preview_does_not_open_a_re
     app.open_path(&tea);
     app.state.recent_note_edits = vec![tea.clone()];
     paint(&mut app);
-    let search = app.panels.sidebar.navigation.search;
-    press(&mut app, search);
+    app.open_notebook_search();
+    paint(&mut app);
     assert_eq!(app.panels.sidebar.view, SidebarView::Files);
     assert_eq!(app.focus, Focus::Picker);
     // Old recency data no longer filters or ranks notebook search results.

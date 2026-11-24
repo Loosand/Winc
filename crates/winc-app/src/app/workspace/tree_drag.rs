@@ -22,11 +22,9 @@ const EXPAND_DELAY: Duration = Duration::from_millis(600);
 
 /// 触发自动滚动的区域高度（逻辑像素）：鼠标距文件树上下边缘不足此距离时开始滚动。
 ///
-/// 取一行的高度 [`TREE_ROW`]。
-const EDGE: f32 = TREE_ROW;
 /// 鼠标贴着文件树上下边缘时每帧的滚动量（逻辑像素，经验值）。
 ///
-/// 滚动量随鼠标向 [`EDGE`] 区域内侧移动而线性减小，到区域内侧边界时为 0。
+/// 滚动量随鼠标向 边缘区域内侧移动而线性减小，到区域内侧边界时为 0。
 const EDGE_SPEED: f32 = 12.0;
 
 /// 文件树中被按住的项。
@@ -230,7 +228,7 @@ impl App {
     }
 
     /// 处理对 `path` 的单击：文件在编辑区打开，焦点保留在文件树，便于用方向键继续浏览；
-    /// 目录展开或收起。
+    /// 目录展开或收起，并在主区浏览。
     ///
     /// 启用预览标签时文件在预览标签中打开（见 [`App::preview_path`]），`keep`（双击）时在普通
     /// 标签中打开。
@@ -247,8 +245,7 @@ impl App {
             if self.pointer.modifiers.alt_key() {
                 self.toggle_dir_recursively(index);
             } else {
-                self.set_dir_expanded(index, None);
-                self.browse_library_tree_folder(path);
+                self.activate_tree_folder(index);
             }
         } else {
             if keep || !self.preview_on_click() {
@@ -291,17 +288,18 @@ impl App {
 
         let (x, y) = self.pointer.mouse;
         let tree = self.layout.tree;
+        let row_height = self.tree_row_height();
         let push = if !tree.contains(x, y) {
             0.0
-        } else if y < tree.y + EDGE {
-            y - (tree.y + EDGE)
-        } else if y > tree.bottom() - EDGE {
-            y - (tree.bottom() - EDGE)
+        } else if y < tree.y + row_height {
+            y - (tree.y + row_height)
+        } else if y > tree.bottom() - row_height {
+            y - (tree.bottom() - row_height)
         } else {
             0.0
         };
         let rows = self.editor.workspace.as_ref().map_or(0, |w| w.rows().len());
-        let scroll = (self.panels.tree.scroll + push / EDGE * EDGE_SPEED)
+        let scroll = (self.panels.tree.scroll + push / row_height * EDGE_SPEED)
             .clamp(0.0, self.tree_max_scroll(rows));
         if scroll != self.panels.tree.scroll {
             self.panels.tree.scroll = scroll;

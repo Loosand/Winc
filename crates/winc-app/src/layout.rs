@@ -27,6 +27,7 @@ pub use overlays::*;
 pub use settings::*;
 pub use workspace::panel::*;
 pub use workspace::sidebar::*;
+pub(crate) use wrap::fit_text;
 pub use wrap::wrap_text;
 
 /// 窗口各主要区域的矩形，由 [`Layout::compute`] 生成。
@@ -288,8 +289,19 @@ pub fn tree_row_slot(
     block: Option<(usize, usize)>,
     hidden: f32,
 ) -> (Rect, Rect) {
-    let y_of = |v: usize| tree.y + v as f32 * TREE_ROW - scroll;
-    let mut row = Rect::new(tree.x, y_of(v), tree.w, TREE_ROW);
+    tree_row_slot_at_height(tree, scroll, v, block, hidden, TREE_ROW)
+}
+
+pub(crate) fn tree_row_slot_at_height(
+    tree: Rect,
+    scroll: f32,
+    v: usize,
+    block: Option<(usize, usize)>,
+    hidden: f32,
+    height: f32,
+) -> (Rect, Rect) {
+    let y_of = |v: usize| tree.y + v as f32 * height - scroll;
+    let mut row = Rect::new(tree.x, y_of(v), tree.w, height);
     let mut clip = tree;
 
     match block {

@@ -64,8 +64,11 @@ impl App {
     /// 检查。
     pub(in crate::app) fn caption_controls(&self) -> Vec<winc_render::Rect> {
         let l = &self.layout;
+        let nav = &self.panels.sidebar.navigation;
         let mut client = vec![
             l.sidebar_button,
+            nav.search,
+            nav.tree_menu,
             self.tabs.new_tab,
             l.terminal_divider,
             l.split_divider,
@@ -635,7 +638,7 @@ impl App {
         let tree = self.layout.tree;
         if self.panels.sidebar.visible && tree.contains(x, y) {
             let rows = self.editor.workspace.as_ref().map_or(0, |w| w.rows().len());
-            let content = (rows as f32 + 1.0) * TREE_ROW;
+            let content = self.tree_content_height(rows);
 
             if x >= tree.right() - SCROLLBAR_HIT
                 && let Some(thumb) = scrollbar_thumb(tree, self.panels.tree.scroll, content)

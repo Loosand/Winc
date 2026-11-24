@@ -29,11 +29,13 @@ impl App {
 
         match menu.target {
             MenuTarget::Tree(path) => self.run_tree_command(command, path),
-            MenuTarget::NotebookWorkspaces(roots) => match command {
+            MenuTarget::NotebookWorkspaces { roots, typora } => match command {
                 MenuCommand::AddNotebookWorkspace => self.pick(Pick::OpenFolder),
                 MenuCommand::SwitchNotebookWorkspace(i) => {
                     if let Some(path) = roots.get(i) {
-                        if winc_backend::fs::is_dir(path) {
+                        if self.library_root() == Some(path.as_path()) {
+                            self.browse_library();
+                        } else if winc_backend::fs::is_dir(path) {
                             self.switch_folder(path);
                         } else {
                             self.flash(t!(
@@ -43,30 +45,40 @@ impl App {
                         }
                     }
                 }
-                MenuCommand::ForgetNotebookWorkspace(i) => {
-                    if let Some(path) = roots
-                        .get(i)
-                        .filter(|path| self.library_root() != Some(path.as_path()))
+                MenuCommand::NotebookTypora => {
+                    if let (Some(root), Some(app)) = (roots.first(), typora)
+                        && self.library_root() == Some(root.as_path())
+                        && let Err(error) = crate::system::open_in_typora(root, &app)
                     {
-                        self.update_state(|state| {
-                            state.notebook_workspaces.retain(|folder| folder != path)
-                        });
+                        self.flash(t!(
+                            "workspace-open-in-typora-failed",
+                            error = error.to_string()
+                        ));
+                    }
+                }
+                MenuCommand::NotebookSearch => self.focus_global_search(false, None),
+                MenuCommand::NotebookCloseWindow => self.request_close_window(),
+                MenuCommand::NotebookCloud => {
+                    if self.library_root() == roots.first().map(PathBuf::as_path)
+                        && let Err(error) =
+                            crate::system::open_url("https://www.icloud.com/iclouddrive/")
+                    {
+                        self.flash(error.to_string());
                     }
                 }
                 MenuCommand::NewFile
+                | MenuCommand::NewFolder
                 | MenuCommand::Reveal
                 | MenuCommand::CopyPath
-                | MenuCommand::CloseFolder => {
-                    if self.library_root() == roots.first().map(PathBuf::as_path) {
-                        if command == MenuCommand::NewFile {
-                            if let Some(ws) = &mut self.editor.workspace {
-                                ws.select(None);
-                            }
-                            self.panels.sidebar.documents_closed = false;
-                            self.show_files();
+                    if self.library_root() == roots.first().map(PathBuf::as_path) =>
+                {
+                    if matches!(command, MenuCommand::NewFile | MenuCommand::NewFolder) {
+                        self.show_files();
+                        if let Some(ws) = &mut self.editor.workspace {
+                            ws.select(None);
                         }
-                        self.run_tree_command(command, None);
                     }
+                    self.run_tree_command(command, None);
                 }
                 _ => {}
             },
@@ -429,11 +441,29 @@ impl App {
                     self.new_terminal_with_shell(i);
                 }
             }
-            MenuTarget::TreeTools => {
-                if let Some(tool) = tree_tool_of(command) {
-                    self.run_tree_tool(tool);
+            MenuTarget::TreeTools => match command {
+                MenuCommand::NotebookOutline => self.show_outline(),
+                MenuCommand::NotebookNameOrder(_) | MenuCommand::NotebookShowHidden => {
+                    match command {
+                        MenuCommand::NotebookNameOrder(reverse) => {
+                            self.panels.sidebar.reverse_name_order = reverse
+                        }
+                        _ => self.panels.sidebar.show_hidden_files ^= true,
+                    }
+                    self.panels.tree.motion = None;
+                    self.refresh_library();
+                    self.relayout();
+                    self.clamp_tree_scroll();
+                    if let Some(row) = self.editor.workspace.as_ref().and_then(|ws| ws.selected) {
+                        self.scroll_tree_to(row, false);
+                    }
                 }
-            }
+                _ => {
+                    if let Some(tool) = tree_tool_of(command) {
+                        self.run_tree_tool(tool);
+                    }
+                }
+            },
             // 目录菜单没有命令，选中的文件直接打开（`PopupRow::Entry`）。
             MenuTarget::Folder => {}
         }

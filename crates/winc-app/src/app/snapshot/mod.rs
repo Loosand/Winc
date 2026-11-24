@@ -212,7 +212,7 @@ fn tree_row_center(app: &App, index: usize) -> (f32, f32) {
     let tree = app.layout.tree;
     (
         tree.x + 80.0,
-        tree.y + index as f32 * TREE_ROW + TREE_ROW / 2.0,
+        app.tree_row_top(index) + app.tree_row_height() / 2.0,
     )
 }
 

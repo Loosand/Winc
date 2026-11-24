@@ -35,6 +35,8 @@ pub(crate) use popup::{
 };
 pub(crate) use present::MenuIcon;
 
+const NOTEBOOK_MENU_WIDTH: f32 = 268.0;
+
 /// 菜单项上显示的文字：标题、标题下方的一行小字，以及悬停提示。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MenuLabel {
@@ -103,9 +105,14 @@ pub enum MenuCommand {
     /// 把一个目录加为窗口的附加目录。
     AddFolder,
     AddNotebookWorkspace,
-    NotebookWorkspaceList,
+    NotebookCloseWindow,
+    NotebookCloud,
+    NotebookSearch,
+    NotebookOutline,
+    NotebookNameOrder(bool),
+    NotebookShowHidden,
     SwitchNotebookWorkspace(usize),
-    ForgetNotebookWorkspace(usize),
+    NotebookTypora,
     /// 从窗口中移除附加的目录，不改动磁盘上的内容。
     RemoveFolder,
     /// 给窗口中的这组目录起名。
@@ -537,8 +544,15 @@ impl MenuCommand {
             MenuCommand::NewFolder => t!("menu-new-folder"),
             MenuCommand::AddFolder => t!("cmd-add-folder"),
             MenuCommand::AddNotebookWorkspace => t!("workspace-add-notebook"),
-            MenuCommand::NotebookWorkspaceList => t!("workspace-switch-notebook"),
-            MenuCommand::SwitchNotebookWorkspace(_) | MenuCommand::ForgetNotebookWorkspace(_) => "",
+            MenuCommand::NotebookCloseWindow => t!("cmd-close-window"),
+            MenuCommand::NotebookCloud => t!("workspace-file-sync"),
+            MenuCommand::NotebookSearch => t!("workspace-notebook-search"),
+            MenuCommand::NotebookOutline => t!("workspace-outline-title"),
+            MenuCommand::NotebookNameOrder(false) => t!("workspace-tree-name-ascending"),
+            MenuCommand::NotebookNameOrder(true) => t!("workspace-tree-name-descending"),
+            MenuCommand::NotebookShowHidden => t!("workspace-tree-show-hidden"),
+            MenuCommand::SwitchNotebookWorkspace(_) => "",
+            MenuCommand::NotebookTypora => t!("workspace-open-in-typora"),
             MenuCommand::RemoveFolder => t!("menu-remove-folder"),
             MenuCommand::RenameGroup => t!("menu-rename-group"),
             MenuCommand::OpenGroup(_) => t!("menu-open-group"),
@@ -900,8 +914,11 @@ impl MenuCommand {
 pub enum MenuTarget {
     /// 文件树中的一项；`None` 表示空白处，即根目录。
     Tree(Option<PathBuf>),
-    /// Workspace roots captured when the My Documents menu opens; the current one comes first.
-    NotebookWorkspaces(Vec<PathBuf>),
+    /// Workspace roots captured when the folder menu opens, with the current root first.
+    NotebookWorkspaces {
+        roots: Vec<PathBuf>,
+        typora: Option<PathBuf>,
+    },
     /// 标签栏中的一个标签。
     Tab(DocumentId),
     /// 编辑区中当前标签的文字。

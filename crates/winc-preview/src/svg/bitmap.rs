@@ -95,6 +95,8 @@ impl<'a, 'input> Parser<'a, 'input> {
             } else {
                 percent_decode(payload)
             }
+        } else if !self.external_images {
+            return None;
         } else if link.contains("://") && !link.starts_with("file://") {
             self.miss(winc_i18n::t!("preview-svg-missing-remote-images"));
             return None;

@@ -223,18 +223,34 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<Pixels, String> {
     decode(format, bytes).map(|(pixels, _)| pixels)
 }
 
+/// Decode a thumbnail with a bounded long edge, preserving the image's proportions.
+///
+/// # Errors
+///
+/// Returns an error if the format is unknown or the image cannot be decoded.
+pub fn decode_thumbnail(path: &Path, bytes: &[u8], edge: u32) -> Result<Pixels, String> {
+    let format = sniff(bytes)
+        .or_else(|| format_of(path))
+        .ok_or(winc_i18n::t!("preview-image-format-unknown"))?;
+    decode_fitted(format, bytes, edge.clamp(1, KEEP_MAX)).map(|(pixels, _)| pixels)
+}
+
 /// 解码一张图，长边缩到不超过 [`KEEP_MAX`]；返回缩小后的图和原图的大小。
 fn decode(format: &str, bytes: &[u8]) -> Result<(Pixels, (u32, u32)), String> {
+    decode_fitted(format, bytes, KEEP_MAX)
+}
+
+fn decode_fitted(format: &str, bytes: &[u8], edge: u32) -> Result<(Pixels, (u32, u32)), String> {
     let pixels = match format {
-        "PNG" => return decode_png(bytes),
-        "JPEG" => return decode_jpeg_fitted(bytes),
-        "GIF" => return decode_gif(bytes),
+        "PNG" => return decode_png(bytes, edge),
+        "JPEG" => return decode_jpeg_fitted(bytes, edge),
+        "GIF" => return decode_gif(bytes, edge),
         "WebP" => decode_webp(bytes),
         "BMP" => decode_bmp(bytes),
         _ => decode_ico(bytes),
     }?;
     let size = (pixels.width, pixels.height);
-    Ok((shrink(pixels, KEEP_MAX), size))
+    Ok((shrink(pixels, edge), size))
 }
 
 /// 按文件开头的魔数识别格式。
@@ -279,7 +295,7 @@ fn check_size(width: u32, height: u32) -> Result<(), String> {
 /// 一亿像素的 RGB 图需要约 700 MB（解码得到的 RGB 约 300 MB，转换后的 RGBA 约 400 MB）。
 /// 隔行扫描（Adam7）的行不按顺序到达：按各遍的位置把每个像素累加进新图对应的一格
 /// （[`Scatter`]），内存是新图每格 16 字节，2560 × 2560 时约 100 MB。
-fn decode_png(bytes: &[u8]) -> Result<(Pixels, (u32, u32)), String> {
+fn decode_png(bytes: &[u8], edge: u32) -> Result<(Pixels, (u32, u32)), String> {
     let mut decoder = png::Decoder::new(Cursor::new(bytes));
     // 调色板展开为 RGB(A)，低位深灰度扩展为 8 位，16 位降为 8 位，tRNS 展开为透明通道。
     decoder.set_transformations(png::Transformations::normalize_to_color8());
@@ -288,7 +304,7 @@ fn decode_png(bytes: &[u8]) -> Result<(Pixels, (u32, u32)), String> {
     let (width, height) = (info.width, info.height);
     check_size(width, height)?;
     let (color, _) = reader.output_color_type();
-    let kept = kept_size(width, height, KEEP_MAX);
+    let kept = kept_size(width, height, edge);
 
     if info.interlaced && kept != (width, height) {
         let mut scatter = Scatter::new(width, height, kept);
@@ -334,7 +350,7 @@ fn decode_png(bytes: &[u8]) -> Result<(Pixels, (u32, u32)), String> {
             height,
             rgba,
         };
-        return Ok((shrink(pixels, KEEP_MAX), (width, height)));
+        return Ok((pixels, (width, height)));
     }
 
     let mut shrinker = Shrinker::new(width, height, kept);
@@ -530,19 +546,19 @@ impl Scatter {
 ///
 /// macOS 上要缩小的交给 `ImageIO` 按目标大小解码（见 [`imageio`]），不先解出整张原图；`ImageIO`
 /// 解不出来时改用 zune-jpeg 解出整张再缩小。
-fn decode_jpeg_fitted(bytes: &[u8]) -> Result<(Pixels, (u32, u32)), String> {
+fn decode_jpeg_fitted(bytes: &[u8], edge: u32) -> Result<(Pixels, (u32, u32)), String> {
     #[cfg(target_os = "macos")]
     {
         let (width, height) = jpeg_size(bytes)?;
-        if width.max(height) > KEEP_MAX
-            && let Some(pixels) = imageio::decode_scaled(bytes, KEEP_MAX)
+        if width.max(height) > edge
+            && let Some(pixels) = imageio::decode_scaled(bytes, edge)
         {
             return Ok((pixels, (width, height)));
         }
     }
     let pixels = decode_jpeg(bytes)?;
     let size = (pixels.width, pixels.height);
-    Ok((shrink(pixels, KEEP_MAX), size))
+    Ok((shrink(pixels, edge), size))
 }
 
 /// 只读 JPEG 的头，返回图片大小；大小不合要求（见 [`check_size`]）时返回原因。
@@ -589,7 +605,7 @@ fn decode_jpeg(bytes: &[u8]) -> Result<Pixels, String> {
 ///
 /// 画布大小只取自文件头，数十字节的文件就能声明一亿像素的画布。需要缩小时逐行生成画布、
 /// 边生成边缩小（同 PNG），内存只需缩小后的图加一行画布。
-fn decode_gif(bytes: &[u8]) -> Result<(Pixels, (u32, u32)), String> {
+fn decode_gif(bytes: &[u8], edge: u32) -> Result<(Pixels, (u32, u32)), String> {
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
     let mut decoder = options
@@ -614,7 +630,7 @@ fn decode_gif(bytes: &[u8]) -> Result<(Pixels, (u32, u32)), String> {
         Some((row, left as usize * 4))
     };
 
-    let kept = kept_size(width, height, KEEP_MAX);
+    let kept = kept_size(width, height, edge);
     if kept == (width, height) {
         let mut rgba = vec![0u8; (width * height * 4) as usize];
         for y in rows.clone().filter(|_| cols > 0) {
@@ -909,7 +925,7 @@ fn decode_ico(bytes: &[u8]) -> Result<Pixels, String> {
         .get(offset..offset.saturating_add(size).min(bytes.len()))
         .ok_or(winc_i18n::t!("preview-image-truncated"))?;
     if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-        decode_png(data).map(|(pixels, _)| pixels)
+        decode_png(data, KEEP_MAX).map(|(pixels, _)| pixels)
     } else {
         decode_dib(data, None, true)
     }

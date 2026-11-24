@@ -85,7 +85,6 @@ pub use workspace::session::StartAction;
 pub use workspace::tab_drag::{TabDrag, TabSlide};
 pub use workspace::tool_fold::ToolFold;
 use workspace::tree::SidebarMotion;
-pub(crate) use workspace::tree::tree_max_scroll;
 pub use workspace::tree::{NameInput, TreeMotion};
 pub use workspace::tree_drag::TreeDrag;
 pub use workspace::tree_label::{LabelCause, LabelView, TreeLabels};

@@ -18,6 +18,7 @@ use super::*;
 /// 菜单中的一行。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PopupRow {
+    Heading(String),
     /// 分隔线。
     Separator,
     /// 一条命令：文字、左边的图标、快捷键的显示文字、是否可用、是否打勾、编号（同系统菜单的
@@ -54,7 +55,7 @@ impl PopupRow {
     /// 是否可以悬停和选中；分隔线和不可用的命令返回 `false`。
     pub(crate) fn selectable(&self) -> bool {
         match self {
-            PopupRow::Separator | PopupRow::Query(_) => false,
+            PopupRow::Heading(_) | PopupRow::Separator | PopupRow::Query(_) => false,
             PopupRow::Item { enabled, .. } => *enabled,
             PopupRow::Submenu { .. } | PopupRow::Entry { .. } => true,
         }
@@ -101,6 +102,7 @@ pub(crate) struct PopupMenu {
     pub at_checked: bool,
     /// 第一级菜单的最小宽度（逻辑像素）；没有要求时为 0。
     pub min_width: f32,
+    pub app_icon: Option<winc_preview::image::Pixels>,
     /// 目录菜单：当前文件的路径，展开目录时据此给它的各级上层目录打勾；其他菜单为 `None`。
     pub current: Option<PathBuf>,
     /// 键入的筛选文字；没有筛选时为空。
@@ -126,6 +128,7 @@ impl PopupMenu {
             at_checked: flags.0,
             right_aligned: flags.1,
             min_width: 0.0,
+            app_icon: None,
             current: None,
             query: String::new(),
             all: None,
@@ -136,8 +139,12 @@ impl PopupMenu {
     fn filterable(&self) -> bool {
         let rows = self.all.as_ref().unwrap_or(&self.levels[0].rows);
         self.levels.len() == 1
-            && !(rows.iter())
-                .any(|r| matches!(r, PopupRow::Submenu { .. } | PopupRow::Entry { .. }))
+            && !(rows.iter()).any(|r| {
+                matches!(
+                    r,
+                    PopupRow::Heading(_) | PopupRow::Submenu { .. } | PopupRow::Entry { .. }
+                )
+            })
     }
 
     /// 把筛选文字换成 `query`，按它重新列出第一级的各行，停在第一个能选的行上。

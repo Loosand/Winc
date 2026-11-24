@@ -7,7 +7,7 @@ use winc_editor::{EXPAND_DIRS, Workspace, natural_cmp};
 use winc_i18n::t;
 
 use super::*;
-use crate::layout::tree_row_slot;
+use crate::layout::tree_row_slot_at_height;
 
 mod menu;
 
@@ -54,7 +54,13 @@ fn filename_field(name: &str) -> TextField {
 }
 
 /// Return the slot for a file among the visible children of its destination.
-fn new_file_slot(rows: &[Entry], parent: Option<usize>, dir: &Path, name: &str) -> usize {
+fn new_file_slot(
+    rows: &[Entry],
+    parent: Option<usize>,
+    dir: &Path,
+    name: &str,
+    reverse: bool,
+) -> usize {
     let (mut slot, end) = parent.map_or((0, rows.len()), |i| (i + 1, rows[i].end));
     // When the target is an intermediate segment of a compacted row, its only child
     // is the directory represented by the rest of that row and its subtree.
@@ -63,19 +69,14 @@ fn new_file_slot(rows: &[Entry], parent: Option<usize>, dir: &Path, name: &str) 
     }
     while slot < end {
         let entry = &rows[slot];
-        if entry.kind == EntryKind::File && !natural_cmp(&entry.name, name).is_lt() {
+        let order = natural_cmp(&entry.name, name);
+        let order = if reverse { order.reverse() } else { order };
+        if entry.kind == EntryKind::File && !order.is_lt() {
             break;
         }
         slot = entry.end;
     }
     slot
-}
-
-/// 返回文件树的最大滚动位置（逻辑像素）。
-///
-/// 末尾多留一行：滚到底时最后一行下方还有一行高度的空白。内容不足一屏时为负数。
-pub(crate) fn tree_max_scroll(tree: Rect, rows: usize) -> f32 {
-    (rows as f32 + 1.0) * TREE_ROW - tree.h
 }
 
 /// 滚动时固定在文件树顶部的目录层数上限（层，经验值）。
@@ -155,8 +156,8 @@ impl TreeMotion {
     }
 
     /// 返回尚未显示的子行所占的高度（逻辑像素）：其下方的行向上收起相应高度。
-    pub fn hidden(&self) -> f32 {
-        (1.0 - self.reveal()) * self.count as f32 * TREE_ROW
+    pub fn hidden(&self, row_height: f32) -> f32 {
+        (1.0 - self.reveal()) * self.count as f32 * row_height
     }
 }
 
@@ -176,8 +177,17 @@ impl App {
 
     /// 用状态文件里记下的侧栏宽度（启动、新开窗口时）。
     pub(crate) fn restore_panel_width(&mut self) {
-        if let Some(width) = self.state.panel_width {
-            self.panels.sidebar.width = width.max(crate::theme::MIN_PANEL_WIDTH);
+        self.panels.sidebar.width = self.state.panel_width.map_or_else(
+            || self.default_sidebar_width(),
+            |width| width.max(crate::theme::MIN_PANEL_WIDTH),
+        );
+    }
+
+    pub(in crate::app) fn default_sidebar_width(&self) -> f32 {
+        if self.writing_workspace() {
+            crate::theme::MIN_PANEL_WIDTH
+        } else {
+            crate::theme::DEFAULT_PANEL_WIDTH
         }
     }
 
@@ -217,6 +227,9 @@ impl App {
             .editor
             .root()
             .and_then(|root| self.state.session_for(root));
+        if self.editor.workspace.is_none() && self.writing_workspace() {
+            self.panels.sidebar.visible = true;
+        }
         if session.is_some_and(|session| session.sidebar_hidden) {
             self.panels.sidebar.visible = false;
             self.panels.sidebar.motion = None;
@@ -355,7 +368,8 @@ impl App {
     pub(in crate::app) fn toggle_sidebar(&mut self) {
         self.set_sidebar(!self.panels.sidebar.visible);
         self.focus = match (self.panels.sidebar.visible, self.panels.sidebar.view) {
-            (true, SidebarView::Files) => Focus::Tree,
+            (true, SidebarView::Files) if self.editor.workspace.is_some() => Focus::Tree,
+            (true, SidebarView::Files) => Focus::Editor,
             (true, SidebarView::Outline) => Focus::Outline,
             (true, SidebarView::Search) => Focus::GlobalQuery,
             (true, SidebarView::Commit) => self.commit_view_focus(),
@@ -382,6 +396,11 @@ impl App {
 
         // 展开、收起的动画中其他行在移动；正在展开、收起的这一行不动，继续显示完整名称。
         let row = self.tree_row_at(y)?;
+        if self.notebook_sidebar()
+            && self.editor.workspace.as_ref()?.rows()[row].kind == EntryKind::Dir
+        {
+            return None;
+        }
         match &self.panels.tree.motion {
             Some(motion) if motion.parent != row => None,
             _ => Some(row),
@@ -427,7 +446,9 @@ impl App {
             return TreeSlot::Empty;
         };
         let rows = ws.rows().len();
-        let content_y = y - self.layout.tree.y + self.panels.tree.scroll;
+        let row_height = self.tree_row_height();
+        let scroll = crate::layout::drawn_scroll(self.panels.tree.scroll);
+        let content_y = y - self.layout.tree.y + scroll;
 
         if content_y < 0.0 {
             return TreeSlot::Empty;
@@ -436,14 +457,14 @@ impl App {
         let motion = self.panels.tree.motion.as_ref().filter(|m| m.parent < rows);
         let shift = motion.map_or(0.0, |m| {
             let (_, end) = m.block();
-            let hidden = m.hidden();
-            if content_y >= end as f32 * TREE_ROW - hidden {
+            let hidden = m.hidden(row_height);
+            if content_y >= end as f32 * row_height - hidden {
                 hidden
             } else {
                 0.0
             }
         });
-        let v = ((content_y + shift) / TREE_ROW).floor() as usize;
+        let v = ((content_y + shift) / row_height).floor() as usize;
 
         // 新建时插入的那一行不是条目，该行下方的行在数据中的序号要减 1。
         let v = match self.inserted_row() {
@@ -484,16 +505,17 @@ impl App {
             v += 1;
         }
         let block = motion.map(TreeMotion::block);
-        let hidden = motion.map_or(0.0, TreeMotion::hidden);
+        let row_height = self.tree_row_height();
+        let hidden = motion.map_or(0.0, |m| m.hidden(row_height));
         let scroll = crate::layout::drawn_scroll(self.panels.tree.scroll);
-        tree_row_slot(self.layout.tree, scroll, v, block, hidden)
+        tree_row_slot_at_height(self.layout.tree, scroll, v, block, hidden, row_height)
             .0
             .y
     }
 
     /// 返回文件树顶部最多固定的层数：不超过树高的 40%，也不超过 [`STICKY_MAX`]。
     fn tree_sticky_max(&self) -> usize {
-        ((self.layout.tree.h * 0.4 / TREE_ROW).floor() as usize).min(STICKY_MAX)
+        ((self.layout.tree.h * 0.4 / self.tree_row_height()).floor() as usize).min(STICKY_MAX)
     }
 
     /// 返回固定在文件树顶部的目录，外层在前。
@@ -509,10 +531,11 @@ impl App {
         let rows = ws.rows();
         let tree = self.layout.tree;
         let mut stack: Vec<StickyRow> = Vec::new();
+        let row_height = self.tree_row_height();
 
         while stack.len() < self.tree_sticky_max() {
             let level = stack.len();
-            let top = tree.y + level as f32 * TREE_ROW;
+            let top = tree.y + level as f32 * row_height;
             // 露出的是输入名字的那一行时，取它所在的目录；是正在收回的子行时，取被收起的目录。
             let first = match self.tree_slot_at(top) {
                 TreeSlot::Entry(index) => index,
@@ -561,12 +584,12 @@ impl App {
             if count == 0 {
                 break;
             }
-            let bottom = self.tree_row_top(index + count) + TREE_ROW;
-            let y = top.min(bottom - TREE_ROW);
+            let bottom = self.tree_row_top(index + count) + row_height;
+            let y = top.min(bottom - row_height);
             stack.push(StickyRow {
                 index,
                 level,
-                rect: Rect::new(tree.x, y, tree.w, TREE_ROW),
+                rect: Rect::new(tree.x, y, tree.w, row_height),
             });
             if y < top {
                 break;
@@ -579,7 +602,7 @@ impl App {
     /// 点击固定在顶部的目录时先调用：滚动文件树，使该目录的实际行（条目 `index`）停在该目录被
     /// 固定的位置（第 `level` 层，从 0 起），画面看起来没有移动；之后再展开或收起。
     pub(super) fn settle_sticky(&mut self, index: usize, level: usize) {
-        let target = self.layout.tree.y + level as f32 * TREE_ROW;
+        let target = self.layout.tree.y + level as f32 * self.tree_row_height();
         self.panels.tree.scroll =
             (self.panels.tree.scroll + self.tree_row_top(index) - target).max(0.0);
     }
@@ -621,17 +644,18 @@ impl App {
     /// 新建时插入的那一行还没有条目序号，用槽位定位。
     fn scroll_tree_to_slot(&mut self, slot: usize, depth: usize, center: bool) {
         let tree_h = self.layout.tree.h;
-        let y = slot as f32 * TREE_ROW;
-        let above = depth.min(self.tree_sticky_max()) as f32 * TREE_ROW;
+        let row_height = self.tree_row_height();
+        let y = slot as f32 * row_height;
+        let above = depth.min(self.tree_sticky_max()) as f32 * row_height;
         let visible = y >= self.panels.tree.scroll + above
-            && y + TREE_ROW <= self.panels.tree.scroll + tree_h;
+            && y + row_height <= self.panels.tree.scroll + tree_h;
 
         let before = self.panels.tree.scroll;
         self.panels.tree.scroll = match (visible, center) {
             (true, _) => self.panels.tree.scroll,
             (false, true) => (y - tree_h / 2.0).max(0.0),
             (false, false) => {
-                scroll_to_show(self.panels.tree.scroll, y - above, y + TREE_ROW, tree_h).max(0.0)
+                scroll_to_show(self.panels.tree.scroll, y - above, y + row_height, tree_h).max(0.0)
             }
         };
         self.glide_pane(ScrollTarget::Tree, before);
@@ -716,10 +740,6 @@ impl App {
     fn open_new_entry(&mut self, kind: EntryKind, field: TextField, contents: Option<Vec<u8>>) {
         self.bars.goto_input = None;
         let notebook = self.notebook_sidebar();
-        if notebook && !self.notebook_documents_open() {
-            self.panels.sidebar.documents_closed = false;
-            self.relayout();
-        }
         let Some(ws) = self.editor.workspace.as_mut() else {
             self.flash(winc_i18n::t!("workspace-open-folder-first"));
             return;
@@ -747,7 +767,13 @@ impl App {
             self.panels.tree.motion = None;
             let name = untitled_note_name(&dir);
             (
-                new_file_slot(ws.rows(), at, &dir, &name),
+                new_file_slot(
+                    ws.rows(),
+                    at,
+                    &dir,
+                    &name,
+                    self.panels.sidebar.reverse_name_order,
+                ),
                 filename_field(&name),
             )
         } else {
@@ -805,8 +831,9 @@ impl App {
         let entry = self.panels.name_input.as_ref()?;
         let tree = self.layout.tree;
         let scroll = crate::layout::drawn_scroll(self.panels.tree.scroll);
-        let y = tree.y + entry.index as f32 * TREE_ROW - scroll;
-        let rect = Rect::new(tree.x, y, tree.w, TREE_ROW);
+        let row_height = self.tree_row_height();
+        let y = tree.y + entry.index as f32 * row_height - scroll;
+        let rect = Rect::new(tree.x, y, tree.w, row_height);
         (rect.bottom() > tree.y && rect.y < tree.bottom()).then_some(rect)
     }
 
@@ -966,9 +993,21 @@ impl App {
             .clamp(0.0, self.tree_max_scroll(rows));
     }
 
-    /// 与自由函数 [`tree_max_scroll`] 相同，但结果不小于 0。
-    pub(super) fn tree_max_scroll(&self, rows: usize) -> f32 {
-        tree_max_scroll(self.layout.tree, rows).max(0.0)
+    /// 返回文件树可滚到的位置，末尾留一行空白。
+    pub(in crate::app) fn tree_max_scroll(&self, rows: usize) -> f32 {
+        (self.tree_content_height(rows) - self.layout.tree.h).max(0.0)
+    }
+
+    pub(crate) fn tree_content_height(&self, rows: usize) -> f32 {
+        (rows as f32 + 1.0) * self.tree_row_height()
+    }
+
+    pub(crate) fn tree_row_height(&self) -> f32 {
+        if self.notebook_sidebar() {
+            32.0
+        } else {
+            TREE_ROW
+        }
     }
 
     /// 返回横向最大滚动位置（逻辑像素）：最宽的一行超出文件树宽度的部分。

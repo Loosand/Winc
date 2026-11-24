@@ -45,7 +45,7 @@ Measured on macOS; results vary with hardware and system load.
 | Syntax | Highlighting for common programming, markup, data, and configuration languages, plus lightweight go-to-definition and usages without a language server |
 | Formatting | Whole-file formatting with external tools such as rustfmt, Prettier, Black, Ruff, and gofmt |
 | Markdown | Edit in a single formatted view, with math and Mermaid diagrams; notes stay plain `.md` files |
-| Note library | Open a local folder and use Home to browse folder cards and miniature Markdown pages |
+| Note library | Browse the local workspace's files and folders in the main area. Selecting a folder in the sidebar shows its contents. |
 | Preview | Images, SVG, JSON graphs, PDF (macOS and Windows), Word documents (docx), and spreadsheets (xlsx, csv) |
 | Git | Side-by-side diffs with word-level highlights, staging by hunk, commit and push, a commit graph, and blame |
 | Project | A file tree, quick open, and project search that follows `.gitignore` |
@@ -73,7 +73,7 @@ to see the whole graph. The graph reads standard JSON, not JSONC, JSON5, or JSON
 
 ### Note sidebar
 
-Home and My Documents show the current folder. Click its name in the sidebar to switch workspaces or open a different folder. Files stay where they are.
+The sidebar opens folders and lists recent workspaces. Inside a folder, use its name to switch workspaces or open **Home** for note cards. Use the search button to search the workspace and **New file** at the bottom to create a Markdown note.
 
 ## Platforms
 

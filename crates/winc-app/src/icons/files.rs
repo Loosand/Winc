@@ -148,6 +148,29 @@ pub fn folder(frame: &mut Frame<'_>, (x, y): (f32, f32), open: bool, color: Colo
     frame.stroke(shapes.as_slice(), STROKE, color, clip);
 }
 
+/// Filled folder for the workspace menu, centered in a 15 × 12 icon slot.
+pub fn solid_folder(frame: &mut Frame<'_>, (x, y): (f32, f32), color: Color, clip: Rect) {
+    let outline = [
+        (1.0, 2.0),
+        (2.0, 1.0),
+        (6.0, 1.0),
+        (7.5, 2.5),
+        (13.0, 2.5),
+        (14.0, 3.5),
+        (14.0, 10.0),
+        (13.0, 11.0),
+        (2.0, 11.0),
+        (1.0, 10.0),
+    ];
+    frame.polygon(&outline.map(|(dx, dy)| (x + dx, y + dy)), color, clip);
+}
+
+/// A cloud in a 15 × 12 icon slot.
+pub fn cloud(frame: &mut Frame<'_>, (x, y): (f32, f32), color: Color, clip: Rect) {
+    frame.rect_clipped(Rect::new(x + 1.0, y + 5.0, 13.0, 5.0), color, 2.5, clip);
+    frame.rect_clipped(Rect::new(x + 4.0, y + 2.0, 7.0, 7.0), color, 3.5, clip);
+}
+
 /// 绘制一组目录的图标，15×12，左上角在 `(x, y)`：下面一个圆角矩形，上面两道逐渐变短的横线，
 /// 表示叠在一起的多个目录。
 pub fn folders(frame: &mut Frame<'_>, (x, y): (f32, f32), color: Color, clip: Rect) {

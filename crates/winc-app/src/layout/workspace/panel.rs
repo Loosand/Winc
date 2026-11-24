@@ -32,6 +32,11 @@ pub enum PanelButton {
     Word,
     /// 使用正则表达式。
     Regex,
+    /// Search file names or file contents.
+    Scope {
+        /// Match file names when selected.
+        file_names: bool,
+    },
     /// 也搜索被忽略的文件。
     Ignored,
     /// 全部替换。
@@ -109,6 +114,12 @@ pub struct PanelParts {
     pub details_band: Rect,
     /// 结果统计行；没有内容（还没输入）时高度为 0。
     pub summary: Rect,
+    /// Scope controls in notebook windows.
+    pub scope: [Rect; 2],
+    /// Label beside the notebook search scope.
+    pub scope_label: Rect,
+    /// Return to the file tree.
+    pub close: Rect,
     /// 结果列表区域。
     pub results: Rect,
 }
@@ -128,17 +139,48 @@ impl PanelParts {
         summary: bool,
         heights: (f32, f32),
     ) -> PanelParts {
-        let header = Rect::new(panel.x, panel.y, panel.w, SIDEBAR_HEADER);
-        let right = header.right() - 8.0;
-        let count = PanelTool::ALL.len();
-        let tools =
-            std::array::from_fn(|i| (toolbar_button(header, right, i, count), PanelTool::ALL[i]));
+        Self::build(panel, replace_shown, details_shown, summary, heights, false)
+    }
 
+    pub(crate) fn notebook(
+        panel: Rect,
+        replace_shown: f32,
+        details_shown: f32,
+        summary: bool,
+        heights: (f32, f32),
+    ) -> PanelParts {
+        Self::build(panel, replace_shown, details_shown, summary, heights, true)
+    }
+
+    fn build(
+        panel: Rect,
+        replace_shown: f32,
+        details_shown: f32,
+        summary: bool,
+        heights: (f32, f32),
+        notebook: bool,
+    ) -> PanelParts {
+        let heading = Rect::new(panel.x, panel.y, panel.w, SIDEBAR_HEADER);
+        let right = heading.right() - 8.0;
+        let mut y = if notebook {
+            panel.y + 2.0
+        } else {
+            heading.bottom() + SIDEBAR_FIRST
+        };
+        let close = if notebook {
+            Rect::new(right - BUTTON_SMALL, y, BUTTON_SMALL, PANEL_FIELD).intersect(panel)
+        } else {
+            Rect::default()
+        };
         let left = panel.x + 8.0;
         let width = (right - left).max(0.0);
-        let mut y = header.bottom() + SIDEBAR_FIRST;
 
-        let query = Rect::new(left, y, width, heights.0);
+        let query_width = if notebook {
+            (close.x - left - 3.0).max(0.0)
+        } else {
+            width
+        };
+        let query = Rect::new(left, y, query_width, heights.0);
         let inset = (PANEL_FIELD - PANEL_TOGGLE_H) / 2.0;
         // 箭头在输入框的高度上居中，其余按钮留在第一行。
         let expand = Rect::new(
@@ -156,10 +198,11 @@ impl PanelParts {
                 PANEL_TOGGLE_H,
             )
         };
+        let gap = if notebook { 2.0 } else { BUTTON_GAP };
         let details = toggle(query.right() - inset, y);
-        let regex_toggle = toggle(details.x - BUTTON_GAP, y);
-        let word_toggle = toggle(regex_toggle.x - BUTTON_GAP, y);
-        let case_toggle = toggle(word_toggle.x - BUTTON_GAP, y);
+        let regex_toggle = toggle(details.x - gap, y);
+        let word_toggle = toggle(regex_toggle.x - gap, y);
+        let case_toggle = toggle(word_toggle.x - gap, y);
         y = query.bottom();
 
         // 计算展开比例为 `share` 的一段：返回露出的部分，并把 `y` 移到其下沿；
@@ -191,6 +234,25 @@ impl PanelParts {
             Default::default()
         };
 
+        let mut scope = [Rect::default(); 2];
+        let mut scope_label = Rect::default();
+        if notebook {
+            y += 9.0;
+            let height = 24.0;
+            scope_label = Rect::new(left + 4.0, y, 59.0, height).intersect(panel);
+            let width = ((right - scope_label.right() - 4.0) / 2.0).clamp(0.0, 66.0);
+            scope = std::array::from_fn(|i| {
+                Rect::new(
+                    scope_label.right() + 2.0 + (width + 2.0) * i as f32,
+                    y,
+                    width,
+                    height,
+                )
+                .intersect(panel)
+            });
+            y += height;
+        }
+
         // 统计行高 24 像素（与文件树一行同高）；没有内容时不占地方，结果列表紧接在输入框下方。
         let summary = if summary {
             Rect::new(panel.x, y + SIDEBAR_LIST_GAP, panel.w, 24.0)
@@ -203,6 +265,17 @@ impl PanelParts {
             panel.w,
             (panel.bottom() - summary.bottom()).max(0.0),
         );
+
+        let header = if notebook { summary } else { heading };
+        let count = PanelTool::ALL.len();
+        let tools = std::array::from_fn(|i| {
+            let button = if header.h > 0.0 {
+                toolbar_button(header, right, i, count)
+            } else {
+                Rect::default()
+            };
+            (button, PanelTool::ALL[i])
+        });
 
         PanelParts {
             header,
@@ -221,6 +294,9 @@ impl PanelParts {
             exclude,
             details_band,
             summary,
+            scope,
+            scope_label,
+            close,
             results,
         }
     }
@@ -236,6 +312,8 @@ impl PanelParts {
             (self.regex_toggle, PanelButton::Regex),
             (self.ignored_toggle, PanelButton::Ignored),
             (self.details, PanelButton::Details),
+            (self.scope[0], PanelButton::Scope { file_names: true }),
+            (self.scope[1], PanelButton::Scope { file_names: false }),
         ]
         .into_iter()
         .chain(self.tools.map(|(r, t)| (r, PanelButton::Tool(t))))

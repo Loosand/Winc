@@ -129,7 +129,7 @@ fn connect(
     frame.stroke(&segments, 1.1, color, clip);
 }
 
-fn value_text(value: &Value) -> (Cow<'_, str>, Option<TokenKind>) {
+pub(in crate::view) fn value_text(value: &Value) -> (Cow<'_, str>, Option<TokenKind>) {
     match value {
         Value::Object(0) => ("{}".into(), None),
         Value::Array(0) => ("[]".into(), None),

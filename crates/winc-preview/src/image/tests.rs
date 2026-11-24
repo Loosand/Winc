@@ -275,7 +275,7 @@ fn big_pngs_shrink_row_by_row_like_the_whole_picture() {
         (png::ColorType::Rgba, &rgba, &whole),
         (png::ColorType::Grayscale, &gray, &gray_whole),
     ] {
-        let (pixels, size) = decode_png(&png(width, height, color, data)).unwrap();
+        let (pixels, size) = decode_png(&png(width, height, color, data), KEEP_MAX).unwrap();
         assert_eq!(size, (width, height));
         assert_eq!((pixels.width, pixels.height), (KEEP_MAX, 6));
         assert!(pixels == shrink(expected.clone(), KEEP_MAX), "{color:?}");
@@ -288,9 +288,9 @@ fn big_pngs_shrink_row_by_row_like_the_whole_picture() {
         rgba: (0..3 * (KEEP_MAX + 1) * 4).map(|_| next()).collect(),
     };
     let bytes = png(tall.width, tall.height, png::ColorType::Rgba, &tall.rgba);
-    let (pixels, _) = decode_png(&bytes).unwrap();
+    let (pixels, _) = decode_png(&bytes, KEEP_MAX).unwrap();
     assert!(pixels == shrink(tall.clone(), KEEP_MAX));
-    assert!(decode_png(&bytes[..bytes.len() / 2]).is_err());
+    assert!(decode_png(&bytes[..bytes.len() / 2], KEEP_MAX).is_err());
 }
 
 #[test]
@@ -366,7 +366,7 @@ fn big_jpegs_decode_scaled_like_the_whole_picture() {
         imageio::decode_scaled(&bytes, KEEP_MAX).is_some(),
         "ImageIO 解不出来"
     );
-    let (scaled, size) = decode_jpeg_fitted(&bytes).unwrap();
+    let (scaled, size) = decode_jpeg_fitted(&bytes, KEEP_MAX).unwrap();
     let whole = shrink(decode_jpeg(&bytes).unwrap(), KEEP_MAX);
     assert_eq!(size, (width, height));
     assert_eq!(scaled.width, KEEP_MAX);
@@ -462,18 +462,18 @@ fn interlaced_pngs_shrink_without_decoding_the_whole_picture() {
         (seed >> 16) as u8
     };
     let rgba: Vec<u8> = (0..width * height * 4).map(|_| next()).collect();
-    let plain = decode_png(&png(width, height, png::ColorType::Rgba, &rgba)).unwrap();
+    let plain = decode_png(&png(width, height, png::ColorType::Rgba, &rgba), KEEP_MAX).unwrap();
     let bytes = interlaced_png(width, height, &rgba);
-    let interlaced = decode_png(&bytes).unwrap();
+    let interlaced = decode_png(&bytes, KEEP_MAX).unwrap();
     assert_eq!(interlaced.1, (width, height));
     assert_eq!((interlaced.0.width, interlaced.0.height), (KEEP_MAX, 6));
     assert!(interlaced.0 == plain.0);
     // 小图不缩小，仍然整张解码。
     let small: Vec<u8> = (0..5 * 3 * 4).map(|_| next()).collect();
-    let (pixels, _) = decode_png(&interlaced_png(5, 3, &small)).unwrap();
+    let (pixels, _) = decode_png(&interlaced_png(5, 3, &small), KEEP_MAX).unwrap();
     assert_eq!(pixels.rgba, small);
     // 数据不足时返回错误，不 panic。
-    assert!(decode_png(&bytes[..bytes.len() / 2]).is_err());
+    assert!(decode_png(&bytes[..bytes.len() / 2], KEEP_MAX).is_err());
 }
 
 #[test]

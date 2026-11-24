@@ -174,6 +174,33 @@ pub(super) fn draw_panel(app: &mut App, frame: &mut Frame<'_>) -> Option<Rect> {
     app.panels.global.include = include;
     app.panels.global.exclude = exclude;
 
+    if parts.scope_label.h > 0.0 {
+        let r = parts.scope_label;
+        ui_text_small(
+            frame,
+            app,
+            r.x,
+            r,
+            t!("workspace-search-scope"),
+            app.palette.text_dim,
+            r,
+        );
+    }
+    for (file_names, r) in [true, false].into_iter().zip(parts.scope) {
+        if r.w <= 0.0 {
+            continue;
+        }
+        let selected = app.panels.global.file_names == file_names;
+        let hot = app.pointer.hover == Hover::Panel(PanelButton::Scope { file_names });
+        let label = if file_names {
+            t!("workspace-search-scope-name")
+        } else {
+            t!("workspace-search-scope-content")
+        };
+        let x = center(r).0 - frame.measure(FontKind::Ui, app.fonts.ui_small, label) / 2.0;
+        draw_button(frame, app.palette, r, app.layout.sidebar, hot, selected);
+        ui_text_small(frame, app, x, r, label, app.palette.text, r);
+    }
     draw_summary(app, frame, &parts);
     draw_results(app, frame, &parts);
 
@@ -188,6 +215,9 @@ fn draw_panel_header(app: &App, frame: &mut Frame<'_>, parts: &PanelParts) {
     let has_results = !app.panels.global.engine.results.is_empty();
 
     for (rect, tool) in parts.tools {
+        if rect.w <= 0.0 {
+            continue;
+        }
         // 没有结果时「清除」「全部折叠」置灰。
         let enabled = tool == PanelTool::Refresh || has_results;
         let hovered = enabled && app.pointer.hover == Hover::Panel(PanelButton::Tool(tool));
@@ -242,16 +272,28 @@ fn draw_panel_inputs(
         hovered(PanelButton::Expand),
         false,
     );
-    // 箭头按替换行展开的比例从朝右旋转到朝下。
-    let turned = g.replace_share() * FRAC_PI_2;
-    icons::chevron_turned(
-        frame,
-        center(parts.expand),
-        6.5,
-        turned,
-        p.text_muted,
-        panel,
-    );
+    // Search occupies the first row. The leading icon exposes replace on hover.
+    if app.notebook_sidebar() && !g.replace_open && !hovered(PanelButton::Expand) {
+        icons::magnifier(
+            frame,
+            (
+                parts.query.x + 13.0,
+                parts.query.y + crate::layout::PANEL_FIELD / 2.0,
+            ),
+            p.text_muted,
+            parts.query,
+        );
+    } else {
+        let turned = g.replace_share() * FRAC_PI_2;
+        icons::chevron_turned(
+            frame,
+            center(parts.expand),
+            6.5,
+            turned,
+            p.text_muted,
+            parts.expand,
+        );
+    }
 
     // 过渡途中文字按过渡结束后的高度排版，只绘制在当前的框内。
     let (query_h, replace_h) = g.settled_field_heights();
@@ -422,7 +464,7 @@ fn draw_summary(app: &App, frame: &mut Frame<'_>, parts: &PanelParts) {
         (error.to_owned(), p.error)
     } else if g.query.text().is_empty() {
         (String::new(), p.text_dim)
-    } else if searching && total == 0 {
+    } else if searching && files == 0 {
         (t!("workspace-search-searching").to_owned(), p.text_dim)
     } else {
         // 截断了，或有行因正则回溯过多而放弃查找：计数是下限。
@@ -431,7 +473,9 @@ fn draw_summary(app: &App, frame: &mut Frame<'_>, parts: &PanelParts) {
         } else {
             ""
         };
-        let text = if searching {
+        let text = if g.file_names {
+            t!("workspace-search-name-results", files = files, more = more)
+        } else if searching {
             t!(
                 "workspace-search-summary-searching",
                 files = files,
@@ -451,7 +495,12 @@ fn draw_summary(app: &App, frame: &mut Frame<'_>, parts: &PanelParts) {
 
     // 文本与输入框里的文字对齐。
     let x = row.x + PANEL_LEFT;
-    let max = (parts.query.right() - x).max(0.0);
+    let right = if app.notebook_sidebar() {
+        parts.tools[0].0.x - 4.0
+    } else {
+        parts.query.right()
+    };
+    let max = (right - x).max(0.0);
     let text = ellipsize(frame, &text, app.fonts.ui_small, max);
     ui_text_small(frame, app, x, row, &text, color, row);
 }
@@ -459,6 +508,26 @@ fn draw_summary(app: &App, frame: &mut Frame<'_>, parts: &PanelParts) {
 /// 绘制结果列表：每个文件一行（箭头、图标、文件名、所在目录、匹配数），其下每处匹配一行。
 fn draw_results(app: &mut App, frame: &mut Frame<'_>, parts: &PanelParts) {
     let area = parts.results;
+    if app.notebook_sidebar() && app.panels.global.query.text().is_empty() {
+        let row = Rect::new(area.x + 12.0, area.y + 24.0, (area.w - 24.0).max(0.0), 24.0);
+        let hint = if app.panels.global.file_names {
+            t!("workspace-search-start-name")
+        } else {
+            t!("workspace-search-start-content")
+        };
+        let hint = ellipsize(frame, hint, app.fonts.ui_small, row.w);
+        let x = center(row).0 - frame.measure(FontKind::Ui, app.fonts.ui_small, &hint) / 2.0;
+        ui_text_small(
+            frame,
+            app,
+            x,
+            row,
+            &hint,
+            app.palette.text_dim,
+            row.intersect(area),
+        );
+        return;
+    }
     if app.no_search_results() {
         draw_empty_state(
             app,
@@ -674,7 +743,9 @@ fn draw_file_row(
     };
     let angle = turned * FRAC_PI_2;
     let chevron = (row.x + PANEL_CHEVRON, cy);
-    icons::chevron_turned(frame, chevron, 6.0, angle, p.text_dim, clip);
+    if !file.matches.is_empty() {
+        icons::chevron_turned(frame, chevron, 6.0, angle, p.text_dim, clip);
+    }
 
     let Some(text) = file_text(app, f) else {
         return;
@@ -690,7 +761,7 @@ fn draw_file_row(
     let slot = end.slot;
     let badge_w = (count_w + 2.0 * end.pad).max(slot.w);
     let badge = Rect::new(slot.right() - badge_w, slot.y, badge_w, slot.h);
-    if !end.covered {
+    if !end.covered && !file.matches.is_empty() {
         frame.rect_clipped(badge, p.hover, slot.h / 2.0, clip);
         let x = badge.right() - end.pad - count_w;
         caps_label(frame, app, size, (x, badge), &count, p.text_muted, clip);
@@ -843,6 +914,22 @@ pub(in crate::view) fn tooltip(app: &App) -> Option<(Rect, String)> {
     use crate::keymap::Action;
     use crate::layout::with_key;
     match app.pointer.hover {
+        Hover::NotebookNav(target) => {
+            use crate::app::workspace::notebook::SidebarTarget::*;
+            let nav = &app.panels.sidebar.navigation;
+            match target {
+                Search => Some((
+                    nav.search,
+                    with_key(t!("cmd-find-in-files"), Some(Action::FindInFiles)),
+                )),
+                BackToFiles => Some((
+                    nav.back,
+                    with_key(t!("cmd-show-files"), Some(Action::ShowFiles)),
+                )),
+                TreeMenu => Some((nav.tree_menu, t!("workspace-notebook-tree-menu").to_owned())),
+                _ => None,
+            }
+        }
         Hover::TerminalHeader(hit @ crate::app::terminal::HeaderHit::New) => {
             let rect = app.hits.terminal.iter().find(|(_, h)| *h == hit)?.0;
             Some((rect, t!("terminal-new").to_owned()))

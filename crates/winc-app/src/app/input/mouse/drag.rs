@@ -234,7 +234,7 @@ impl App {
                     }
                 } else {
                     let rows = self.editor.workspace.as_ref().map_or(0, |w| w.rows().len());
-                    let content = (rows as f32 + 1.0) * TREE_ROW;
+                    let content = self.tree_content_height(rows);
 
                     if let Some(thumb) = scrollbar_thumb(tree, self.panels.tree.scroll, content) {
                         self.panels.tree.scroll = scroll_for_thumb(
@@ -243,7 +243,7 @@ impl App {
                             thumb.h,
                             y,
                             grab,
-                            tree_max_scroll(tree, rows),
+                            self.tree_max_scroll(rows),
                         );
                     }
                 }
