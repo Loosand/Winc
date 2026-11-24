@@ -246,10 +246,7 @@ pub(crate) struct MarkdownPreview {
     /// 在右侧滚动时直接对齐左侧，并记录该状态。
     pub synced: Option<(DocumentId, f64, f32)>,
     /// 可编辑的预览中拖动选择文字的状态。
-    ///
-    /// 依次为起点（字符偏移，双击时为起始词的范围）、是否按词扩展、
-    /// 按下之前光标的原文位置（字节偏移，见 [`App::live_leaf`]）。
-    live_drag: Option<((usize, usize), bool, Option<usize>)>,
+    live_drag: Option<live_caret::LiveDrag>,
     /// 可编辑的预览中 ↑↓ 移动的目标横坐标（相对内容左边）和移动后光标的位置（字符偏移）：
     /// 光标仍在该位置时继续按该横坐标移动，经过短行后仍能回到原来的列。
     goal: Option<(f32, usize)>,

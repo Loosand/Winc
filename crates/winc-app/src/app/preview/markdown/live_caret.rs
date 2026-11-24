@@ -2,6 +2,22 @@
 //! 排版命中用逻辑像素。这里和 `laid` 负责三者之间的换算，不把屏幕上的折行写进文件。
 
 use super::*;
+use winc_core::Selection;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelectionUnit {
+    Character,
+    Word,
+    Paragraph,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct LiveDrag {
+    origin: Selection,
+    unit: SelectionUnit,
+    /// 按下之前光标的原文字节偏移，拖动时用来保持排版稳定。
+    before: Option<usize>,
+}
 
 impl App {
     /// 可编辑的预览中文字光标的原文位置（字节偏移，按当前文字计算）。
@@ -23,7 +39,7 @@ impl App {
         // 按住鼠标期间按按下之前的光标查找，显示原文的块和标记保持不变，鼠标下方的文字不移动；
         // 否则按下时该块切换为原文，文字移位，单击会变成选中一段。未开始编辑时全部按排版显示。
         let caret = match self.preview.markdown.live_drag {
-            Some((.., before)) if self.live_dragging() => before?,
+            Some(drag) if self.live_dragging() => drag.before?,
             _ => self.live_caret_source()?,
         };
         let delta = len as i64 - parsed.len as i64;
@@ -429,8 +445,52 @@ impl App {
         self.request_redraw();
     }
 
-    /// 处理可编辑预览上的鼠标按下：将文档的光标放到点中的字上；双击选中一个词，三击选中
-    /// 原文的一行，按住 ⇧ 时将选区扩展到该处。
+    /// 返回命中位置的字符偏移及其选区。正文按解析出的叶子块选择，代码等其他内容按原文行选择。
+    fn live_selection_at(&self, source: usize, unit: SelectionUnit) -> Option<(usize, Selection)> {
+        let doc = self.editor.active()?;
+        let rope = doc.text().rope()?;
+        let source = source.min(rope.len_bytes());
+        let pos = rope.byte_to_char(source);
+        let selection = match unit {
+            SelectionUnit::Character => Selection::point(pos),
+            SelectionUnit::Word => {
+                let (start, end) = winc_core::movement::word_at(doc.text(), pos);
+                Selection::new(start, end)
+            }
+            SelectionUnit::Paragraph => {
+                let md = &self.preview.markdown;
+                if md.doc == Some(doc.id)
+                    && md.checked == Some(doc.revision)
+                    && let Some(parsed) = &md.parsed
+                    && let Some(i) = parsed
+                        .leaves
+                        .partition_point(|l| l.range.start <= source)
+                        .checked_sub(1)
+                    && let Some(leaf) = parsed.leaves.get(i)
+                    && leaf.prose
+                    && source <= leaf.range.end
+                {
+                    let mut end = leaf.range.end;
+                    // 段尾换行隔开相邻段落；段落内部的原文换行属于同一次选择。
+                    while end > leaf.range.start
+                        && matches!(rope.get_byte(end - 1), Some(b'\r' | b'\n'))
+                    {
+                        end -= 1;
+                    }
+                    Selection::new(rope.byte_to_char(leaf.range.start), rope.byte_to_char(end))
+                } else {
+                    let line = rope.char_to_line(pos);
+                    let span = doc.text().line_span(line);
+                    let hidden = self.live_hidden_prefix(line);
+                    Selection::new((span.start + hidden).min(span.end), span.end)
+                }
+            }
+        };
+        Some((pos, selection))
+    }
+
+    /// 处理可编辑预览上的鼠标按下：单击定位光标，双击选词，三击选中整个 Markdown 段落。
+    /// 按住 ⇧ 单击时扩展已有选区。
     pub(super) fn click_live(&mut self, x: f32, y: f32) {
         // 按下之前的光标位置：未开始编辑时为 `None`，按住鼠标期间整篇按排版显示。
         let editing = self.editor.active().map(|d| d.id) == self.preview.markdown.editing;
@@ -456,74 +516,58 @@ impl App {
         let count = self.click_count(x, y);
         let shift = self.pointer.modifiers.shift_key();
         let upstream = count == 1 && self.live_row_affinity(source, y);
-        // 三击选中一行时不含预览中不显示的块标记：随后输入的文字不会替换掉列表记号。
-        let hidden = self
-            .editor
-            .active()
-            .and_then(|d| d.text().rope())
-            .map_or(0, |rope| {
-                let line = rope.byte_to_line(source.min(rope.len_bytes()));
-                self.live_hidden_prefix(line)
-            });
+        let unit = match count {
+            2 => SelectionUnit::Word,
+            3 => SelectionUnit::Paragraph,
+            _ => SelectionUnit::Character,
+        };
+        let Some((pos, mut origin)) = self.live_selection_at(source, unit) else {
+            return;
+        };
         let Some(doc) = self.editor.active_mut() else {
             return;
         };
-        let Some(rope) = doc.text().rope() else {
-            return;
-        };
-        let pos = rope.byte_to_char(source.min(rope.len_bytes()));
         self.preview.markdown.line_end = upstream.then_some((pos, doc.revision));
         self.preview.markdown.clicked = Some(source);
         doc.goal_cell = None;
         doc.record_cursors();
         doc.collapse_selections();
-        let (origin, by_word) = match count {
-            2 => (winc_core::movement::word_at(doc.text(), pos), true),
-            3 => {
-                let line = doc.text().pos_to_line_col(pos).0;
-                let span = doc.text().line_span(line);
-                (
-                    (span.start + hidden.min(span.end - span.start), span.end),
-                    true,
-                )
-            }
-            _ if shift => ((doc.selection.anchor, doc.selection.anchor), false),
-            _ => ((pos, pos), false),
-        };
-        doc.selection = if by_word {
-            winc_core::Selection::new(origin.0, origin.1)
+        if unit == SelectionUnit::Character && shift {
+            origin = Selection::point(doc.selection.anchor);
+            doc.selection = Selection::new(origin.anchor, pos);
         } else {
-            winc_core::Selection::new(origin.0, pos)
-        };
-        self.preview.markdown.live_drag = Some((origin, by_word, before));
+            doc.selection = origin;
+        }
+        self.preview.markdown.live_drag = Some(LiveDrag {
+            origin,
+            unit,
+            before,
+        });
         self.pointer.drag = crate::app::Drag::MarkdownText;
         self.start_live_editing();
         self.reset_blink();
     }
 
-    /// 处理可编辑预览上的拖动选择：选区从按下处延伸到鼠标下方的字。
+    /// 按发起拖动时的单位扩展选区：字符、词或段落。
     pub(super) fn drag_live(&mut self, x: f32, y: f32) {
-        let Some((origin, by_word, _)) = self.preview.markdown.live_drag else {
+        let Some(LiveDrag { origin, unit, .. }) = self.preview.markdown.live_drag else {
             return;
         };
         let Some(source) = crate::app::preview::markdown::laid::source_at(self, x, y) else {
             return;
         };
-        let upstream = !by_word && self.live_row_affinity(source, y);
+        let Some((pos, target)) = self.live_selection_at(source, unit) else {
+            return;
+        };
+        let upstream = unit == SelectionUnit::Character && self.live_row_affinity(source, y);
         let Some(doc) = self.editor.active_mut() else {
             return;
         };
-        let Some(rope) = doc.text().rope() else {
-            return;
-        };
-        let pos = rope.byte_to_char(source.min(rope.len_bytes()));
         self.preview.markdown.line_end = upstream.then_some((pos, doc.revision));
-        doc.selection = if !by_word {
-            winc_core::Selection::new(origin.0, pos)
-        } else if pos < origin.0 {
-            winc_core::Selection::new(origin.1, winc_core::movement::word_at(doc.text(), pos).0)
+        doc.selection = if unit != SelectionUnit::Character && pos < origin.anchor {
+            Selection::new(origin.head, target.anchor)
         } else {
-            winc_core::Selection::new(origin.0, winc_core::movement::word_at(doc.text(), pos).1)
+            Selection::new(origin.anchor, target.head)
         };
         self.reset_blink();
     }

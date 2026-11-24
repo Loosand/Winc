@@ -963,6 +963,66 @@ fn the_live_preview_hides_its_caret_until_clicked_and_ignores_the_margins() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn triple_click_keeps_a_wrapped_list_item_selected_during_mouse_movement() {
+    let item = format!(
+        "[组件库](https://example.com) （图赏）：{}末尾。",
+        "这条列表项很长，应该一直选到最后。".repeat(8)
+    );
+    let source = format!("- 前一项\n- {item}\n- 后一项\n");
+    let (mut app, dir) = live_doc("md-triple-wrapped-item", &source);
+    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let point = |needle: &str| point_of(&app, shown[..shown.find(needle).unwrap()].chars().count());
+    let (x, y) = point("图赏");
+    assert!(point("末尾").1 > y, "the list item should wrap");
+    let start = "- 前一项\n- ".chars().count();
+    let expected = start..start + item.chars().count();
+    super::click(&mut app, (x, y));
+    super::click(&mut app, (x, y));
+    app.on_mouse_down(MouseButton::Left);
+    let before_move = app.editor.active().unwrap().selection.range();
+    app.on_mouse_move(x + 2.0, y);
+    app.on_mouse_up(MouseButton::Left);
+    let after_move = app.editor.active().unwrap().selection.range();
+    assert_eq!(after_move, before_move);
+    assert_eq!(after_move, expected);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn triple_click_drag_extends_by_markdown_paragraphs_in_either_direction() {
+    let first = "前段的开头\r\n前段的结尾";
+    let middle = "中段的开头\r\n中段的结尾";
+    let last = "后段的开头\r\n后段的结尾";
+    let source = format!("{first}\r\n\r\n{middle}\r\n\r\n{last}\r\n");
+    let start = first.chars().count() + 4;
+    let end = start + middle.chars().count();
+    let source_end = source.chars().count() - 2;
+    for (target, expected) in [
+        ("前段的结尾", winc_core::Selection::new(end, 0)),
+        ("后段的开头", winc_core::Selection::new(start, source_end)),
+    ] {
+        let (mut app, dir) = live_doc("md-triple-source-lines", &source);
+        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let point = |needle: &str| {
+            point_of(
+                &app,
+                shown[..shown.find(needle).unwrap()].chars().count() + 1,
+            )
+        };
+        let origin = point("中段的结尾");
+        let (x, y) = point(target);
+        super::click(&mut app, origin);
+        super::click(&mut app, origin);
+        app.on_mouse_down(MouseButton::Left);
+        assert_eq!(app.editor.active().unwrap().selection.range(), start..end);
+        app.on_mouse_move(x, y);
+        app.on_mouse_up(MouseButton::Left);
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// 回归：单独成行的公式中没有可定位的文字，点击后光标仍应进入公式的原文，公式随之显示原文、
 /// 可以编辑（`$$…$$` 和语言为 math 的围栏代码块都是如此）。
 #[test]
