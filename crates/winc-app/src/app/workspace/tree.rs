@@ -491,6 +491,11 @@ impl App {
 
     /// 返回第 `index` 个条目所在行的上沿在窗口中的纵坐标（逻辑像素），排布规则与绘制相同。
     pub(crate) fn tree_row_top(&self, index: usize) -> f32 {
+        self.tree_row_geometry(index).0.y
+    }
+
+    /// 返回普通树行的位置和裁剪区域，包含目录动画和新建输入行造成的偏移。
+    pub(crate) fn tree_row_geometry(&self, index: usize) -> (Rect, Rect) {
         let rows = self
             .editor
             .workspace
@@ -509,8 +514,6 @@ impl App {
         let hidden = motion.map_or(0.0, |m| m.hidden(row_height));
         let scroll = crate::layout::drawn_scroll(self.panels.tree.scroll);
         tree_row_slot_at_height(self.layout.tree, scroll, v, block, hidden, row_height)
-            .0
-            .y
     }
 
     /// 返回文件树顶部最多固定的层数：不超过树高的 40%，也不超过 [`STICKY_MAX`]。

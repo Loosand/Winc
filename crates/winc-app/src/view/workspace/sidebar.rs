@@ -1073,21 +1073,7 @@ pub(in crate::view) fn tree_overflow(app: &App, frame: &mut Frame<'_>) -> Option
         return None;
     }
     let tree = app.layout.tree;
-    // 固定在顶部的目录在固定的位置继续绘制。
-    let row = match app.tree_sticky().into_iter().find(|s| s.index == index) {
-        Some(sticky) => sticky.rect,
-        None => {
-            tree_row_slot_at_height(
-                tree,
-                drawn_scroll(app.panels.tree.scroll),
-                app.tree_slot_of(index),
-                None,
-                0.0,
-                app.tree_row_height(),
-            )
-            .0
-        }
-    };
+    let (row, clip) = overflow_row(app, index);
     let shift = -app.panels.tree.scroll_x;
     let end = tree_label_x(row, entry.depth, shift) + label_width(app, frame, entry);
 
@@ -1095,9 +1081,8 @@ pub(in crate::view) fn tree_overflow(app: &App, frame: &mut Frame<'_>) -> Option
         return None;
     }
 
-    let right = (end + 8.0).min(app.layout.window.right() - 8.0);
-    let rect = Rect::new(tree.right(), row.y + 1.0, right - tree.right(), row.h - 2.0);
-    (rect.w > 0.0 && app.mouse().0 < rect.right()).then_some((rect, index))
+    let rect = overflow_rect(app, row, clip, end);
+    (rect.w > 0.0 && rect.h > 0.0 && app.mouse().0 < rect.right()).then_some((rect, index))
 }
 
 /// 在编辑区上方继续绘制放不下的文件名：底色和文本都与文件树中的那一行连成一体。
@@ -1108,8 +1093,16 @@ pub(in crate::view) fn draw_tree_overflow(app: &App, frame: &mut Frame<'_>) {
     let Some(entry) = ws.rows().get(index) else {
         return;
     };
+    let (row, _) = overflow_row(app, index);
     let view = app.panels.tree.labels.peek(label_key(entry));
-    draw_overflow_band(app, frame, (entry, index), rect, view.as_ref(), false);
+    draw_overflow_band(
+        app,
+        frame,
+        (entry, index),
+        (row, rect),
+        view.as_ref(),
+        false,
+    );
 }
 
 /// 绘制鼠标移开后正在收回的名字：不响应点击，收回到侧栏边缘时消失。
@@ -1122,7 +1115,6 @@ pub(in crate::view) fn draw_tree_overflow_closing(app: &App, frame: &mut Frame<'
         return;
     };
     let open = app.panels.tree.overflow.map(|(_, index)| index);
-    let tree = app.layout.tree;
     for (key, view) in app.panels.tree.labels.moving_rows() {
         let Some(index) = ws.row_of(&key).filter(|&index| Some(index) != open) else {
             continue;
@@ -1131,33 +1123,36 @@ pub(in crate::view) fn draw_tree_overflow_closing(app: &App, frame: &mut Frame<'
         if app.cloud_status(&entry.path).is_some() {
             continue;
         }
-        let row = overflow_row(app, index);
+        let (row, clip) = overflow_row(app, index);
         let end = tree_label_x(row, entry.depth, -app.panels.tree.scroll_x) + view.width;
-        let right = (end + 8.0).min(app.layout.window.right() - 8.0);
-        let rect = Rect::new(tree.right(), row.y + 1.0, right - tree.right(), row.h - 2.0);
-        if rect.w > 0.0 {
-            draw_overflow_band(app, frame, (entry, index), rect, Some(&view), true);
+        let rect = overflow_rect(app, row, clip, end);
+        if rect.w > 0.0 && rect.h > 0.0 {
+            draw_overflow_band(app, frame, (entry, index), (row, rect), Some(&view), true);
         }
     }
 }
 
-/// 返回第 `index` 行在文件树中的矩形；固定在顶部的目录在固定的位置。
-fn overflow_row(app: &App, index: usize) -> Rect {
+/// 返回行的位置和可见区域。固定目录只露出未被更外层目录覆盖的部分。
+fn overflow_row(app: &App, index: usize) -> (Rect, Rect) {
     let tree = app.layout.tree;
-    match app.tree_sticky().into_iter().find(|s| s.index == index) {
-        Some(sticky) => sticky.rect,
-        None => {
-            tree_row_slot_at_height(
-                tree,
-                drawn_scroll(app.panels.tree.scroll),
-                app.tree_slot_of(index),
-                None,
-                0.0,
-                app.tree_row_height(),
-            )
-            .0
+    let mut top = tree.y;
+    let below = |top: f32| Rect::new(tree.x, top, tree.w, (tree.bottom() - top).max(0.0));
+    for sticky in app.tree_sticky() {
+        if sticky.index == index {
+            return (sticky.rect, below(top));
         }
+        top = top.max(sticky.rect.bottom());
     }
+    let (row, clip) = app.tree_row_geometry(index);
+    (row, clip.intersect(below(top)))
+}
+
+fn overflow_rect(app: &App, row: Rect, clip: Rect, end: f32) -> Rect {
+    let left = app.layout.tree.right();
+    let right = (end + 8.0).min(app.layout.window.right() - 8.0);
+    let w = right - left;
+    let band = Rect::new(left, row.y + 1.0, w, row.h - 2.0);
+    band.intersect(Rect::new(left, clip.y, w, clip.h))
 }
 
 /// 在 `rect` 中绘制第 `index` 行超出侧栏的部分，按 `view` 的当前宽度露出。
@@ -1167,7 +1162,7 @@ fn draw_overflow_band(
     app: &App,
     frame: &mut Frame<'_>,
     (entry, index): (&Entry, usize),
-    rect: Rect,
+    (row, rect): (Rect, Rect),
     view: Option<&LabelView>,
     closing: bool,
 ) {
@@ -1176,7 +1171,6 @@ fn draw_overflow_band(
     };
     let p = app.palette;
     let tree = app.layout.tree;
-    let row = Rect::new(tree.x, rect.y - 1.0, tree.w, rect.h + 2.0);
     let x = tree_label_x(row, entry.depth, -app.panels.tree.scroll_x);
     // 命中范围按完整宽度计算，绘制时才按当前宽度露出：过渡途中鼠标移过去不会落空。
     let right = view.map_or(rect.right(), |v| rect.right().min(x + v.width + 8.0));
@@ -1185,8 +1179,8 @@ fn draw_overflow_band(
     }
     // 这一行在最上层：底色从滚动条的范围起，滚动条只被这一行的高度挡住，上下两段照常显示。
     let left = tree.right() - SCROLLBAR_HIT;
-    let rect = Rect::new(left, rect.y, right - left, rect.h);
-    let clip = Rect::new(rect.x, tree.y, rect.w, tree.h);
+    let clip = Rect::new(left, rect.y, right - left, rect.h);
+    let rect = Rect::new(left, row.y + 1.0, clip.w, row.h - 2.0);
     let radii = [0.0, RADIUS_ROW, RADIUS_ROW, 0.0];
     let selected = ws.is_selected(index);
     let focused = app.focus == Focus::Tree;

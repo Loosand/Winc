@@ -924,6 +924,65 @@ fn a_retracting_name_is_not_drawn_once_the_tree_is_hidden() {
     assert_eq!(band, below);
 }
 
+#[test]
+fn a_long_name_is_clipped_by_the_pinned_folder_while_hovering_and_retracting() {
+    let dir = sample_folder("overflow-sticky-folder");
+    let folder = dir.join("Shelf");
+    std::fs::create_dir_all(&folder).unwrap();
+    let long = "a_long_file_name_that_should_not_float_over_the_editor_when_hidden.md";
+    std::fs::write(folder.join(long), "").unwrap();
+    for i in 0..40 {
+        std::fs::write(folder.join(format!("b-note-{i:02}.md")), "").unwrap();
+    }
+    let mut app = blank_app(false);
+    app.panels.sidebar.legacy_chrome = false;
+    app.panels.sidebar.width = 230.0;
+    app.open_path(&dir);
+    let shelf = row_of(&app, "Shelf");
+    app.set_dir_expanded(shelf, Some(true));
+    app.panels.tree.labels.animate_without_window = true;
+    paint(&mut app);
+    let row = row_of(&app, "a_long_file");
+    let tree = app.layout.tree;
+    let h = app.tree_row_height();
+    app.on_mouse_move(tree.x + 90.0, app.tree_row_top(row) + h / 2.0);
+    paint(&mut app);
+    app.panels.tree.labels.finish();
+    paint(&mut app);
+
+    app.panels.tree.scroll = row as f32 * h - 6.0;
+    app.on_mouse_move(tree.x + 90.0, tree.y + h + 3.0);
+    paint(&mut app);
+    let pinned = app.tree_sticky()[0].rect;
+    let (overflow, index) = app.panels.tree.overflow.unwrap();
+    assert_eq!(index, row);
+
+    app.panels.tree.scroll = row as f32 * h;
+    paint(&mut app);
+    assert!(app.panels.tree.overflow.is_none());
+    assert!(app.panels.tree.labels.moving());
+    let pixel = |app: &App| {
+        let image = app.frame.renderer.as_ref().unwrap().image().unwrap();
+        let x = ((tree.right() + 24.0) * SCALE) as usize;
+        let y = ((tree.y + 4.0) * SCALE) as usize;
+        image.pixels[y * image.width as usize + x]
+    };
+    let during = pixel(&app);
+    app.panels.tree.labels.finish();
+    paint(&mut app);
+    assert_eq!(
+        during,
+        pixel(&app),
+        "a fully covered row still paints its name"
+    );
+    assert_eq!(
+        overflow.y,
+        pinned.bottom(),
+        "the hover band overlaps the pinned row"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// 符号链接的图标左下角有箭头角标，名称和行尾与普通文件相同。
 #[cfg(unix)]
 #[test]
