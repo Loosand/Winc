@@ -1547,3 +1547,54 @@ fn task_items_can_be_typed() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[test]
+fn deleting_hidden_multiline_emphasis_removes_only_fully_selected_delimiters() {
+    use winc_core::Selection;
+    use winc_editor::Command;
+
+    let source = "前 **甲\r\n乙** 后";
+    let (mut app, dir) = live_doc("md-delete-multiline-bold", source);
+    let at = |word| source[..source.find(word).unwrap()].chars().count();
+
+    let selection = Selection::new(at("** 后"), at("甲"));
+    app.editor.active_mut().unwrap().selection = selection;
+    settle(&mut app);
+    app.run(Command::Delete { word: false });
+    assert_eq!(doc_text(&app), "前  后");
+    app.run(Command::Undo);
+    assert_eq!(doc_text(&app), source);
+    assert_eq!(app.editor.active().unwrap().selection, selection);
+
+    app.editor.active_mut().unwrap().selection = Selection::new(at("甲"), at("乙"));
+    settle(&mut app);
+    app.run(Command::Delete { word: false });
+    assert_eq!(doc_text(&app), "前 **乙** 后");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_table_cell_in_verbatim_layout_displays_ime_preedit() {
+    use crate::app::preview::markdown::laid::full_text;
+    use winit::event::Ime;
+
+    let source = "| A | B |\n|---|---|\n| > 待补 | normal |\n";
+    let (mut app, dir) = live_doc("md-table-literal-preedit", source);
+    put_caret(&mut app, "待补", true);
+    app.on_ime(Ime::Preedit("nihao".into(), Some((5, 5))));
+    paint(&mut app);
+    assert!(full_text(&app).unwrap().contains("> 待补nihao"));
+    assert_eq!(doc_text(&app), source);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn source_lookup_finds_footnotes_in_display_order() {
+    let source = "ref[^a]\n\n[^a]: note\n\nnext\n\nlast\n";
+    let (app, dir) = live_doc("md-focus-footnote-source", source);
+    let laid = app.preview.markdown.layout.as_ref().unwrap();
+    let footnote = laid.block_at_source(source.find("note").unwrap());
+    assert_eq!(footnote, Some(laid.blocks.len() - 1));
+    assert_eq!(laid.block_at_source(source.find("next").unwrap()), Some(1));
+    std::fs::remove_dir_all(dir).unwrap();
+}

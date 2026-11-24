@@ -771,6 +771,14 @@ pub(crate) fn line_box(baseline: f32, size: f32) -> (f32, f32) {
 }
 
 impl Laid {
+    /// 查找原文字节所属的显示块。脚注的显示顺序与原文不同。
+    pub(crate) fn block_at_source(&self, source: usize) -> Option<usize> {
+        self.ranges
+            .iter()
+            .rposition(|range| range.contains(&source))
+            .or_else(|| self.ranges.iter().rposition(|range| range.end == source))
+    }
+
     /// 是否仍有沿用旧结果的块。
     pub(crate) fn pending(&self) -> bool {
         !self.stale.is_empty()
@@ -868,11 +876,7 @@ impl Laid {
         let Some((x, y, _)) = self.caret_point(source) else {
             return;
         };
-        let Some(block) = self
-            .ranges
-            .iter()
-            .rposition(|r| r.start <= source && source <= r.end)
-        else {
+        let Some(block) = self.block_at_source(source) else {
             return;
         };
         let y = y - self.pad - self.tops[block];
@@ -1328,10 +1332,7 @@ fn point_of_with_affinity(laid: &Laid, source: usize, upstream: bool) -> Option<
         return Some(point);
     }
     // 脚注排在最后，原文范围不按先后，从后往前找第一个包含它的块。
-    let block = laid
-        .ranges
-        .iter()
-        .rposition(|r| r.start <= source && source <= r.end)?;
+    let block = laid.block_at_source(source)?;
     let source = source - laid.ranges[block].start;
     // 光标应画在上一显示行的末尾：取原文位置在它之前的最后一段，该段正好在此结束时用其末尾。
     if upstream
@@ -1366,10 +1367,7 @@ pub(crate) fn font_at(
     laid: &Laid,
     source: usize,
 ) -> Option<(winc_render::FontKind, winc_render::Faux, f32)> {
-    let block = laid
-        .ranges
-        .iter()
-        .rposition(|r| r.start <= source && source <= r.end)?;
+    let block = laid.block_at_source(source)?;
     let source = source - laid.ranges[block].start;
     laid.blocks[block]
         .1

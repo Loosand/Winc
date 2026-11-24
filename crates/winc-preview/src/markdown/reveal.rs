@@ -5,6 +5,7 @@
 //! 按当前原文解析该段落，不等待后台解析，输入快于解析时结果仍然正确。显示的文字逐字对应原文，
 //! 标记同样有原文位置，光标、选区和删除都作用于原文。
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use pulldown_cmark::{Event, Parser, Tag};
@@ -24,31 +25,28 @@ pub fn reveal(
     insert: Option<&str>,
     leading_quote: bool,
 ) -> Block {
+    let insert = caret.zip(insert);
     let lines = Lines::strip(text, leading_quote);
     let plain = &lines.plain;
     // 去掉引用标记后没有内容（只输入了 `>`）：逐字显示原文，光标仍有位置可落。
     if plain.trim().is_empty() && !text.trim().is_empty() {
-        let mut out = Out::default();
-        for (i, c) in text.trim_end_matches(['\n', '\r']).char_indices() {
-            out.push(c, Style::default(), Some(i));
-        }
-        return Block::Paragraph(Inline {
-            text: out.text,
-            runs: out.runs,
-            map: out.map,
-            ..Inline::default()
-        });
+        let text = text.trim_end_matches(['\n', '\r']);
+        return Block::Paragraph(verbatim(text, insert, Some));
     }
     let parsed = parse(plain);
     let (heading, inline) = match parsed.blocks.as_slice() {
         [Block::Paragraph(inline)] => (None, inline),
         [Block::Heading(level, inline)] => (Some(*level), inline),
-        _ => return Block::Paragraph(lines.verbatim()),
+        _ => {
+            let text = plain.trim_end_matches(['\n', '\r']);
+            return Block::Paragraph(verbatim(text, insert, |at| Some(lines.to_text(at))));
+        }
     };
     let base = parsed.ranges.first().map_or(0, |r| r.start) + inline.source;
-    let elements = elements(plain);
+    let ranges = caret.map_or_else(Vec::new, |_| elements(plain));
+    let elements = ElementIndex::new(&ranges);
     let mut out = Out {
-        insert: caret.zip(insert).map(|(at, text)| (at, text.to_owned())),
+        insert,
         quote: caret.and_then(|at| quote_at(text, at, leading_quote)),
         ..Out::default()
     };
@@ -99,6 +97,32 @@ pub fn reveal(
     }
 }
 
+/// 在可编辑段落中补齐选区完整覆盖的隐藏标记，返回原文中的字节范围。
+pub fn include_hidden_paragraph_markers(
+    text: &str,
+    selection: Range<usize>,
+    revealed_at: Option<usize>,
+) -> Range<usize> {
+    let lines = Lines::strip(text, false);
+    let selected = lines.to_plain(selection.start)..lines.to_plain(selection.end);
+    let expanded = super::clipboard::include_hidden_markers(
+        &lines.plain,
+        selected.clone(),
+        revealed_at.map(|at| lines.to_plain(at)),
+    );
+    let start = if expanded.start < selected.start {
+        lines.to_text(expanded.start)
+    } else {
+        selection.start
+    };
+    let end = if expanded.end > selected.end {
+        lines.to_text(expanded.end)
+    } else {
+        selection.end
+    };
+    start..end
+}
+
 /// 带标记的行内元素在 `plain` 中的字节范围。
 ///
 /// 包括强调、粗体、删除线、高亮、链接、图片、行内代码、公式、HTML 标签和脚注引用。
@@ -130,9 +154,11 @@ fn elements(plain: &str) -> Vec<Range<usize>> {
             elements.push(range);
         }
     }
+    code.sort_unstable_by_key(|range| range.end);
     elements.extend(
         super::mark::pairs(plain, |at| {
-            code.iter().any(|range| range.contains(&at)) || super::mark::escaped(plain, at)
+            let i = code.partition_point(|range| range.end <= at);
+            code.get(i).is_some_and(|range| range.contains(&at)) || super::mark::escaped(plain, at)
         })
         .into_iter()
         .map(|[open, close]| open.start..close.end),
@@ -140,12 +166,36 @@ fn elements(plain: &str) -> Vec<Range<usize>> {
     elements
 }
 
-/// 返回包含位置 `at` 的最内层元素。
-fn innermost(elements: &[Range<usize>], at: usize) -> Option<&Range<usize>> {
-    elements
-        .iter()
-        .filter(|e| e.contains(&at))
-        .min_by_key(|e| e.len())
+/// 原文字节对应的最内层元素只在起止边界变化。保留同样长时先遇到的元素。
+struct ElementIndex<'a>(Vec<(usize, Option<&'a Range<usize>>)>);
+
+impl<'a> ElementIndex<'a> {
+    fn new(ranges: &'a [Range<usize>]) -> Self {
+        let mut boundaries: Vec<_> = ranges
+            .iter()
+            .enumerate()
+            .filter(|(_, range)| !range.is_empty())
+            .flat_map(|(i, range)| [(range.start, true, i), (range.end, false, i)])
+            .collect();
+        boundaries.sort_unstable();
+        let mut open = BTreeSet::new();
+        let mut innermost = Vec::with_capacity(boundaries.len());
+        for (at, start, i) in boundaries {
+            let entry = (ranges[i].len(), i);
+            if start {
+                open.insert(entry);
+            } else {
+                open.remove(&entry);
+            }
+            innermost.push((at, open.first().map(|&(_, i)| &ranges[i])));
+        }
+        Self(innermost)
+    }
+
+    fn at(&self, at: usize) -> Option<&Range<usize>> {
+        let i = self.0.partition_point(|(start, _)| *start <= at);
+        self.0.get(i.checked_sub(1)?)?.1
+    }
 }
 
 /// 返回光标是否接触 `range`：位于其中或紧贴其两端。
@@ -221,22 +271,29 @@ impl Lines {
         let next = self.starts.get(i).map_or(usize::MAX, |&(p, _)| p);
         (p + (at - t)).min(next)
     }
+}
 
-    /// 返回按原文逐字显示、保留换行且不带样式的文字。
-    fn verbatim(&self) -> Inline {
-        let mut out = Out::default();
-        let text = self.plain.trim_end_matches(['\n', '\r']);
-        for (i, c) in text.char_indices() {
-            if c != '\r' {
-                out.push(c, Style::default(), Some(self.to_text(i)));
-            }
+/// 逐字显示时也在原文位置插入组字。
+fn verbatim(
+    text: &str,
+    insert: Option<(usize, &str)>,
+    source: impl Fn(usize) -> Option<usize>,
+) -> Inline {
+    let mut out = Out {
+        insert,
+        ..Out::default()
+    };
+    for (i, c) in text.char_indices() {
+        if c != '\r' {
+            out.push(c, Style::default(), source(i));
         }
-        Inline {
-            text: out.text,
-            runs: out.runs,
-            map: out.map,
-            ..Inline::default()
-        }
+    }
+    out.flush();
+    Inline {
+        text: out.text,
+        runs: out.runs,
+        map: out.map,
+        ..Inline::default()
     }
 }
 
@@ -247,7 +304,7 @@ struct Out<'a> {
     runs: Vec<Run>,
     map: SourceMap,
     /// 尚未写入的输入法组字及其在原文中的位置；写入到原文位置不小于该值的第一个字符之前。
-    insert: Option<(usize, String)>,
+    insert: Option<(usize, &'a str)>,
     quote: Option<(&'a str, usize)>,
 }
 
@@ -303,23 +360,24 @@ impl Out<'_> {
         inline: &Inline,
         range: Range<usize>,
         source: Option<(usize, &Lines)>,
-        elements: &[Range<usize>],
+        elements: &ElementIndex<'_>,
         caret: Option<usize>,
     ) {
-        let mut runs = inline.runs().skip_while(|(r, _)| r.end <= range.start);
-        let mut run = runs.next();
+        if range.is_empty() {
+            return;
+        }
+        let first = inline.runs.partition_point(|run| run.end <= range.start);
+        let mut runs = inline.runs[first..].iter().peekable();
         for (i, c) in inline.text[range.clone()].char_indices() {
             let at = range.start + i;
-            while let Some((r, _)) = &run
-                && r.end <= at
-            {
-                run = runs.next();
+            while runs.peek().is_some_and(|run| run.end <= at) {
+                runs.next();
             }
-            let mut style = run.as_ref().map_or(Style::default(), |(_, s)| *s);
+            let mut style = runs.peek().map_or(Style::default(), |run| run.style);
             let plain = source.map(|(s, _)| s + i);
             if style.has(Style::MATH)
                 && plain
-                    .and_then(|p| innermost(elements, p))
+                    .and_then(|p| elements.at(p))
                     .is_some_and(|e| touches(e, caret))
             {
                 style.flags = (style.flags & !Style::MATH) | Style::CODE;
@@ -337,25 +395,31 @@ impl Out<'_> {
         &mut self,
         plain: &str,
         gap: Range<usize>,
-        elements: &[Range<usize>],
+        elements: &ElementIndex<'_>,
         caret: Option<usize>,
         own: bool,
         lines: &Lines,
     ) -> bool {
+        if caret.is_none() {
+            return false;
+        }
         let mut shown = false;
         let text = &plain[gap.clone()];
         // 不属于任何元素的一段，截止到换行。
         let piece = |i: usize| {
+            if own {
+                return 0..text.len();
+            }
             let from = text[..i].rfind('\n').map_or(0, |n| n + 1);
             let to = text[i..].find('\n').map_or(text.len(), |n| i + n);
-            if own { 0..text.len() } else { from..to }
+            from..to
         };
         for (i, c) in text.char_indices() {
             if matches!(c, '\n' | '\r') {
                 continue;
             }
             let at = gap.start + i;
-            let show = match innermost(elements, at) {
+            let show = match elements.at(at) {
                 Some(e) => touches(e, caret),
                 None => {
                     let p = piece(i);

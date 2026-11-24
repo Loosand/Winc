@@ -403,13 +403,9 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         .partition_point(|&t| origin_y + t <= area.y)
         .saturating_sub(1);
     // 专注模式：光标所在的块以外画得淡一些。
-    let focused = live_caret.filter(|_| focus).and_then(|source| {
-        let i = laid
-            .ranges
-            .partition_point(|r| r.start <= source)
-            .checked_sub(1)?;
-        (source <= laid.ranges[i].end).then_some(i)
-    });
+    let focused = live_caret
+        .filter(|_| focus)
+        .and_then(|source| laid.block_at_source(source));
     let editing_yaml = !app.panes.drawing_background
         && app
             .overlays
@@ -826,10 +822,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         } else {
             (y, h)
         };
-        let block = laid
-            .ranges
-            .iter()
-            .rposition(|r| r.start <= source && source <= r.end);
+        let block = laid.block_at_source(source);
         let shift = motion.as_ref().zip(block).map_or(0.0, |(m, b)| {
             // 光标位于刚显示原文的块的渲染结果中时，加上渲染结果的偏移。
             let below = laid.blocks[b]

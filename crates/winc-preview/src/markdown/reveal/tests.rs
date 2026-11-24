@@ -80,3 +80,16 @@ fn highlight_markers_show_when_touched() {
     // 转义的 `\==` 是文字，不随光标显示为标记。
     assert_eq!(shown("前面 \\==高|亮== 后面"), "前面 ==高亮== 后面");
 }
+
+#[test]
+fn expanding_selection_across_a_quote_continuation_uses_source_offsets() {
+    let source = "前 **甲\r\n> 乙** 后";
+    let selected = source.find('甲').unwrap()..source.find("** 后").unwrap();
+    let expanded = include_hidden_paragraph_markers(source, selected.clone(), None);
+    assert_eq!(&source[expanded], "**甲\r\n> 乙**");
+    let caret = Some(source.find('甲').unwrap());
+    assert_eq!(
+        include_hidden_paragraph_markers(source, selected.clone(), caret),
+        selected
+    );
+}

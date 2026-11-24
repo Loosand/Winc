@@ -210,6 +210,14 @@ impl App {
         );
         let (first, last) = (rope.byte_to_line(from), rope.byte_to_line(to));
         let (mut start, mut end) = (from, to);
+        let Some(parsed) = preview
+            .parsed
+            .as_ref()
+            .filter(|_| preview.checked == Some(doc.revision))
+        else {
+            return Some(selection.range());
+        };
+        let mut paragraph = None;
         for line in std::iter::once(first).chain((last != first).then_some(last)) {
             let text = rope.line(line);
             if text.len_bytes() > 32 * 1024 {
@@ -219,16 +227,44 @@ impl App {
             let text = text.to_string();
             let text = text.trim_end_matches(['\r', '\n']);
             let part = from.saturating_sub(base)..(to - base).min(text.len());
-            if part.is_empty()
-                || (self.live_prose_at(base + part.start) != Some(true)
-                    && self.live_prose_at(base + part.end) != Some(true))
-            {
+            if part.is_empty() {
                 continue;
             }
-            let revealed_at = revealed_at
-                .and_then(|at| at.checked_sub(base))
-                .filter(|&at| at <= text.len());
-            let mut expanded = clipboard::include_hidden_markers(text, part, revealed_at);
+            let leaf = [base + part.start, base + part.end - 1]
+                .into_iter()
+                .find_map(|at| {
+                    super::live_structure::leaf_at_or_before(parsed, at)
+                        .filter(|leaf| leaf.prose && leaf.range.contains(&at))
+                });
+            let Some(leaf) = leaf else {
+                continue;
+            };
+            let range = &leaf.range;
+            let multi_line =
+                rope.byte_to_line(range.start) != rope.byte_to_line(range.end.saturating_sub(1));
+            let relative_caret = |base: usize, len: usize| {
+                revealed_at
+                    .and_then(|at| at.checked_sub(base))
+                    .filter(|&at| at <= len)
+            };
+            let mut expanded = if multi_line && range.len() <= 32 * 1024 {
+                if paragraph != Some(range.start) {
+                    let source = std::borrow::Cow::<str>::from(rope.byte_slice(range.clone()));
+                    let selected =
+                        from.saturating_sub(range.start)..(to - range.start).min(source.len());
+                    let expanded = winc_preview::markdown::reveal::include_hidden_paragraph_markers(
+                        &source,
+                        selected,
+                        relative_caret(range.start, source.len()),
+                    );
+                    start = start.min(range.start + expanded.start);
+                    end = end.max(range.start + expanded.end);
+                    paragraph = Some(range.start);
+                }
+                start.saturating_sub(base)..(end - base).min(text.len())
+            } else {
+                clipboard::include_hidden_markers(text, part, relative_caret(base, text.len()))
+            };
             if let Some(marker) = enter::list_prefix(text)
                 && expanded.start <= marker.end
                 && expanded.end >= text.trim_end().len()

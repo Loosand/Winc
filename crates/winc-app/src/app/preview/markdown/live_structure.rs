@@ -217,7 +217,7 @@ impl App {
     }
 }
 
-fn leaf_at_or_before(parsed: &Markdown, source: usize) -> Option<&LeafRange> {
+pub(super) fn leaf_at_or_before(parsed: &Markdown, source: usize) -> Option<&LeafRange> {
     let end = parsed
         .leaves
         .partition_point(|leaf| leaf.range.start <= source);
