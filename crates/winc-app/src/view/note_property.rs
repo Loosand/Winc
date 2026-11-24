@@ -4,10 +4,12 @@ use super::*;
 use crate::app::Focus;
 use crate::app::git::branch::picker::PickerPart;
 use crate::app::preview::markdown::properties::popup::{
-    CalendarPart, ChoiceRow, PropertyPopup, first_weekday, today,
+    CALENDAR_FOOTER, CALENDAR_HEADER, CALENDAR_PAD, CALENDAR_WEEK, CALENDAR_WEEKDAYS, CalendarPart,
+    ChoiceRow, PropertyInput, PropertyPopup, first_weekday, today,
 };
 use crate::layout::PickerParts;
-use winc_preview::markdown::properties::{Kind, date_parts, days_in_month};
+use winc_preview::markdown::properties::{date_parts, days_in_month};
+use winc_render::Stroke;
 
 pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let rect = app.layout.picker;
@@ -18,11 +20,69 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let Some(popup) = &app.overlays.picker.property else {
         return;
     };
-    let kind = popup.kind();
-    let parts = popup.parts(rect);
+    let (input, anchor, choices, calendar) =
+        (popup.input, popup.anchor, popup.choices(), popup.calendar());
+    let placeholder = match input {
+        PropertyInput::Name => t!("properties-name-placeholder"),
+        PropertyInput::ListItem => t!("properties-item-placeholder"),
+        PropertyInput::Source => "",
+        PropertyInput::Value if choices => t!("properties-choice-placeholder"),
+        PropertyInput::Value => popup.kind().sample(),
+    };
+    if !choices {
+        let source = input == PropertyInput::Source;
+        let shell = if source {
+            anchor
+        } else {
+            anchor.inset(0.0, 2.0)
+        };
+        let p = app.palette;
+        frame.rect_clipped(
+            shell,
+            p.accent.alpha(if source { 0.42 } else { 0.75 }),
+            6.0,
+            anchor,
+        );
+        let inside = shell.inset(1.0, 1.0);
+        frame.rect_clipped(inside, p.editor_bg, 5.0, anchor);
+        if source {
+            frame.rect_clipped(inside, p.group_bg, 5.0, anchor);
+        }
+        let field = if source {
+            inside.inset(9.0, 4.0)
+        } else {
+            inside.inset(4.0, 0.0)
+        };
+        let mut text = std::mem::take(&mut app.overlays.picker.input);
+        let focused = app.focus == Focus::Picker;
+        app.ime.cursor = if input == PropertyInput::Source {
+            let wrap = super::fields::wrap_area_field_font(
+                app,
+                frame,
+                field.w,
+                &mut text,
+                focused,
+                FontKind::Mono,
+            );
+            super::fields::draw_area_field(app, frame, field, &mut text, wrap, placeholder, focused)
+        } else {
+            draw_bar_field(app, frame, field, &mut text, placeholder, focused)
+        };
+        app.overlays.picker.input = text;
+        if !calendar {
+            return;
+        }
+    }
     let p = app.palette;
     draw_card(frame, p, rect, 8.0, p.popup_bg);
-
+    let popup = app.overlays.picker.property.as_ref().unwrap();
+    let parts = popup.parts(rect);
+    if calendar {
+        app.hits
+            .picker_parts
+            .extend(draw_calendar(app, frame, popup, parts));
+        return;
+    }
     let shell = parts.bar.inset(6.0, 4.0);
     frame.rect_clipped(
         shell,
@@ -30,62 +90,29 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         5.0,
         rect,
     );
-    let submit = if kind.is_choice() {
-        0.0
-    } else {
-        29.0_f32.min(shell.w * 0.24)
-    };
-    let field = Rect::new(
-        shell.x + 10.0,
-        shell.y,
-        (shell.w - 19.0 - submit).max(0.0),
-        shell.h,
-    );
-    let placeholder = if kind.is_choice() {
-        t!("properties-choice-placeholder")
-    } else {
-        kind.sample()
-    };
-    let mut input = std::mem::take(&mut app.overlays.picker.input);
-    if let Some(caret) = draw_bar_field(
+    let field = shell.inset(9.0, 0.0);
+    let mut text = std::mem::take(&mut app.overlays.picker.input);
+    app.ime.cursor = draw_bar_field(
         app,
         frame,
         field,
-        &mut input,
+        &mut text,
         placeholder,
         app.focus == Focus::Picker,
-    ) {
-        app.ime.cursor = Some(caret);
-    }
-    app.overlays.picker.input = input;
-    if submit > 0.0 {
-        let button = Rect::new(shell.right() - submit, shell.y, submit, shell.h);
-        let part = PickerPart::PropertyApply;
-        if app.pointer.hover == Hover::PickerPart(part) {
-            highlight(frame, p, button, rect);
-        }
-        centered(frame, app, button, "↵", p.text_dim, rect);
-        app.hits.picker_parts.push((button, part));
-    }
-
-    let Some(popup) = &app.overlays.picker.property else {
-        return;
-    };
-    if kind.is_choice() || kind == Kind::Date {
-        frame.rect_clipped(
-            Rect::new(rect.x + 1.0, parts.bar.bottom(), rect.w - 2.0, 1.0),
-            p.border,
-            0.0,
-            rect,
-        );
-    }
-    if kind.is_choice() {
-        draw_choices(app, frame, popup, parts);
-    } else if kind == Kind::Date {
-        app.hits
-            .picker_parts
-            .extend(draw_calendar(app, frame, popup, parts));
-    }
+    );
+    app.overlays.picker.input = text;
+    frame.rect_clipped(
+        Rect::new(rect.x + 1.0, parts.bar.bottom(), rect.w - 2.0, 1.0),
+        p.border,
+        0.0,
+        rect,
+    );
+    draw_choices(
+        app,
+        frame,
+        app.overlays.picker.property.as_ref().unwrap(),
+        parts,
+    );
 }
 
 fn highlight(frame: &mut Frame<'_>, palette: &Palette, r: Rect, clip: Rect) {
@@ -193,26 +220,23 @@ fn draw_calendar(
     popup: &PropertyPopup,
     parts: PickerParts,
 ) -> Vec<(Rect, PickerPart)> {
-    let heading = parts.list;
     let p = app.palette;
-    let area = Rect::new(
-        heading.x + 8.0,
-        heading.y + 5.0,
-        (heading.w - 16.0).max(0.0),
-        (heading.h - 5.0).max(0.0),
-    );
+    let area = parts.list.inset(8.0, CALENDAR_PAD);
     let (year, month) = popup.month;
-    let current = date_parts(app.overlays.picker.input.text().trim());
+    let selected_date = date_parts(app.overlays.picker.input.text().trim());
     let local_today = today();
-    let row_h = (area.h / 9.0).min(27.0);
+    let scale = (area.h / (popup.calendar_height() - 2.0 * CALENDAR_PAD)).min(1.0);
+    let header_h = CALENDAR_HEADER * scale;
+    let weekday_h = CALENDAR_WEEKDAYS * scale;
+    let week_h = CALENDAR_WEEK * scale;
     let day_w = area.w / 7.0;
-    let cell = |col: u32, row: u32| {
-        Rect::new(
-            area.x + col as f32 * day_w,
-            area.y + row as f32 * row_h,
-            day_w,
-            row_h,
-        )
+    let header = Rect {
+        h: header_h,
+        ..area
+    };
+    let grid_y = header.bottom() + weekday_h;
+    let cell = |col: u32, top: f32, height: f32| {
+        Rect::new(area.x + col as f32 * day_w, top, day_w, height)
     };
     let mut hits = Vec::with_capacity(35);
     let mut button = |frame: &mut Frame<'_>,
@@ -221,75 +245,128 @@ fn draw_calendar(
                       part: CalendarPart,
                       selected: bool,
                       is_today: bool| {
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
         let part = PickerPart::PropertyCalendar(part);
+        let hovered = app.pointer.hover == Hover::PickerPart(part);
         let paint = rect.inset(2.0, 1.0);
         if selected {
-            frame.rect_clipped(
-                paint,
-                p.accent.alpha(if p.dark { 0.24 } else { 0.17 }),
-                5.0,
-                area,
-            );
-        } else if app.pointer.hover == Hover::PickerPart(part) {
+            frame.rect_clipped(paint, p.accent_fill, 5.0, area);
+        } else if hovered {
             highlight(frame, p, paint, area);
         }
-        centered(
-            frame,
-            app,
-            rect,
-            text,
-            if selected || is_today {
-                p.accent
-            } else {
-                p.text
-            },
-            area,
-        );
-        if rect.w > 0.0 && rect.h > 0.0 {
-            hits.push((rect, part));
+        let ink = if selected {
+            p.text_on_accent
+        } else if is_today {
+            p.accent
+        } else {
+            p.text
+        };
+        match part {
+            PickerPart::PropertyCalendar(CalendarPart::Previous | CalendarPart::Next) => {
+                let x = (rect.x + rect.w * 0.5).round();
+                let y = (rect.y + rect.h * 0.5).round();
+                let dx = if part == PickerPart::PropertyCalendar(CalendarPart::Previous) {
+                    -2.0
+                } else {
+                    2.0
+                };
+                frame.stroke(
+                    &[
+                        Stroke::Line(x - dx, y - 4.0, x + dx, y),
+                        Stroke::Line(x + dx, y, x - dx, y + 4.0),
+                    ],
+                    1.35,
+                    ink,
+                    area,
+                );
+            }
+            _ => centered(frame, app, rect, text, ink, area),
         }
+        hits.push((rect, part));
     };
     let month_label = t!(
         "properties-calendar-month",
         year = format!("{year:04}"),
         month = format!("{month:02}")
     );
-    let top = Rect::new(area.x, area.y, day_w * 4.0, row_h);
-    ui_text(frame, app, top.x + 5.0, top, &month_label, p.text, top);
+    let month_box = Rect {
+        w: day_w * 4.0,
+        ..header
+    };
+    ui_text(
+        frame,
+        app,
+        month_box.x + 5.0,
+        month_box,
+        &month_label,
+        p.text,
+        month_box,
+    );
     button(
         frame,
-        cell(4, 0),
+        cell(4, header.y, header.h),
         t!("properties-today"),
         CalendarPart::Today,
         false,
+        true,
+    );
+    button(
+        frame,
+        cell(5, header.y, header.h),
+        "",
+        CalendarPart::Previous,
+        false,
         false,
     );
-    button(frame, cell(5, 0), "‹", CalendarPart::Previous, false, false);
-    button(frame, cell(6, 0), "›", CalendarPart::Next, false, false);
+    button(
+        frame,
+        cell(6, header.y, header.h),
+        "",
+        CalendarPart::Next,
+        false,
+        false,
+    );
     for (col, label) in t!("properties-weekdays").split('|').enumerate() {
-        centered(frame, app, cell(col as u32, 1), label, p.text_dim, area);
+        centered(
+            frame,
+            app,
+            cell(col as u32, header.bottom(), weekday_h),
+            label,
+            p.text_muted,
+            area,
+        );
     }
     let start = first_weekday(year, month);
     for day in 1..=days_in_month(year, month) {
         let i = start + day - 1;
+        let rect = cell(i % 7, grid_y + (i / 7) as f32 * week_h, week_h);
         button(
             frame,
-            cell(i % 7, 2 + i / 7),
+            rect,
             &day.to_string(),
             CalendarPart::Day(day),
-            current == Some((year, month, day)),
+            selected_date == Some((year, month, day)),
             local_today == (year, month, day),
         );
     }
+    let footer_y = grid_y + popup.calendar_weeks() as f32 * week_h;
     frame.rect_clipped(
-        Rect::new(area.x, cell(0, 8).y, area.w, 1.0),
-        p.border,
+        Rect::new(area.x, footer_y + 2.0, area.w, 1.0),
+        p.separator,
         0.0,
         area,
     );
+    let clear = Rect::new(
+        area.right() - day_w * 2.0,
+        footer_y + 4.0,
+        day_w * 2.0,
+        (CALENDAR_FOOTER * scale - 4.0).max(0.0),
+    );
     button(
         frame,
-        Rect::new(area.x, cell(0, 8).y, day_w * 2.0, row_h),
+        clear,
         t!("properties-clear"),
         CalendarPart::Clear,
         false,

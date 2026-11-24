@@ -110,6 +110,12 @@ properties-multi-select = Multi-select
 properties-check = Check
 properties-uncheck = Uncheck
 properties-unsupported-value = Complex YAML (preserved)
+properties-item-placeholder = Add an item
+properties-remove-item = Remove item
+properties-delete-field = Delete property
+properties-view-fields = Property fields
+properties-view-source = Edit YAML source
+properties-invalid-yaml = Enter valid YAML properties before leaving the editor.
 properties-cannot-edit = This change cannot be safely applied to the existing YAML.
 
 workspace-library-home = Home

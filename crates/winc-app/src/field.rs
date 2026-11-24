@@ -337,6 +337,17 @@ impl TextField {
         }
     }
 
+    /// Start a new edit with the caret at the end and an empty undo stack.
+    pub(crate) fn with_text(text: &str, multiline: bool) -> Self {
+        Self {
+            text: text.to_owned(),
+            caret: text.len(),
+            anchor: text.len(),
+            multiline,
+            ..Self::default()
+        }
+    }
+
     /// 是否为多行输入框。
     pub fn is_multiline(&self) -> bool {
         self.multiline

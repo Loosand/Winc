@@ -67,3 +67,29 @@ fn validation_and_creation_use_portable_yaml() {
     assert!(created.ends_with("正文\r\n"));
     assert!(patch("---\na: [\n---\n", "new", Kind::Text, "value", true).is_none());
 }
+
+#[test]
+fn key_and_source_patches_preserve_delimiters_and_unrelated_fields() {
+    let source = "---\r\n# notes\r\nauthor:\r\n- Ada\r\n- Lin\r\nrating : 5 # keep\r\n...\r\n正文";
+    let (key, name) = key_patch(source, "rating", Some("评分")).unwrap();
+    let mut renamed = source.to_owned();
+    renamed.replace_range(key, &name);
+    assert_eq!(renamed, source.replace("rating", "\"评分\""));
+    assert!(key_patch(source, "rating", Some("author")).is_none());
+    let (field, replacement) = key_patch(&renamed, "author", None).unwrap();
+    renamed.replace_range(field, &replacement);
+    assert_eq!(
+        renamed,
+        "---\r\n# notes\r\n\"评分\" : 5 # keep\r\n...\r\n正文"
+    );
+    assert!(source_patch(source, "author: [").is_none());
+    assert!(source_patch(source, "author: Ada\n---\ntitle: Escape").is_none());
+    let (span, replacement) = source_patch(source, "author: [Ada]").unwrap();
+    let mut raw = source.to_owned();
+    raw.replace_range(span, &replacement.replace('\n', "\r\n"));
+    assert_eq!(raw, "---\r\nauthor: [Ada]\r\n...\r\n正文");
+    assert_eq!(
+        source_patch(source, "author: [Ada]\n").unwrap().1,
+        "author: [Ada]\n\n",
+    );
+}

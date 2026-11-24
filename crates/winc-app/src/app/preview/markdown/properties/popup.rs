@@ -6,7 +6,11 @@ use winc_render::Rect;
 
 pub(crate) const CHOICE_ROW: f32 = 29.0;
 pub(crate) const CHOICE_CAPTION: f32 = 25.0;
-pub(crate) const CALENDAR_HEIGHT: f32 = 248.0;
+pub(crate) const CALENDAR_HEADER: f32 = 32.0;
+pub(crate) const CALENDAR_WEEKDAYS: f32 = 21.0;
+pub(crate) const CALENDAR_WEEK: f32 = 25.0;
+pub(crate) const CALENDAR_FOOTER: f32 = 32.0;
+pub(crate) const CALENDAR_PAD: f32 = 5.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CalendarPart {
@@ -24,9 +28,19 @@ pub(crate) enum ChoiceRow {
     Clear,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PropertyInput {
+    Value,
+    Name,
+    ListItem,
+    Source,
+}
+
 pub(crate) struct PropertyPopup {
     edit: PropertyEdit,
-    anchor: Rect,
+    pub(crate) anchor: Rect,
+    pub(crate) input: PropertyInput,
+    target: String,
     pub(crate) name: String,
     pub(crate) original: String,
     pub(crate) options: Vec<String>,
@@ -40,14 +54,44 @@ impl PropertyPopup {
         self.edit.kind
     }
 
+    pub(crate) fn choices(&self) -> bool {
+        self.input == PropertyInput::Value && self.kind().is_choice()
+    }
+
+    pub(crate) fn calendar(&self) -> bool {
+        self.input == PropertyInput::Value && self.kind() == Kind::Date
+    }
+
+    pub(crate) fn calendar_weeks(&self) -> u32 {
+        let (year, month) = self.month;
+        (first_weekday(year, month) + properties::days_in_month(year, month)).div_ceil(7)
+    }
+
+    pub(crate) fn calendar_height(&self) -> f32 {
+        CALENDAR_PAD * 2.0
+            + CALENDAR_HEADER
+            + CALENDAR_WEEKDAYS
+            + self.calendar_weeks() as f32 * CALENDAR_WEEK
+            + CALENDAR_FOOTER
+    }
+
+    pub(crate) fn row(&self) -> Option<&str> {
+        let target = self.target.strip_prefix(properties::PROPERTY)?;
+        match self.input {
+            PropertyInput::Value => Some(target),
+            PropertyInput::Name => target.strip_prefix("name:"),
+            PropertyInput::ListItem => target.strip_prefix("list:"),
+            PropertyInput::Source => None,
+        }
+    }
+
     pub(crate) fn parts(&self, rect: Rect) -> PickerParts {
-        let caption = if self.kind().is_choice() {
-            CHOICE_CAPTION
-        } else {
-            0.0
-        };
+        let caption = if self.choices() { CHOICE_CAPTION } else { 0.0 };
         let mut parts = PickerParts::menu(rect, caption, 0.0);
         parts.row_height = CHOICE_ROW;
+        if self.calendar() {
+            parts.list = rect;
+        }
         parts
     }
 }
@@ -75,7 +119,35 @@ fn step_month((year, month): (i32, u32), delta: i32) -> (i32, u32) {
 }
 
 impl App {
-    pub(in crate::app) fn open_property_value(&mut self, index: usize, anchor: Rect) {
+    pub(in crate::app) fn open_property_source(&mut self, anchor: Rect) {
+        let Some((doc, original)) = self.editor.active().zip(self.property_source_text()) else {
+            return;
+        };
+        self.start_property_picker(PropertyPopup {
+            edit: PropertyEdit {
+                doc: doc.id,
+                revision: doc.revision,
+                field: None,
+                kind: Kind::Text,
+            },
+            anchor,
+            input: PropertyInput::Source,
+            target: properties::RAW.into(),
+            name: String::new(),
+            original,
+            options: Vec::new(),
+            chosen: Vec::new(),
+            rows: Vec::new(),
+            month: (0, 1),
+        });
+    }
+
+    pub(in crate::app) fn open_property_value(
+        &mut self,
+        index: usize,
+        anchor: Rect,
+        input: PropertyInput,
+    ) {
         if !self.note_properties_available() {
             return;
         }
@@ -86,13 +158,18 @@ impl App {
             return;
         };
         let kind = self.property_kind(&field);
+        let input = if kind == Kind::List && input == PropertyInput::Value {
+            PropertyInput::ListItem
+        } else {
+            input
+        };
         let edit = PropertyEdit {
             doc: doc.id,
             revision: doc.revision,
             field: Some(field.name.clone()),
             kind,
         };
-        if kind == Kind::Checkbox {
+        if input == PropertyInput::Value && kind == Kind::Checkbox {
             let next = if field.input == "true" {
                 "false"
             } else {
@@ -117,11 +194,25 @@ impl App {
             }
         }
         let (year, month, _) = properties::date_parts(&field.input).unwrap_or_else(today);
+        let (target, original) = match input {
+            PropertyInput::Value => (format!("{}{index}", properties::PROPERTY), field.input),
+            PropertyInput::Name => (
+                format!("{}name:{index}", properties::PROPERTY),
+                field.name.clone(),
+            ),
+            PropertyInput::ListItem => (
+                format!("{}list:{index}", properties::PROPERTY),
+                String::new(),
+            ),
+            PropertyInput::Source => return,
+        };
         self.start_property_picker(PropertyPopup {
             edit,
             anchor,
+            input,
+            target,
             name: field.name,
-            original: field.input,
+            original,
             options,
             chosen,
             rows: Vec::new(),
@@ -138,7 +229,7 @@ impl App {
         picker.default = None;
         popup.rows.clear();
         let query = picker.input.text().trim();
-        if popup.kind().is_choice() {
+        if popup.choices() {
             let folded = query.to_lowercase();
             popup.rows.extend(
                 popup
@@ -155,7 +246,7 @@ impl App {
             if query.is_empty() && !popup.chosen.is_empty() {
                 popup.rows.push(ChoiceRow::Clear);
             }
-        } else if popup.kind() == Kind::Date
+        } else if popup.calendar()
             && let Some((y, m, _)) = properties::date_parts(query)
         {
             popup.month = (y, m);
@@ -163,34 +254,78 @@ impl App {
         picker.hits = (0..popup.rows.len()).collect();
     }
 
+    pub(crate) fn follow_property_picker(&mut self) {
+        let Some(popup) = &mut self.overlays.picker.property else {
+            return;
+        };
+        popup.anchor = self
+            .hits
+            .markdown_links
+            .iter()
+            .find(|(_, url)| url == &popup.target)
+            .map_or_else(Rect::default, |(rect, _)| *rect);
+        if popup.input == PropertyInput::ListItem
+            && popup.anchor.w > 0.0
+            && let Some(index) = popup
+                .target
+                .strip_prefix(properties::PROPERTY)
+                .and_then(|target| target.strip_prefix("list:"))
+            && let Some((cell, _)) = self
+                .hits
+                .markdown_links
+                .iter()
+                .find(|(_, url)| url.strip_prefix(properties::PROPERTY) == Some(index))
+        {
+            popup.anchor.w = (cell.right() - popup.anchor.x).max(0.0);
+        }
+        if popup.calendar() {
+            popup.anchor.w = popup.anchor.w.min(self.fonts.ui * 8.4);
+        }
+        self.place_property_picker();
+    }
+
+    pub(crate) fn property_input_at(&self, x: f32, y: f32) -> bool {
+        self.overlays
+            .picker
+            .property
+            .as_ref()
+            .is_some_and(|popup| popup.calendar() && popup.anchor.contains(x, y))
+    }
+
     pub(in crate::app) fn place_property_picker(&mut self) {
         let Some(popup) = &self.overlays.picker.property else {
             return;
         };
-        let area = self.layout.editor.inset(8.0, 6.0);
-        let kind = popup.kind();
         let anchor = popup.anchor;
-        let w = (if kind == Kind::Date {
-            282.0
+        if anchor.w <= 0.0 || anchor.h <= 0.0 {
+            self.layout.picker = Rect::default();
+            return;
+        }
+        if !popup.calendar() && !popup.choices() {
+            self.layout.picker = anchor;
+            return;
+        }
+        let area = self.layout.editor.inset(8.0, 6.0);
+        let w = (if popup.calendar() {
+            224.0
         } else {
-            anchor.w.clamp(260.0, 430.0)
+            anchor.w.clamp(240.0, 430.0)
         })
         .min(area.w);
-        let wanted = MENU_PICKER_BAR
-            + MENU_PICKER_PAD
-            + if kind == Kind::Date {
-                CALENDAR_HEIGHT
-            } else if kind.is_choice() {
-                CHOICE_CAPTION + popup.rows.len().clamp(1, 7) as f32 * CHOICE_ROW
-            } else {
-                0.0
-            };
+        let wanted = if popup.calendar() {
+            popup.calendar_height()
+        } else {
+            MENU_PICKER_BAR
+                + MENU_PICKER_PAD
+                + CHOICE_CAPTION
+                + popup.rows.len().clamp(1, 7) as f32 * CHOICE_ROW
+        };
         let below = area.bottom() - anchor.bottom() - 4.0;
         let above = anchor.y - area.y - 4.0;
         let up = below < wanted && above > below;
         let space = if up { above } else { below };
         // Keep the whole calendar together even in a short window, overlapping the anchor if needed.
-        let h = if kind == Kind::Date {
+        let h = if popup.calendar() {
             wanted.min(area.h)
         } else {
             wanted.min(space.max(MENU_PICKER_BAR)).min(area.h)
@@ -211,12 +346,8 @@ impl App {
             return;
         };
         let query = picker.input.text();
-        if !popup.kind().is_choice() {
-            if properties::input_value(popup.kind(), query).is_some() {
-                self.commit_property_picker(query.to_owned(), false);
-            } else {
-                self.flash(t!("properties-invalid-value"));
-            }
+        if !popup.choices() {
+            self.finish_property_picker();
             return;
         }
         let Some(row) = popup.rows.get(picker.selected) else {
@@ -250,6 +381,67 @@ impl App {
             label.to_owned()
         };
         self.commit_property_picker(value, multi);
+    }
+
+    /// Commit inline edits on Enter or before giving focus to another control.
+    pub(in crate::app) fn finish_property_picker(&mut self) -> bool {
+        let picker = &self.overlays.picker;
+        let Some(popup) = &picker.property else {
+            return true;
+        };
+        let query = picker.input.text();
+        if popup.choices() || query == popup.original {
+            self.close_picker();
+            return true;
+        }
+        let (input, edit, name, query) = (
+            popup.input,
+            popup.edit.clone(),
+            popup.name.clone(),
+            query.to_owned(),
+        );
+        let applied = match input {
+            PropertyInput::Value => {
+                if properties::input_value(edit.kind, &query).is_none() {
+                    self.flash(t!("properties-invalid-value"));
+                    return false;
+                }
+                self.apply_property(&edit, &name, &query, "")
+            }
+            PropertyInput::Name => self.apply_property_key(&edit, Some(&query)),
+            PropertyInput::ListItem => {
+                let mut labels = self
+                    .property_field_by_name(&name)
+                    .and_then(|field| properties::list_items(&field.input))
+                    .unwrap_or_default();
+                let label = query.trim();
+                if label.is_empty() || labels.iter().any(|item| item == label) {
+                    true
+                } else {
+                    labels.push(label.into());
+                    let options = option_text(&self.property_options(&name));
+                    self.apply_property(&edit, &name, &properties::list_input(&labels), &options)
+                }
+            }
+            PropertyInput::Source => {
+                let patch = self
+                    .property_prefix()
+                    .and_then(|prefix| properties::source_patch(&prefix, &query));
+                if let Some((span, replacement)) = patch {
+                    self.property_edit_current(&edit)
+                        && self.apply_property_patch(span, replacement)
+                } else {
+                    self.flash(t!("properties-invalid-yaml"));
+                    return false;
+                }
+            }
+        };
+        if applied {
+            self.close_picker();
+        } else {
+            self.flash(t!("properties-cannot-edit"));
+        }
+        applied
     }
 
     fn commit_property_picker(&mut self, value: String, keep_open: bool) {

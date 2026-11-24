@@ -658,7 +658,7 @@ impl App {
 
     /// A validated property patch targets YAML rather than the visible body.
     pub(in crate::app) fn run_note_property_patch(&mut self, command: Command) {
-        debug_assert!(matches!(command, Command::Insert(_)));
+        debug_assert!(matches!(command, Command::Paste(_)));
         self.execute_text_command(command, true);
     }
 

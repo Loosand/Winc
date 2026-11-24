@@ -452,6 +452,31 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             frame.with_opacity(alpha, |frame| draw_plain(frame, source, (left, at), clip));
         }
         frame.with_fade(p.editor_bg, opacity, |frame| {
+            use winc_preview::markdown::properties::PROPERTY;
+            let property_hover = app.overlays.context_menu.is_none()
+                && !app.settings.open
+                && !(app
+                    .overlays
+                    .picker
+                    .property
+                    .as_ref()
+                    .is_some_and(|p| p.calendar() || p.choices())
+                    && app.layout.picker.contains(mouse.0, mouse.1));
+            let hovered_property = (i == 0 && property_hover)
+                .then(|| {
+                    shown.iter().find_map(|&index| {
+                        let Item::Link { rect, url } = &block.items[index as usize] else {
+                            return None;
+                        };
+                        let index = url.strip_prefix(PROPERTY)?.strip_prefix("row:")?;
+                        fixed(rect)
+                            .intersect(area)
+                            .contains(mouse.0, mouse.1)
+                            .then_some(index)
+                    })
+                })
+                .flatten();
+            let active_property = app.overlays.picker.property.as_ref().and_then(|p| p.row());
             for (k, item) in shown
                 .iter()
                 .map(|&k| (k as usize, &block.items[k as usize]))
@@ -597,17 +622,38 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                     Item::Link { rect, url } => {
                         let r = at(rect).intersect(area);
                         if r.w > 0.0 && r.h > 0.0 {
-                            if url.starts_with(winc_preview::markdown::properties::PROPERTY)
-                                && !app.overlays.picker.open
-                                && app.overlays.context_menu.is_none()
-                                && r.contains(mouse.0, mouse.1)
-                            {
-                                frame.rect_clipped(
-                                    r,
-                                    p.text.alpha(if p.dark { 0.07 } else { 0.045 }),
-                                    5.0,
-                                    area,
-                                );
+                            if let Some(action) = url.strip_prefix(PROPERTY) {
+                                if let Some(index) = action.strip_prefix("row:") {
+                                    if active_property == Some(index) {
+                                        frame.rect_clipped(r, p.selected_unfocused, 6.0, area);
+                                    } else if hovered_property == Some(index) {
+                                        frame.rect_clipped(r, p.hover, 6.0, area);
+                                    }
+                                    continue;
+                                }
+                                let hovered = property_hover && r.contains(mouse.0, mouse.1);
+                                if let Some(index) = action.strip_prefix("delete:") {
+                                    if hovered_property == Some(index)
+                                        || active_property == Some(index)
+                                    {
+                                        if hovered {
+                                            frame.rect_clipped(
+                                                r.inset(3.0, 3.0),
+                                                p.error.alpha(0.12),
+                                                5.0,
+                                                area,
+                                            );
+                                        }
+                                        draw_property_delete(
+                                            frame,
+                                            r,
+                                            if hovered { p.error } else { p.text_muted },
+                                            area,
+                                        );
+                                    }
+                                } else if hovered && property_button(action) {
+                                    frame.rect_clipped(r.inset(1.0, 1.0), p.hover, 5.0, area);
+                                }
                             }
                             app.hits.markdown_links.push((r, url.to_string()));
                         }
@@ -797,6 +843,32 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         scroll,
         content,
     );
+}
+
+fn draw_property_delete(frame: &mut Frame<'_>, rect: Rect, color: Color, clip: Rect) {
+    let x = rect.x + rect.w * 0.5;
+    let y = rect.y + rect.h * 0.5;
+    frame.stroke(
+        &[
+            Stroke::Line(x - 5.0, y - 3.0, x + 5.0, y - 3.0),
+            Stroke::Line(x - 1.5, y - 5.0, x + 1.5, y - 5.0),
+            Stroke::Line(x - 3.5, y - 3.0, x - 3.0, y + 5.0),
+            Stroke::Line(x + 3.5, y - 3.0, x + 3.0, y + 5.0),
+            Stroke::Line(x - 3.0, y + 5.0, x + 3.0, y + 5.0),
+            Stroke::Line(x - 1.0, y - 0.75, x - 1.0, y + 2.5),
+            Stroke::Line(x + 1.0, y - 0.75, x + 1.0, y + 2.5),
+        ],
+        1.1,
+        color,
+        clip,
+    );
+}
+
+fn property_button(action: &str) -> bool {
+    matches!(action, "add" | "collapse" | "fields" | "source")
+        || ["type:", "item:", "list:"]
+            .iter()
+            .any(|prefix| action.starts_with(prefix))
 }
 
 /// 表格被裁掉的一侧渐隐的宽度（逻辑像素），与标签栏两端的渐隐（`TAB_FADE`）相同。

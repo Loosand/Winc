@@ -157,13 +157,22 @@ impl App {
         self.overlays.picker.notebook = notebook;
         self.overlays.picker.open = true;
         self.overlays.picker.doc = self.editor.active().map(|d| d.id);
-        let value = property
-            .as_ref()
-            .filter(|p| !p.kind().is_choice())
-            .map_or("", |p| p.original.as_str());
-        self.overlays.picker.input.set_text(value);
-        if property.is_some() {
-            self.overlays.picker.input.select_all();
+        if let Some(popup) = &property {
+            use crate::app::preview::markdown::properties::popup::PropertyInput;
+            let source = popup.input == PropertyInput::Source;
+            let text = if popup.choices() { "" } else { &popup.original };
+            let mut field = crate::field::TextField::with_text(text, source);
+            if source {
+                field.set_caret(0, false);
+            } else if popup.calendar()
+                && winc_preview::markdown::properties::date_parts(text).is_some()
+            {
+                field.set_caret(text.len() - 2, false);
+                field.set_caret(text.len(), true);
+            }
+            self.overlays.picker.input = field;
+        } else {
+            self.overlays.picker.input.set_text("");
         }
         self.overlays.picker.property = property;
         self.overlays.picker.selected = 0;
@@ -183,7 +192,9 @@ impl App {
         self.overlays.picker.index.forget_query();
         self.overlays.picker.open = false;
         self.overlays.picker.notebook = None;
-        self.overlays.picker.property = None;
+        if self.overlays.picker.property.take().is_some() {
+            self.overlays.picker.input = crate::field::TextField::default();
+        }
         self.overlays.picker.branch_rows = None;
         self.overlays.picker.location_rows = None;
         self.overlays.picker.folders = false;

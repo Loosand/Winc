@@ -145,13 +145,33 @@ impl App {
             return;
         }
         if let Some(property) = url.strip_prefix(winc_preview::markdown::properties::PROPERTY) {
-            if property == "add" {
-                self.open_property_menu(None, self.pointer.mouse);
-            } else if let Some(index) = property.strip_prefix("name:").and_then(|s| s.parse().ok())
-            {
-                self.open_property_menu(Some(index), self.pointer.mouse);
-            } else if let Ok(index) = property.parse() {
-                self.open_property_value(index, rect);
+            use super::properties::popup::PropertyInput;
+            match property {
+                "add" => self.open_property_menu(None, self.pointer.mouse),
+                "collapse" => self.toggle_property_panel(),
+                "fields" => self.show_property_source(false, rect),
+                "source" => self.show_property_source(true, rect),
+                "raw" => self.open_property_source(rect),
+                _ => {
+                    let (action, index) = property.split_once(':').unwrap_or(("", property));
+                    if action == "item" {
+                        if let Some((row, item)) = index.split_once(':')
+                            && let (Ok(row), Ok(item)) = (row.parse(), item.parse())
+                        {
+                            self.remove_property_item(row, item);
+                        }
+                    } else if let Ok(index) = index.parse() {
+                        match action {
+                            "type" => self.open_property_menu(Some(index), self.pointer.mouse),
+                            "name" => self.open_property_value(index, rect, PropertyInput::Name),
+                            "list" => {
+                                self.open_property_value(index, rect, PropertyInput::ListItem)
+                            }
+                            "delete" => self.remove_note_property(index),
+                            _ => self.open_property_value(index, rect, PropertyInput::Value),
+                        }
+                    }
+                }
             }
             return;
         }

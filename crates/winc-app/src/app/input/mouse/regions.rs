@@ -250,6 +250,11 @@ impl App {
 
         let rect = self.layout.picker;
 
+        if self.property_input_at(x, y) {
+            self.click_field(x, y);
+            return true;
+        }
+
         if !rect.contains(x, y) {
             self.close_picker();
             return true;
@@ -268,7 +273,20 @@ impl App {
 
         let parts = crate::app::workspace::picker::picker_parts(self, rect);
 
-        if parts.bar.contains(x, y) {
+        if parts.bar.contains(x, y)
+            && self
+                .overlays
+                .picker
+                .property
+                .as_ref()
+                .is_none_or(|p| !p.calendar())
+            || self
+                .overlays
+                .picker
+                .property
+                .as_ref()
+                .is_some_and(|p| !p.calendar() && !p.choices())
+        {
             self.focus = Focus::Picker;
             // 位置浮窗的标题行没有输入框：筛选文字直接打字输入。
             if self.overlays.picker.places.is_none() {

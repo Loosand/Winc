@@ -13,6 +13,16 @@ pub const LIMIT: usize = 64 * 1024;
 pub const PROPERTY: &str = "\u{1}property:";
 /// Marker distinguishing the generated property panel from user-authored details blocks.
 pub const PANEL: &str = "\u{1}property-panel";
+/// Open the add-property menu.
+pub const ADD: &str = "\u{1}property:add";
+/// Toggle the property panel.
+pub const COLLAPSE: &str = "\u{1}property:collapse";
+/// Switch to structured fields.
+pub const FIELDS: &str = "\u{1}property:fields";
+/// Switch to the source editor.
+pub const SOURCE: &str = "\u{1}property:source";
+/// Focus the source editor.
+pub const RAW: &str = "\u{1}property:raw";
 
 /// Presentation and validation of a note property, independent of its YAML value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -218,6 +228,61 @@ fn mapping(raw: &str) -> Option<Mapping> {
     }
 }
 
+/// The contents of a bounded front matter block, excluding its delimiters.
+pub fn source_range(source: &str) -> Option<Range<usize>> {
+    bounds(source).ok().flatten().map(|(range, _)| range)
+}
+
+/// Replace the header contents, adding the line break before the closing delimiter.
+pub fn source_patch(source: &str, raw: &str) -> Option<(Range<usize>, String)> {
+    let range = source_range(source)?;
+    let mut replacement = raw.to_owned();
+    if !replacement.is_empty() {
+        replacement.push('\n');
+    }
+    let candidate = format!("---\n{replacement}---\n");
+    if source_range(&candidate)?.len() != replacement.len() || mapping(&replacement).is_none() {
+        return None;
+    }
+    Some((range, replacement))
+}
+
+/// Validate a targeted rename or removal without rewriting other fields.
+pub fn key_patch(
+    source: &str,
+    name: &str,
+    renamed: Option<&str>,
+) -> Option<(Range<usize>, String)> {
+    let body = source_range(source)?;
+    let raw = &source[body.clone()];
+    let mut expected = mapping(raw)?;
+    let old = expected.remove(name)?;
+    let value = field_span(raw, name, &old)?;
+    let (span, replacement) = match renamed {
+        Some(new) => {
+            let new = new.trim();
+            if new == name {
+                return Some((body.start..body.start, String::new()));
+            }
+            if new.is_empty() || new.contains(char::is_control) || expected.contains_key(new) {
+                return None;
+            }
+            expected.insert(Value::String(new.to_owned()), old);
+            (value.key, quoted(new))
+        }
+        None => {
+            let end = raw[value.value.end..]
+                .find('\n')
+                .map_or(raw.len(), |n| value.value.end + n + 1);
+            (value.key.start..end, String::new())
+        }
+    };
+    let mut candidate = raw.to_owned();
+    candidate.replace_range(span.clone(), &replacement);
+    (mapping(&candidate)? == expected)
+        .then_some((body.start + span.start..body.start + span.end, replacement))
+}
+
 fn supported(value: &Value) -> bool {
     match value {
         Value::Null | Value::Bool(_) | Value::Number(_) => true,
@@ -387,7 +452,12 @@ pub fn input_value(kind: Kind, input: &str) -> Option<(String, Vec<String>)> {
 
 /// Locate a conservative, editable field span. Indented children belong to the same field;
 /// comments on its first line survive scalar edits, while ambiguous children remain read-only.
-fn patch_span(raw: &str, name: &str, original: &Value) -> Option<Range<usize>> {
+struct FieldSpan {
+    key: Range<usize>,
+    value: Range<usize>,
+}
+
+fn field_span(raw: &str, name: &str, original: &Value) -> Option<FieldSpan> {
     if name.is_empty() {
         return None;
     }
@@ -412,7 +482,7 @@ fn patch_span(raw: &str, name: &str, original: &Value) -> Option<Range<usize>> {
                     at += continuation.len();
                     continue;
                 }
-                if !continuation.starts_with([' ', '\t'])
+                if !(continuation.starts_with([' ', '\t']) || continuation.starts_with("- "))
                     || continuation.trim_start().starts_with('#')
                 {
                     break;
@@ -439,7 +509,10 @@ fn patch_span(raw: &str, name: &str, original: &Value) -> Option<Range<usize>> {
                     }
                 }
             }
-            return Some(value_start..end.max(value_start));
+            return Some(FieldSpan {
+                key: start..start + line[..colon].trim_end().len(),
+                value: value_start..end.max(value_start),
+            });
         }
     }
     None
@@ -488,7 +561,7 @@ pub fn patch(
         if !supported(old) {
             return None;
         }
-        (patch_span(raw, name, old)?, format!(" {value}"))
+        (field_span(raw, name, old)?.value, format!(" {value}"))
     };
     expected.insert(Value::String(name.to_owned()), desired);
     let mut candidate = raw.to_owned();
@@ -498,7 +571,7 @@ pub fn patch(
 }
 
 /// Build the collapsible, source-independent display block for the writing view.
-pub fn panel(fields: &[Field]) -> Block {
+pub fn panel(fields: &[Field], source: Option<String>, open: bool) -> Block {
     use winc_i18n::t;
     let mut summary = Inline::default();
     summary.links.push(PANEL.into());
@@ -509,6 +582,7 @@ pub fn panel(fields: &[Field]) -> Block {
             link: 0,
         },
     );
+    summary.links.extend(fields.iter().map(|f| f.name.clone()));
     let link = |text: &str, target: String| {
         let mut inline = Inline::default();
         inline.links.push(target);
@@ -542,25 +616,59 @@ pub fn panel(fields: &[Field]) -> Block {
                     && let Some((_, labels)) = input_value(f.kind, &f.input)
                 {
                     value.links.extend(labels);
+                } else if f.kind == Kind::List
+                    && let Some(labels) = list_items(&f.input)
+                {
+                    value.links.extend(labels);
                 }
             }
             value.push(display, Style::default());
             vec![name, value]
         })
         .collect::<Vec<_>>();
-    let mut blocks = Vec::new();
-    if !rows.is_empty() {
-        blocks.push(Block::Table(vec![super::Align::None; 2], rows, false));
-    }
-    blocks.push(Block::Paragraph(link(
-        &format!("＋  {}", t!("properties-add")),
-        format!("{PROPERTY}add"),
-    )));
+    let blocks = if let Some(text) = source {
+        vec![Block::Code {
+            lang: "yaml".into(),
+            text,
+            map: Default::default(),
+        }]
+    } else {
+        vec![
+            Block::Table(vec![super::Align::None; 2], rows, false),
+            Block::Paragraph(link(t!("properties-add"), ADD.into())),
+        ]
+    };
     Block::Details {
-        open: true,
+        open,
         summary,
         blocks,
     }
+}
+
+/// Read the string items of a list field.
+pub fn list_items(input: &str) -> Option<Vec<String>> {
+    if input.is_empty() {
+        return Some(Vec::new());
+    }
+    let Value::Sequence(items) = serde_yaml::from_str::<Value>(input).ok()? else {
+        return None;
+    };
+    items
+        .into_iter()
+        .map(|item| item.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Represent a list without treating commas, quotes, or brackets as separators inside labels.
+pub fn list_input(items: &[String]) -> String {
+    format!(
+        "[{}]",
+        items
+            .iter()
+            .map(|item| quoted(item))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 #[cfg(test)]

@@ -345,7 +345,7 @@ impl App {
                 .map_or(Target::Blocked, |&(_, action)| Target::Conflict(action));
         }
         // 快速打开面板位于编辑区和侧栏之上。
-        if self.overlays.picker.open && l.picker.contains(x, y) {
+        if self.overlays.picker.open && (l.picker.contains(x, y) || self.property_input_at(x, y)) {
             return Target::Picker;
         }
         if self.hits.tree_more.is_some_and(|more| more.contains(x, y)) {
@@ -905,6 +905,9 @@ impl App {
             || (self.log_active()
                 && crate::layout::hit(&self.hits.log, x, y).is_none()
                 && self.log_text_at(x, y, false).is_some());
+        let in_property_field = self.focus == Focus::Picker
+            && self.overlays.picker.property.is_some()
+            && self.overlays.picker.input.view.area.contains(x, y);
 
         let icon = if let Hover::ResizeEdge(direction) = self.pointer.hover {
             resize_cursor(direction)
@@ -961,12 +964,15 @@ impl App {
                 Target::Canvas => CursorIcon::Grab,
                 _ => CursorIcon::Pointer,
             }
+        } else if in_property_field {
+            CursorIcon::Text
         } else if matches!(
             self.pointer.hover,
             Hover::Log(crate::app::git::log::LogTarget::Line(..))
                 | Hover::TerminalBlock(_)
                 | Hover::Diff(crate::app::DiffTarget::Sticky(..))
                 | Hover::MarkdownLink(_)
+                | Hover::PickerPart(crate::app::PickerPart::PropertyCalendar(_))
                 | Hover::Library(_)
                 | Hover::MarkdownToc(
                     crate::app::preview::markdown::TocTarget::Heading(_)

@@ -46,7 +46,6 @@ pub enum PickerPart {
     NotePreview,
     CloseNoteSearch,
     PropertyCalendar(crate::app::preview::markdown::properties::popup::CalendarPart),
-    PropertyApply,
     /// 第几行行尾的「⋯」。
     More(usize),
     /// 搜索框下面的「拉取」；按住 ⌥ 时是拉取并变基。
@@ -671,7 +670,6 @@ impl App {
             }
             PickerPart::CloseNoteSearch => self.close_picker(),
             PickerPart::PropertyCalendar(part) => self.press_property_calendar(part),
-            PickerPart::PropertyApply => self.accept_property_picker(),
             PickerPart::More(row) => self.press_picker_more(row),
             PickerPart::Pull | PickerPart::Push | PickerPart::Fetch => {
                 if !self.picker_action_enabled(part) {

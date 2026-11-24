@@ -215,6 +215,10 @@ impl App {
                 }
             }
             ScrollTarget::Picker if self.overlays.picker.places.is_some() => self.step_places(dy),
+            ScrollTarget::Picker if self.overlays.picker.input.is_multiline() => {
+                let view = &mut self.overlays.picker.input.view;
+                view.scroll = (view.scroll - dy).max(0.0);
+            }
             ScrollTarget::Tabs => self.scroll_pane_by(target, along),
             ScrollTarget::LogList => {
                 self.with_log_list(|app| app.scroll_pane_by(ScrollTarget::Commit, dy));

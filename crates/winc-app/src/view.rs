@@ -203,7 +203,9 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
 
     // 位置浮窗显示在名称旁边，有独立的动画（滑出、淡出）。
     let bar_open = app.bars.goto_input.is_some() && !app.bars.prompt_kind.is_vim();
-    let picker_open = app.overlays.picker.open && app.overlays.picker.places.is_none();
+    let property_open = app.overlays.picker.property.is_some();
+    let picker_open =
+        app.overlays.picker.open && app.overlays.picker.places.is_none() && !property_open;
     app.track_card(Card::Bar, bar_open);
     app.track_card(Card::Picker, picker_open);
     // 先绘制正在淡出的卡片：在 ⌘P 面板中按 ⌃G 时，跳转条绘制在淡出的面板之上。
@@ -219,6 +221,9 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
         }
         let rect = app.layout.picker;
         draw_moving_card(app, frame, Card::Picker, rect, draw_picker);
+    } else if property_open {
+        app.follow_property_picker();
+        draw_picker(app, frame);
     } else if app.overlays.picker.open {
         draw_picker(app, frame);
     } else if let Some(ghost) = &app.overlays.picker.places_out {
@@ -523,6 +528,32 @@ fn draw_tooltip(app: &App, frame: &mut Frame<'_>) {
                     }
                     _ => (*rect, text),
                 }
+            }
+            Hover::MarkdownLink(i) => {
+                use winc_preview::markdown::properties::{ADD, FIELDS, PROPERTY, SOURCE};
+                let Some((rect, url)) = app.hits.markdown_links.get(i) else {
+                    return;
+                };
+                let (x, y) = app.mouse();
+                if !rect.contains(x, y) {
+                    return;
+                }
+                let label = match url.as_str() {
+                    ADD => t!("properties-add"),
+                    FIELDS => t!("properties-view-fields"),
+                    SOURCE => t!("properties-view-source"),
+                    url => match url
+                        .strip_prefix(PROPERTY)
+                        .and_then(|target| target.split_once(':'))
+                    {
+                        Some(("type", _)) => t!("properties-type"),
+                        Some(("list", _)) => t!("properties-item-placeholder"),
+                        Some(("item", _)) => t!("properties-remove-item"),
+                        Some(("delete", _)) => t!("properties-delete-field"),
+                        _ => return,
+                    },
+                };
+                (*rect, label.to_owned())
             }
             // 日志列表中的作者头像：提示作者名和邮箱。
             Hover::Log(crate::app::git::log::LogTarget::Avatar(i)) => {

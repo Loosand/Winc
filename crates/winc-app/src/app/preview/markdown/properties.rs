@@ -108,18 +108,10 @@ fn option_input(text: &str) -> Option<Vec<String>> {
 }
 
 fn option_text(options: &[String]) -> String {
-    let escape = |text: &str| format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""));
     if options.is_empty() {
         String::new()
     } else {
-        format!(
-            "[{}]",
-            options
-                .iter()
-                .map(|s| escape(s))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
+        properties::list_input(options)
     }
 }
 
@@ -135,6 +127,13 @@ impl App {
             return None;
         };
         fields.into_iter().nth(index)
+    }
+
+    fn property_field_by_name(&self, name: &str) -> Option<Field> {
+        let Header::Valid { fields, .. } = properties::header(&self.property_prefix()?) else {
+            return None;
+        };
+        fields.into_iter().find(|field| field.name == name)
     }
 
     pub(in crate::app) fn property_body_start(&self) -> Option<usize> {
@@ -268,7 +267,133 @@ impl App {
                     .unwrap_or(field.kind);
             }
         }
-        properties::panel(&fields)
+        let id = self.editor.active().map(|doc| doc.id);
+        let md = &self.preview.markdown;
+        let source = id
+            .filter(|id| md.property_source.contains(id))
+            .and_then(|_| self.property_source_text());
+        properties::panel(
+            &fields,
+            source,
+            id.is_none_or(|id| !md.property_collapsed.contains(&id)),
+        )
+    }
+
+    fn property_source_text(&self) -> Option<String> {
+        let prefix = self.property_prefix()?;
+        let raw = &prefix[properties::source_range(&prefix)?];
+        let raw = raw.strip_suffix('\n').unwrap_or(raw);
+        Some(raw.strip_suffix('\r').unwrap_or(raw).replace("\r\n", "\n"))
+    }
+
+    pub(in crate::app) fn toggle_property_panel(&mut self) {
+        let Some(id) = self.editor.active().map(|doc| doc.id) else {
+            return;
+        };
+        let collapsed = &mut self.preview.markdown.property_collapsed;
+        if !collapsed.remove(&id) {
+            collapsed.insert(id);
+        }
+        self.invalidate_property_panel();
+    }
+
+    pub(in crate::app) fn show_property_source(&mut self, source: bool, anchor: winc_render::Rect) {
+        let Some(id) = self.editor.active().map(|doc| doc.id) else {
+            return;
+        };
+        if source {
+            self.preview.markdown.property_source.insert(id);
+            self.open_property_source(anchor);
+        } else {
+            self.preview.markdown.property_source.remove(&id);
+        }
+        self.invalidate_property_panel();
+    }
+
+    fn invalidate_property_panel(&mut self) {
+        self.preview.markdown.property_layout_dirty = true;
+        self.request_redraw();
+    }
+
+    fn apply_property_key(&mut self, edit: &PropertyEdit, renamed: Option<&str>) -> bool {
+        if !self.property_edit_current(edit) {
+            return false;
+        }
+        let Some((name, prefix)) = edit.field.as_deref().zip(self.property_prefix()) else {
+            return false;
+        };
+        let Some((span, replacement)) = properties::key_patch(&prefix, name, renamed) else {
+            return false;
+        };
+        let spec = self.property_spec(name).cloned();
+        if !self.apply_property_patch(span, replacement) {
+            return false;
+        }
+        if let Some((new, spec)) = renamed.map(str::trim).zip(spec)
+            && new != name
+        {
+            let scope = self.property_scope();
+            self.update_state(|state| {
+                if let Some(Json::Object(fields)) = state.note_property_schema.get_mut(&scope) {
+                    fields.entry(new.to_owned()).or_insert(spec);
+                }
+            });
+        }
+        true
+    }
+
+    pub(in crate::app) fn remove_note_property(&mut self, index: usize) {
+        let Some((doc, field)) = self.editor.active().zip(self.property_field(index)) else {
+            return;
+        };
+        let edit = PropertyEdit {
+            doc: doc.id,
+            revision: doc.revision,
+            field: Some(field.name),
+            kind: field.kind,
+        };
+        if !self.apply_property_key(&edit, None) {
+            self.flash(t!("properties-cannot-edit"));
+        }
+    }
+
+    pub(in crate::app) fn remove_property_item(&mut self, index: usize, item: usize) {
+        let Some((doc, field)) = self.editor.active().zip(self.property_field(index)) else {
+            return;
+        };
+        let kind = self.property_kind(&field);
+        let Some(mut labels) =
+            properties::list_items(&field.input).filter(|labels| item < labels.len())
+        else {
+            return;
+        };
+        if !matches!(kind, Kind::List | Kind::MultiSelect) {
+            return;
+        }
+        labels.remove(item);
+        let edit = PropertyEdit {
+            doc: doc.id,
+            revision: doc.revision,
+            field: Some(field.name.clone()),
+            kind,
+        };
+        let options = option_text(&self.property_options(&field.name));
+        if !self.apply_property(
+            &edit,
+            &field.name,
+            &properties::list_input(&labels),
+            &options,
+        ) {
+            self.flash(t!("properties-cannot-edit"));
+        }
+    }
+
+    fn property_edit_current(&self, edit: &PropertyEdit) -> bool {
+        self.note_properties_available()
+            && self
+                .editor
+                .active()
+                .is_some_and(|doc| doc.id == edit.doc && doc.revision == edit.revision)
     }
 
     fn property_options(&self, name: &str) -> Vec<String> {
@@ -497,11 +622,7 @@ impl App {
         value: &str,
         options: &str,
     ) -> bool {
-        let Some(doc) = self.editor.active() else {
-            return false;
-        };
-        if doc.id != edit.doc || doc.revision != edit.revision || !self.note_properties_available()
-        {
+        if !self.property_edit_current(edit) {
             return false;
         }
         let Some(prefix) = self.property_prefix() else {
@@ -525,11 +646,46 @@ impl App {
                 }
             }
         }
+        if !self.apply_property_patch(span, replacement) {
+            return false;
+        }
+        if !scope.is_empty() {
+            self.update_state(|state| {
+                let section = state
+                    .note_property_schema
+                    .entry(scope)
+                    .or_insert_with(|| Json::Object(BTreeMap::new()));
+                if let Json::Object(fields) = section {
+                    fields.insert(
+                        name.to_owned(),
+                        Json::Object(BTreeMap::from([
+                            ("kind".into(), Json::String(edit.kind.id().into())),
+                            (
+                                "options".into(),
+                                Json::Array(selected.into_iter().map(Json::String).collect()),
+                            ),
+                        ])),
+                    );
+                }
+            });
+        }
+        // A type-only edit can change the row without changing the Markdown revision.
+        self.invalidate_property_panel();
+        true
+    }
+
+    fn apply_property_patch(&mut self, span: std::ops::Range<usize>, replacement: String) -> bool {
+        let Some(doc) = self.editor.active() else {
+            return false;
+        };
+        if doc.text().rope().is_none() {
+            return false;
+        }
         if !span.is_empty() || !replacement.is_empty() {
             let replaced = replacement.bytes().filter(|&b| b == b'\n').count();
             let inserted =
                 replacement.chars().count() + replaced * (doc.line_ending.as_str().len() - 1);
-            let command = winc_editor::Command::Insert(replacement);
+            let command = winc_editor::Command::Paste(replacement);
             if doc.edit_blocked(&command).is_some() {
                 return false;
             }
@@ -555,29 +711,7 @@ impl App {
                 doc.selection = winc_core::Selection::new(mapped(prior.anchor), mapped(prior.head));
             }
         }
-        if !scope.is_empty() {
-            self.update_state(|state| {
-                let section = state
-                    .note_property_schema
-                    .entry(scope)
-                    .or_insert_with(|| Json::Object(BTreeMap::new()));
-                if let Json::Object(fields) = section {
-                    fields.insert(
-                        name.to_owned(),
-                        Json::Object(BTreeMap::from([
-                            ("kind".into(), Json::String(edit.kind.id().into())),
-                            (
-                                "options".into(),
-                                Json::Array(selected.into_iter().map(Json::String).collect()),
-                            ),
-                        ])),
-                    );
-                }
-            });
-        }
-        // A type-only edit can change the row without changing the Markdown revision.
-        self.preview.markdown.property_layout_dirty = true;
-        self.request_redraw();
+        self.invalidate_property_panel();
         true
     }
 }

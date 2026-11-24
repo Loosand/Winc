@@ -38,13 +38,17 @@ impl App {
         };
         let panel = self.key_context() == Context::Panel;
         // 焦点在终端的输入框里：编辑用的快捷键作用于输入框。
-        if matches!(self.focus, Focus::TerminalFind | Focus::TerminalRename)
-            && matches!(action, Copy | Cut | Paste | SelectAll | Undo | Redo)
+        let property_editor = self.overlays.picker.property.is_some();
+        if (property_editor || matches!(self.focus, Focus::TerminalFind | Focus::TerminalRename))
+            && matches!(
+                action,
+                Copy | Cut | Paste | MarkdownPastePlain | SelectAll | Undo | Redo
+            )
         {
             match action {
                 Copy => self.copy_field(false),
                 Cut => self.copy_field(true),
-                Paste => self.paste(),
+                Paste | MarkdownPastePlain => self.paste(),
                 SelectAll => self.edit_field(|field| {
                     field.select_all();
                     false
@@ -52,6 +56,9 @@ impl App {
                 Undo => self.edit_field(TextField::undo),
                 _ => self.edit_field(TextField::redo),
             }
+            return true;
+        }
+        if property_editor && !self.finish_property_picker() {
             return true;
         }
         // 焦点在终端里：复制、全选作用于终端的选区（粘贴见 `paste`）。

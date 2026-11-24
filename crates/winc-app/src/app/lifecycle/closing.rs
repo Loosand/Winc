@@ -186,6 +186,9 @@ impl App {
     ///
     /// 退出时先备份未保存的内容（热退出），已备份的文档不再询问。
     pub(in crate::app) fn request_close(&mut self, request: CloseRequest) {
+        if !self.finish_property_picker() {
+            return;
+        }
         // 正在为关闭而保存或格式化时，等待其完成，不重复处理。
         if self.format.then_close.is_some() {
             return;

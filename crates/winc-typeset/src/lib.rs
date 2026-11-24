@@ -44,6 +44,7 @@ mod diagram;
 mod inline;
 mod math;
 mod memo;
+mod properties;
 mod raw;
 mod table;
 

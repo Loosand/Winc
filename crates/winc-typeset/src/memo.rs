@@ -98,7 +98,7 @@ impl Memo {
 
 /// 单独排好的一段：坐标从 0 起，文字的位置从块文字的第 0 个字符起。
 pub struct Piece {
-    items: Vec<Item>,
+    pub(super) items: Vec<Item>,
     text: String,
     chars: usize,
     /// 这段的高度（逻辑像素）。

@@ -152,6 +152,8 @@ pub(crate) struct MarkdownPreview {
     /// 排版结果，见 [`laid::Laid`]。
     pub layout: Option<crate::app::preview::markdown::laid::Laid>,
     pub(crate) property_layout_dirty: bool,
+    pub(crate) property_collapsed: HashSet<DocumentId>,
+    pub(crate) property_source: HashSet<DocumentId>,
     pub(crate) imported_property_types: properties::ImportedTypes,
     /// 排版缓存，见 `winc_typeset::Memo`。
     pub memo: crate::app::preview::markdown::laid::Memo,
@@ -374,6 +376,8 @@ impl Default for MarkdownPreview {
             scrolls: HashMap::new(),
             layout: None,
             property_layout_dirty: false,
+            property_collapsed: HashSet::new(),
+            property_source: HashSet::new(),
             imported_property_types: properties::ImportedTypes::default(),
             last_table: None,
             memo: Default::default(),

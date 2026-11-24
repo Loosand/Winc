@@ -776,6 +776,17 @@ impl App {
             return;
         }
 
+        if self.overlays.picker.input.is_multiline() && self.overlays.picker.property.is_some() {
+            match event.logical_key {
+                Key::Named(NamedKey::Escape) => self.close_picker(),
+                Key::Named(NamedKey::Enter) if cmd => self.picker_accept(),
+                Key::Named(NamedKey::Enter) => self.edit_field(|f| f.insert("\n")),
+                Key::Named(NamedKey::Tab) if !cmd => self.edit_field(|f| f.insert("  ")),
+                _ => self.on_key_field(event, base, cmd),
+            }
+            return;
+        }
+
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => {
                 // 选择远端目录时先回到上一步（主机面板），再按一次才关闭。

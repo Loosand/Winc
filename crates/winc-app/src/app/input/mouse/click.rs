@@ -143,7 +143,9 @@ impl App {
             {
                 return;
             }
-            self.context_click(x, y);
+            if self.finish_property_picker() {
+                self.context_click(x, y);
+            }
             return;
         }
 
@@ -153,6 +155,14 @@ impl App {
 
         self.reset_blink();
         self.request_redraw();
+
+        if self.overlays.picker.property.is_some()
+            && !self.layout.picker.contains(x, y)
+            && !self.property_input_at(x, y)
+            && !self.finish_property_picker()
+        {
+            return;
+        }
 
         // 改动卡片：点按钮执行；点卡片里的其他位置什么都不做；点卡片外面关掉卡片，
         // 该事件仍然向下传递。

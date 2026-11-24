@@ -203,7 +203,7 @@ fn notebook_properties_panel_edits_one_field_and_saves_portable_yaml() {
         .hits
         .markdown_links
         .iter()
-        .find(|(_, target)| target == &format!("{PROPERTY}name:0"))
+        .find(|(_, target)| target == &format!("{PROPERTY}type:0"))
         .unwrap()
         .0;
     super::click(&mut app, (hit.x + hit.w * 0.5, hit.y + hit.h * 0.5));
@@ -351,6 +351,156 @@ fn property_values_open_anchored_editors_and_calendar_keeps_iso_yaml() {
     app.run(winc_editor::Command::Undo);
     assert!(doc_text(&app).contains("starred:\n---\n\n正文\n"));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn property_panel_edits_inline_and_switches_between_fields_and_yaml() {
+    use winc_preview::markdown::properties::{COLLAPSE, FIELDS, PROPERTY, RAW, SOURCE};
+    let source =
+        "---\nkind: 文章 # keep\ntags:\n- 技术\n- 性能\nstarred: false\nrating: 5\n---\n\n正文\n";
+    let (mut app, dir) = live_doc("md-property-inline", source);
+    let click = |app: &mut App, target: &str| {
+        let r = app
+            .hits
+            .markdown_links
+            .iter()
+            .find(|(_, url)| url == target)
+            .unwrap()
+            .0;
+        super::click(app, (r.x + r.w / 2.0, r.y + r.h / 2.0));
+    };
+    click(&mut app, COLLAPSE);
+    settle(&mut app);
+    assert!(!app.hits.markdown_links.iter().any(|(_, url)| url == FIELDS));
+    click(&mut app, COLLAPSE);
+    settle(&mut app);
+
+    click(&mut app, &format!("{PROPERTY}0"));
+    settle(&mut app);
+    if std::env::var_os("WINC_SNAPSHOT_DIR").is_some() {
+        super::shoot(&mut app, "minc-property-inline");
+    }
+    let cell = app
+        .hits
+        .markdown_links
+        .iter()
+        .find(|(_, url)| url == &format!("{PROPERTY}0"))
+        .unwrap()
+        .0;
+    assert_eq!(app.layout.picker, cell);
+    app.edit_field(|field| {
+        field.set_text("教程");
+        true
+    });
+    // The same click commits the text and activates the name field.
+    click(&mut app, &format!("{PROPERTY}name:0"));
+    assert!(doc_text(&app).contains("kind: \"教程\" # keep"));
+    app.edit_field(|field| {
+        field.set_text("type");
+        true
+    });
+    app.picker_accept();
+    settle(&mut app);
+    assert!(doc_text(&app).contains("\"type\": \"教程\" # keep"));
+
+    click(&mut app, &format!("{PROPERTY}list:1"));
+    app.edit_field(|field| field.insert("Web, UI"));
+    app.picker_accept();
+    settle(&mut app);
+    assert!(doc_text(&app).contains("tags: [\"技术\", \"性能\", \"Web, UI\"]"));
+    click(&mut app, &format!("{PROPERTY}item:1:0"));
+    settle(&mut app);
+    assert!(doc_text(&app).contains("tags: [\"性能\", \"Web, UI\"]"));
+    click(&mut app, &format!("{PROPERTY}delete:2"));
+    settle(&mut app);
+    assert!(!doc_text(&app).contains("starred"));
+    app.run(winc_editor::Command::Undo);
+    settle(&mut app);
+    assert!(doc_text(&app).contains("starred: false"));
+
+    click(&mut app, SOURCE);
+    settle(&mut app);
+    if std::env::var_os("WINC_SNAPSHOT_DIR").is_some() {
+        super::shoot(&mut app, "minc-property-source");
+    }
+    assert!(app.hits.markdown_links.iter().any(|(_, url)| url == RAW));
+    assert!(app.overlays.picker.input.is_multiline());
+    assert!(app.overlays.picker.input.text().starts_with("\"type\":"));
+    app.edit_field(|field| {
+        field.set_text("tags: [");
+        true
+    });
+    click(&mut app, FIELDS);
+    assert!(app.overlays.picker.input.is_multiline());
+    assert!(doc_text(&app).contains("starred: false"));
+    app.edit_field(|field| {
+        field.set_text("# raw\ntitle: 新标题\ntags: [技术]");
+        true
+    });
+    click(&mut app, FIELDS);
+    settle(&mut app);
+    assert!(!app.overlays.picker.open);
+    assert_eq!(
+        doc_text(&app),
+        "---\n# raw\ntitle: 新标题\ntags: [技术]\n---\n\n正文\n"
+    );
+    assert!(
+        app.hits
+            .markdown_links
+            .iter()
+            .any(|(_, url)| url == &format!("{PROPERTY}name:0"))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn property_list_reserves_inline_editing_space_in_a_narrow_note() {
+    use winc_preview::markdown::properties::{ADD, FIELDS, PROPERTY, SOURCE};
+    let dir = sample_folder("md-property-narrow");
+    let path = dir.join("LIVE.md");
+    std::fs::write(
+        &path,
+        "---\ntitle: 写作备忘\ndate: 2026-02-17\nstarred: true\ntags: [一个很长的属性标签用于检查窄窗口中添加按钮会不会挤到边缘]\nrating: 5\n---\n\n正文\n",
+    )
+    .unwrap();
+    let mut app = app_with(&path, true);
+    app.frame.renderer = Some(
+        winc_render::Renderer::offscreen(
+            700.0,
+            620.0,
+            super::SCALE,
+            app.palette.frame_bg,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    paint(&mut app);
+    app.set_preview_mode(PreviewMode::Preview);
+    settle(&mut app);
+    let hit = |app: &App, target: &str| {
+        app.hits
+            .markdown_links
+            .iter()
+            .find(|(_, url)| url == target)
+            .unwrap()
+            .0
+    };
+    let (add, fields, source) = (hit(&app, ADD), hit(&app, FIELDS), hit(&app, SOURCE));
+    assert!(add.right() <= fields.x && fields.right() <= source.x);
+    let plus = hit(&app, &format!("{PROPERTY}list:3"));
+    let chip = hit(&app, &format!("{PROPERTY}item:3:0"));
+    assert!(plus.y >= chip.bottom());
+
+    super::click(&mut app, (plus.x + plus.w * 0.5, plus.y + plus.h * 0.5));
+    settle(&mut app);
+    assert!(app.overlays.picker.input.view.area.w >= 96.0);
+    app.on_mouse_move(plus.x + plus.w * 0.5, plus.y + plus.h * 0.5);
+    assert_eq!(app.pointer.cursor_icon, winit::window::CursorIcon::Text);
+    if std::env::var_os("WINC_SNAPSHOT_DIR").is_some() {
+        super::shoot(&mut app, "minc-property-narrow-dark");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
