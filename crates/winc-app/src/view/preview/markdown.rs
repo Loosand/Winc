@@ -8,9 +8,11 @@
 use std::sync::Arc;
 
 use winc_i18n::t;
+use winc_preview::markdown::properties::{PROPERTY, RAW};
 use winc_render::{Color, FontKind, Frame, Rect, Stroke};
 
 use crate::app::Hover;
+use crate::app::preview::markdown::properties::popup::PropertyInput;
 use crate::app::preview::markdown::resize::ImageAt;
 use crate::app::preview::markdown::{ImageSlot, TableBar, TocTarget};
 use crate::app::{App, Focus, ScrollArea};
@@ -406,6 +408,13 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             .checked_sub(1)?;
         (source <= laid.ranges[i].end).then_some(i)
     });
+    let editing_yaml = !app.panes.drawing_background
+        && app
+            .overlays
+            .picker
+            .property
+            .as_ref()
+            .is_some_and(|p| p.input == PropertyInput::Source);
     for (i, (_, block)) in laid.blocks.iter().enumerate().skip(first) {
         let opacity = match focused {
             Some(b) if b != i => crate::theme::FOCUS_DIM,
@@ -451,8 +460,11 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             let source = &leaving.old.items[..leaving.items as usize];
             frame.with_opacity(alpha, |frame| draw_plain(frame, source, (left, at), clip));
         }
+        // The inline YAML editor paints directly on the panel, replacing the preview text.
+        let yaml_editor = (i == 0 && editing_yaml)
+            .then(|| block.link_box(RAW))
+            .flatten();
         frame.with_fade(p.editor_bg, opacity, |frame| {
-            use winc_preview::markdown::properties::PROPERTY;
             let property_hover = app.overlays.context_menu.is_none()
                 && !app.settings.open
                 && !(app
@@ -509,6 +521,9 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                         color,
                         span,
                     } => {
+                        if yaml_editor.is_some_and(|(y, h)| (y..y + h).contains(baseline)) {
+                            continue;
+                        }
                         if let Some(span) = span {
                             let from = laid.starts[i] + span.start;
                             let to = from + span.advances.len();

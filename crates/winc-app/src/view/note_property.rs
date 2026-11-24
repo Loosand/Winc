@@ -31,31 +31,19 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     };
     if !choices {
         let source = input == PropertyInput::Source;
-        let shell = if source {
-            anchor
-        } else {
-            anchor.inset(0.0, 2.0)
-        };
-        let p = app.palette;
-        frame.rect_clipped(
-            shell,
-            p.accent.alpha(if source { 0.42 } else { 0.75 }),
-            6.0,
-            anchor,
-        );
-        let inside = shell.inset(1.0, 1.0);
-        frame.rect_clipped(inside, p.editor_bg, 5.0, anchor);
-        if source {
-            frame.rect_clipped(inside, p.group_bg, 5.0, anchor);
-        }
         let field = if source {
-            inside.inset(9.0, 4.0)
+            anchor.inset(10.0, 5.0)
         } else {
+            let p = app.palette;
+            let shell = anchor.inset(0.0, 2.0);
+            frame.rect_clipped(shell, p.accent.alpha(0.75), 6.0, anchor);
+            let inside = shell.inset(1.0, 1.0);
+            frame.rect_clipped(inside, p.editor_bg, 5.0, anchor);
             inside.inset(4.0, 0.0)
         };
         let mut text = std::mem::take(&mut app.overlays.picker.input);
         let focused = app.focus == Focus::Picker;
-        app.ime.cursor = if input == PropertyInput::Source {
+        app.ime.cursor = if source {
             let wrap = super::fields::wrap_area_field_font(
                 app,
                 frame,

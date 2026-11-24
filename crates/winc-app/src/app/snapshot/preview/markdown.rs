@@ -374,6 +374,9 @@ fn property_panel_edits_inline_and_switches_between_fields_and_yaml() {
     assert!(!app.hits.markdown_links.iter().any(|(_, url)| url == FIELDS));
     click(&mut app, COLLAPSE);
     settle(&mut app);
+    if std::env::var_os("WINC_SNAPSHOT_DIR").is_some() {
+        super::shoot(&mut app, "minc-property-fields");
+    }
 
     click(&mut app, &format!("{PROPERTY}0"));
     settle(&mut app);
@@ -420,16 +423,24 @@ fn property_panel_edits_inline_and_switches_between_fields_and_yaml() {
 
     click(&mut app, SOURCE);
     settle(&mut app);
-    if std::env::var_os("WINC_SNAPSHOT_DIR").is_some() {
-        super::shoot(&mut app, "minc-property-source");
-    }
     assert!(app.hits.markdown_links.iter().any(|(_, url)| url == RAW));
     assert!(app.overlays.picker.input.is_multiline());
     assert!(app.overlays.picker.input.text().starts_with("\"type\":"));
+    app.picker_accept();
+    settle(&mut app);
+    assert!(!app.overlays.picker.open);
+    if std::env::var_os("WINC_SNAPSHOT_DIR").is_some() {
+        super::shoot(&mut app, "minc-property-source-idle");
+    }
+    click(&mut app, RAW);
+    assert!(app.overlays.picker.input.is_multiline());
     app.edit_field(|field| {
         field.set_text("tags: [");
         true
     });
+    if std::env::var_os("WINC_SNAPSHOT_DIR").is_some() {
+        super::shoot(&mut app, "minc-property-source");
+    }
     click(&mut app, FIELDS);
     assert!(app.overlays.picker.input.is_multiline());
     assert!(doc_text(&app).contains("starred: false"));

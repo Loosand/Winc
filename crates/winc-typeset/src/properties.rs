@@ -129,11 +129,6 @@ impl Cx<'_, '_> {
                     self.property_text(&add.text, label, size, self.colors.text, &mut out.items);
                 }
             }
-            out.items.push(Item::Fill {
-                rect: Rect::new(header.x, header.bottom() + 4.0, header.w, 1.0),
-                color: self.colors.table_line,
-                radius: 0.0,
-            });
         } else if summary.links.len() > 1 {
             let names = summary.links[1..].join(" · ");
             let rect = Rect {
@@ -174,7 +169,6 @@ impl Cx<'_, '_> {
     }
 
     fn property_source(&mut self, text: &str, area: Rect, out: &mut Out) -> f32 {
-        let first = out.items.len();
         let size = self.base * 0.83;
         let line = 20.0;
         let metrics = self.frame.metrics(FontKind::Mono, size);
@@ -207,16 +201,11 @@ impl Cx<'_, '_> {
             }
         }
         let height = top.clamp(row.line_h * 3.0, max_height + 5.0) + 5.0;
-        let editor = Rect::new(area.x, area.y, area.w, height);
-        out.items.insert(
-            first,
-            Item::Fill {
-                rect: editor,
-                color: self.colors.code_block,
-                radius: 6.0,
-            },
+        link(
+            Rect::new(area.x, area.y, area.w, height),
+            RAW,
+            &mut out.items,
         );
-        link(editor, RAW, &mut out.items);
         height
     }
 
