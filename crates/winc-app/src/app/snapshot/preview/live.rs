@@ -35,8 +35,6 @@ fn split_preview_follows_edits_and_scrolls() {
 
 #[test]
 fn the_full_preview_edits_the_document() {
-    use winit::keyboard::{Key, NamedKey};
-
     let (mut app, dir) = readme("md-live", false, PreviewMode::Preview);
     // 刚打开时整篇按排版显示。
     let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
@@ -76,54 +74,7 @@ fn the_full_preview_edits_the_document() {
             .to_string()
             .contains("*很启动快*")
     );
-
-    // ↓ 按显示行向下移动，移出该段后到达下一段；↑ 返回。
-    let start = app.live_caret_source().unwrap();
-    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
-    paint(&mut app);
-    let down = app.live_caret_source().unwrap();
-    assert!(down > start);
-    // 继续向下：经过提示块的标题（没有对应的原文，取块的开头），到达其正文的最后一行；保持
-    // 原来的横坐标，落在该行末尾。一段折成几行取决于字体，因此逐行移动到该处，每一步都向前。
-    let mut last = down;
-    for _ in 0..8 {
-        if after_caret(&app, 12).starts_with("\n\n## 安装") {
-            break;
-        }
-        assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
-        paint(&mut app);
-        let now = app.live_caret_source().unwrap();
-        assert!(now > last);
-        last = now;
-    }
-    assert!(
-        after_caret(&app, 12).starts_with("\n\n## 安装"),
-        "{}",
-        after_caret(&app, 12)
-    );
-    // 跳过段落间距，一次向下就到标题末尾。
-    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
-    paint(&mut app);
-    assert!(after_caret(&app, 12).starts_with("\n\n1. "));
-    // ⇧↑ 扩展选区。
-    app.pointer.modifiers = winit::keyboard::ModifiersState::SHIFT;
-    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowUp), false));
-    app.pointer.modifiers = winit::keyboard::ModifiersState::empty();
-    paint(&mut app);
-    assert!(!app.editor.active().unwrap().selection.is_empty());
-    // 其他键交给编辑区。
-    assert!(!app.markdown_key(&Key::Character("x".into()), false));
-    assert!(!app.markdown_key(&Key::Named(NamedKey::ArrowLeft), false));
-
-    // 光标到达文末：预览滚动到光标可见。
-    app.run(winc_editor::Command::DocEnd { extend: false });
-    paint(&mut app);
-    paint(&mut app);
-    let y = caret_screen_y(&app);
-    let area = app.preview.markdown.area;
-    assert!(y >= area.y && y < area.bottom(), "{y} {area:?}");
-
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

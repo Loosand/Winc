@@ -81,7 +81,26 @@ fn background_markdown_reflow_keeps_the_visible_editing_line_in_place() {
         (after - before).abs() <= 2.0,
         "before {before}, after {after}"
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn reflow_after_ime_commit_does_not_scroll_back_to_an_offscreen_caret() {
+    use std::time::Duration;
+    use winc_editor::Command;
     use winit::event::Ime;
+
+    let (mut app, dir) = live_doc("md-async-ime-scroll", &long_notes(1200));
+    put_caret(&mut app, "中英文 mixed 600", true);
+    app.run(Command::Insert("\n\n# 新的标题\n\n继续输入".into()));
+    settle(&mut app);
+    app.run(Command::MoveLeft {
+        word: false,
+        extend: true,
+    });
+    paint(&mut app);
+    let selection = app.editor.active().unwrap().selection;
+    assert!(!selection.is_empty());
     let expected = doc_text(&app).replace("继续输入", "继续输新字👩‍💻e\u{301}");
     app.preview.markdown.cost = Some(Duration::from_secs(1));
     app.on_ime(Ime::Preedit("xin".into(), Some((3, 3))));
