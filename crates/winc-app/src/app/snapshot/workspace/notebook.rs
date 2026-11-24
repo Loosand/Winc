@@ -88,11 +88,9 @@ fn notebook_documents_can_collapse_and_outline_headings_jump() {
 }
 
 #[test]
-fn notebook_links_footer_and_graph_share_the_note_targets() {
+fn notebook_links_and_backlinks_use_the_same_targets() {
     use crate::app::workspace::note_links::footer::{Action as Footer, CONTROL};
-    use crate::app::workspace::note_links::graph::Target as Graph;
     use winc_preview::note_links::WIKI_TARGET;
-    use winit::keyboard::{Key, NamedKey};
 
     let (mut app, root) = note_app("minc-link-navigation");
     let tea = root.join("Recipes/茶.md");
@@ -157,68 +155,8 @@ fn notebook_links_footer_and_graph_share_the_note_targets() {
         "[[薄荷|香草]]"
     );
 
-    app.open_path(&mint);
-    for _ in 0..3 {
-        app.wait_for_markdown();
-        paint(&mut app);
-    }
-    app.scroll_markdown_to(f32::MAX);
-    paint(&mut app);
-    let local = hit_for(&app, |hit| matches!(hit, Footer::Graph));
-    press(&mut app, local);
-    assert!(app.note_graph_shown());
-    assert_eq!(app.note_links.graph.center.as_deref(), Some(mint.as_path()));
-    assert_eq!(app.note_links.graph.local.as_ref().unwrap().edges.len(), 1);
-    let open = app
-        .note_links
-        .graph
-        .hits
-        .iter()
-        .find_map(|(r, hit)| match hit {
-            Graph::Node(i) if app.note_links.graph.local.as_ref().unwrap().paths[*i] == tea => {
-                Some(*r)
-            }
-            _ => None,
-        })
-        .unwrap();
-    press(&mut app, open);
-    app.note_graph_key(&Key::Named(NamedKey::Enter), false);
-    assert_eq!(
-        app.editor.active().unwrap().path.as_deref(),
-        Some(tea.as_path())
-    );
-
-    let sidebar = app.panels.sidebar.navigation.graph;
-    press(&mut app, sidebar);
-    assert!(app.note_graph_shown());
-    assert!(app.note_links.graph.center.is_none());
     let index = app.note_links.index.as_ref().unwrap();
     assert!(index.backlinks(&copy).is_none());
-    assert_eq!(index.graph.edges.len(), 1);
-    let search = app
-        .note_links
-        .graph
-        .hits
-        .iter()
-        .find(|(_, hit)| *hit == Graph::Search)
-        .unwrap()
-        .0;
-    press(&mut app, search);
-    app.overlays.picker.input.set_text("薄荷");
-    app.picker_refresh();
-    let picker = &mut app.overlays.picker;
-    let notes = &picker.notebook.as_ref().unwrap().index.notes;
-    picker.selected = picker
-        .hits
-        .iter()
-        .position(|&i| notes[i].path == mint)
-        .unwrap();
-    app.accept_notebook_search();
-    assert!(app.note_graph_shown());
-    assert_eq!(
-        app.note_links.graph.selected.as_deref(),
-        Some(mint.as_path())
-    );
     let _ = std::fs::remove_dir_all(root.parent().unwrap());
 }
 
@@ -240,24 +178,6 @@ fn notebook_hides_the_backlinks_footer_when_the_last_reference_is_removed() {
         assert!(app.note_links.footer_hits.is_empty());
     };
     no_footer(&app);
-
-    // An outgoing-only note can still open its local graph from the filename breadcrumb.
-    assert!(app.hits.tabs.is_empty());
-    assert!(
-        app.hits
-            .status
-            .iter()
-            .all(|&(_, item)| item != crate::app::StatusItem::Settings)
-    );
-    let &(file, _) = app.hits.crumbs.last().unwrap();
-    assert!(file.y < app.layout.editor.y);
-    right_click(&mut app, (file.x + file.w / 2.0, file.y + file.h / 2.0));
-    assert!(menu_commands(&app).contains(&(MenuCommand::ViewNoteGraph, true)));
-    app.run_menu_command(MenuCommand::ViewNoteGraph);
-    assert_eq!(app.editor.documents.len(), 1);
-    assert!(app.note_graph_shown());
-    assert_eq!(app.note_links.graph.center.as_deref(), Some(tea.as_path()));
-    assert_eq!(app.note_links.graph.local.as_ref().unwrap().edges.len(), 1);
 
     app.open_path(&mint);
     for _ in 0..3 {
@@ -300,15 +220,9 @@ fn notebook_links_with_equally_near_targets_open_a_choice_not_a_note() {
     );
     assert!(app.overlays.picker.open);
     assert_eq!(app.overlays.picker.hits.len(), 2);
-    assert!(
-        app.note_links
-            .index
-            .as_ref()
-            .unwrap()
-            .graph
-            .edges
-            .is_empty()
-    );
+    let index = app.note_links.index.as_ref().unwrap();
+    assert!(index.backlinks(&root.join("薄荷.md")).is_none());
+    assert!(index.backlinks(&other).is_none());
     let candidate = app
         .overlays
         .picker
@@ -323,48 +237,6 @@ fn notebook_links_with_equally_near_targets_open_a_choice_not_a_note() {
         Some(other.as_path())
     );
     assert_eq!(std::fs::read_to_string(&tea).unwrap(), "[[薄荷]]");
-    let _ = std::fs::remove_dir_all(root.parent().unwrap());
-}
-
-#[test]
-#[ignore = "manual measurement on generated note libraries"]
-fn measure_notebook_graph() {
-    let (mut app, root) = note_app("minc-graph-size");
-    let mut previous = 0;
-    for count in [100, 1_000] {
-        for id in previous..count {
-            let target = id / 4;
-            std::fs::write(
-                root.join(format!("Note {id}.md")),
-                format!("# Note {id}\n\n[[Note {target}]]\n"),
-            )
-            .unwrap();
-        }
-        previous = count;
-        let start = std::time::Instant::now();
-        if app.note_links.index.is_some() {
-            app.library_paths_changed(true, &[]);
-        }
-        app.open_note_graph(None);
-        let indexed = start.elapsed();
-        paint(&mut app);
-        let first_frame = start.elapsed();
-        let body = app.note_links.graph.area;
-        app.pointer.mouse = (body.x + body.w / 2.0, body.y + body.h / 2.0);
-        let start = std::time::Instant::now();
-        for _ in 0..6 {
-            app.wheel_note_graph(winit::event::MouseScrollDelta::LineDelta(0.0, 1.0));
-            paint(&mut app);
-        }
-        eprintln!(
-            "{count} generated notes: index {indexed:?}, first paint {first_frame:?}, zoom paint pairs {:?}",
-            start.elapsed() / 6
-        );
-        assert_eq!(
-            app.note_links.index.as_ref().unwrap().graph.paths.len(),
-            count + 2
-        );
-    }
     let _ = std::fs::remove_dir_all(root.parent().unwrap());
 }
 
@@ -479,9 +351,6 @@ fn shoot_notebook_navigation() {
     paint(&mut app);
     shoot(&mut app, "notebook-search");
     app.close_picker();
-    app.open_note_graph(None);
-    paint(&mut app);
-    shoot(&mut app, "notebook-graph");
     app.open_path(&tea);
     for _ in 0..3 {
         app.wait_for_markdown();

@@ -609,8 +609,6 @@ impl App {
         match std::mem::replace(&mut self.bars.prompt_kind, PromptKind::GoTo) {
             PromptKind::GoTo => self.goto_line(&input),
             PromptKind::GoToOffset => self.go_to_offset(&input),
-            PromptKind::ReaderUrl => self.import_reader_url(&input),
-            PromptKind::ReaderFeedUrl => self.subscribe_reader_url(&input),
             PromptKind::Stash => self.git_stash(&input),
             PromptKind::StashFiles(paths) => self.git_stash_files(&input, paths),
             PromptKind::NewTag { at } => self.git_new_tag(&input, at),

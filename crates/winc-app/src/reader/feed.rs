@@ -11,39 +11,45 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{literal, store};
-use crate::app::workspace::library::{PreviewLine, preview_lines};
 
-pub(super) const MAX_FEEDS: usize = 32;
 const MAX_ENTRIES: usize = 200;
 const MAX_TEXT: usize = 5 * 1024 * 1024;
-const CARD_BYTES: usize = 8192;
 const ATOM: &str = "http://www.w3.org/2005/Atom";
 const RSS_CONTENT: &str = "http://purl.org/rss/1.0/modules/content/";
 const XML: &str = "http://www.w3.org/XML/1998/namespace";
 
+/// A cached RSS or Atom subscription.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Feed {
+pub struct Feed {
+    /// Stable identifier derived from the subscription URL.
     pub key: String,
+    /// Original subscription URL.
     pub url: String,
+    /// Publisher-provided title.
     pub title: String,
+    /// Known entries, newest batch first.
     pub entries: Vec<Entry>,
+    /// Whether the last refresh failed.
     pub failed: bool,
     /// Derived in entry order when the cache or read state changes.
     #[serde(skip)]
     pub unread: Vec<usize>,
 }
 
+/// A cached item published in a feed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Entry {
+pub struct Entry {
+    /// Stable identifier derived from the publisher's item ID or URL.
     pub key: String,
+    /// Original article URL.
     pub url: String,
+    /// Publisher-provided title.
     pub title: String,
+    /// Whether the publisher supplied the full body.
     pub full: bool,
+    /// Whether the item has been marked read locally.
     #[serde(skip)]
     pub read: bool,
-    /// Layout-independent cached preview from the publisher's content or description.
-    #[serde(skip)]
-    pub card_lines: Arc<[PreviewLine]>,
     base: String,
     plain: bool,
     body: Arc<str>,
@@ -70,7 +76,8 @@ impl Entry {
         self.markdown_for(&self.body, image, missing)
     }
 
-    pub(super) fn online_markdown(&self, missing: &str) -> String {
+    /// Convert the cached body or summary to Markdown with absolute image URLs.
+    pub fn online_markdown(&self, missing: &str) -> String {
         let base = store::http_url(self.base()).or_else(|| store::http_url(&self.url));
         self.markdown(store::online_images(base.as_ref()), missing)
     }
@@ -91,37 +98,6 @@ impl Entry {
             image,
             missing,
         )
-    }
-
-    pub(crate) fn content_label(&self) -> &'static str {
-        use winc_i18n::t;
-        if self.full {
-            t!("reader-feed-full")
-        } else if self.card_lines.is_empty() {
-            t!("reader-feed-no-excerpt")
-        } else {
-            t!("reader-feed-summary")
-        }
-    }
-
-    fn prepare_card(&mut self) {
-        let mut end = self.body.len().min(CARD_BYTES);
-        while !self.body.is_char_boundary(end) {
-            end -= 1;
-        }
-        if end == 0 {
-            return;
-        }
-        let markdown = self.markdown_for(&self.body[..end], |_| None, "");
-        let mut lines = preview_lines(&markdown);
-        if let Some(PreviewLine::Text(first) | PreviewLine::Heading(first)) = lines.first()
-            && first.split_whitespace().eq(self.title.split_whitespace())
-        {
-            lines.remove(0);
-        }
-        if lines.iter().any(|line| !matches!(line, PreviewLine::Rule)) {
-            self.card_lines = lines.into();
-        }
     }
 
     pub(super) fn base(&self) -> &str {
@@ -287,7 +263,6 @@ fn parse(xml: &str, source: &Url, effective: &Url) -> Option<Feed> {
             title: title(node, url.as_str()),
             full,
             read: false,
-            card_lines: Arc::from([]),
             base: base_of(context, effective).to_string(),
             plain,
             body: body.into(),
@@ -304,6 +279,7 @@ fn path(root: &Path, key: &str) -> PathBuf {
 }
 
 fn load(root: &Path, key: &str) -> Option<Feed> {
+    store::check_key(key).ok()?;
     let feed: Feed = store::read_json(&path(root, key))?;
     (feed.key == key && store::article_url(&feed.url).is_some_and(|u| store::key(&u) == key))
         .then_some(feed)
@@ -338,7 +314,12 @@ fn apply_read(root: &Path, feed: &mut Feed) {
     feed.index_unread();
 }
 
-pub(super) fn list(root: &Path) -> io::Result<Vec<Feed>> {
+/// Load cached subscriptions with their read state.
+///
+/// # Errors
+///
+/// Returns an error if the feed directory cannot be enumerated.
+pub fn list(root: &Path) -> io::Result<Vec<Feed>> {
     let files = match fs::read_dir(root.join("feeds")) {
         Ok(files) => files,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -354,9 +335,6 @@ pub(super) fn list(root: &Path) -> io::Result<Vec<Feed>> {
             && let Some(mut feed) = load(root, id)
         {
             apply_read(root, &mut feed);
-            for entry in &mut feed.entries {
-                entry.prepare_card();
-            }
             feeds.push(feed);
         }
     }
@@ -364,12 +342,18 @@ pub(super) fn list(root: &Path) -> io::Result<Vec<Feed>> {
     Ok(feeds)
 }
 
-pub(super) fn subscribe(root: &Path, url: &Url) -> io::Result<bool> {
-    let key = store::key(url);
+/// Add a feed, returning whether the subscription exists.
+///
+/// # Errors
+///
+/// Returns an error for an invalid URL or if the cache cannot be written.
+pub fn subscribe(root: &Path, url: &Url) -> io::Result<bool> {
+    let url = store::article_url(url.as_str()).ok_or(io::ErrorKind::InvalidInput)?;
+    let key = store::key(&url);
     if load(root, &key).is_some() {
         return Ok(true);
     }
-    let Some(feed) = fetch(url) else {
+    let Some(feed) = fetch(&url) else {
         return Ok(false);
     };
     store::write_json(&path(root, &key), &feed)?;
@@ -402,9 +386,14 @@ fn merge(mut fresh: Feed, old: &Feed) -> Feed {
     fresh
 }
 
-pub(super) fn refresh(root: &Path, targets: &[(String, String)]) -> io::Result<()> {
+/// Refresh the selected cached feeds and retain previously seen entries.
+///
+/// # Errors
+///
+/// Returns an error if the refreshed cache cannot be written.
+pub fn refresh(root: &Path, targets: &[(String, String)]) -> io::Result<()> {
     for (key, source) in targets {
-        let Some(url) = store::http_url(source) else {
+        let Some(url) = store::article_url(source).filter(|url| store::key(url) == *key) else {
             continue;
         };
         let fresh = fetch(&url);
@@ -428,7 +417,14 @@ pub(super) fn refresh(root: &Path, targets: &[(String, String)]) -> io::Result<(
     Ok(())
 }
 
-pub(super) fn mark_read(root: &Path, feed: &str, entry: &Entry) -> io::Result<()> {
+/// Persist a read marker for a cached entry.
+///
+/// # Errors
+///
+/// Returns an error for invalid keys or if the marker cannot be written.
+pub fn mark_read(root: &Path, feed: &str, entry: &Entry) -> io::Result<()> {
+    store::check_key(feed)?;
+    store::check_key(&entry.key)?;
     let dir = read_dir(root, feed);
     fs::create_dir_all(&dir)?;
     // Independent markers avoid replacing content during a background refresh.
@@ -437,7 +433,13 @@ pub(super) fn mark_read(root: &Path, feed: &str, entry: &Entry) -> io::Result<()
     Ok(())
 }
 
-pub(super) fn unsubscribe(root: &Path, key: &str) -> io::Result<()> {
+/// Remove the feed cache and its read markers.
+///
+/// # Errors
+///
+/// Returns an error for an invalid key or a storage failure.
+pub fn unsubscribe(root: &Path, key: &str) -> io::Result<()> {
+    store::check_key(key)?;
     fs::remove_file(path(root, key))?;
     let _ = fs::remove_dir_all(read_dir(root, key));
     Ok(())

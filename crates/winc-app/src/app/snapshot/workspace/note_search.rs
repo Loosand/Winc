@@ -8,7 +8,6 @@ fn notebook_search_dialog_does_not_leave_a_gap_in_the_scrim_during_opening() {
     use crate::app::animation::{Clock, DIALOG_IN};
 
     let (mut app, root) = note_app("minc-search-scrim");
-    app.open_note_graph(None);
     paint(&mut app);
     let search = app.panels.sidebar.navigation.search;
     press(&mut app, search);

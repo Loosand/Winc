@@ -424,9 +424,6 @@ impl App {
         }
         settle(&mut self.settings.switch_slide, |s| s.1);
         settle(&mut self.settings.key_slide, |s| s.1);
-        settle(&mut self.motion.setup_intro, |c| *c);
-        settle(&mut self.motion.setup_outro, |c| *c);
-        settle(&mut self.motion.setup_page, |c| *c);
         self.show_update_notice();
         settle(&mut self.git.log.fade, |c| *c);
         self.settle_hint();
@@ -534,9 +531,6 @@ impl App {
             || self.settings.mode_slide.is_some()
             || self.settings.switch_slide.is_some()
             || self.settings.key_slide.is_some()
-            || self.motion.setup_intro.is_some()
-            || self.motion.setup_outro.is_some()
-            || self.motion.setup_page.is_some()
             || self.git.log.fade.is_some()
             || self.hint_animating()
             || !self.tabs.slides.is_empty()
@@ -675,12 +669,6 @@ fn system_reduces_motion() -> bool {
 
 /// 界面各处出现、消失与折叠的过渡动画。
 pub(crate) struct Motions {
-    /// 首次设置开场动画的时钟；没有在播放时为 `None`。
-    pub(crate) setup_intro: Option<animation::Clock>,
-    /// 点击「完成」之后从「首次设置」换到开始页的过渡动画的时钟；没有在播放时为 `None`。
-    pub(crate) setup_outro: Option<animation::Clock>,
-    /// 「首次设置」两页之间切换的过渡动画的时钟；没有在播放时为 `None`。
-    pub(crate) setup_page: Option<animation::Clock>,
     /// 工具栏按钮收入「⋯」或从「⋯」中移出的动画。
     pub(crate) tool_fold: ToolFold,
     /// 编辑区顶部输入条出现、消失的动画。

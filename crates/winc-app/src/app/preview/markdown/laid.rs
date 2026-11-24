@@ -479,18 +479,8 @@ pub(crate) fn lay_out(
         }));
     let doc = app.editor.active().and_then(|d| d.path.clone());
     let remote = app.config.markdown_remote_images != Some(false);
-    let feed_entry = app.reader_feed_entry();
-    let offline = app.reader_key().is_some();
-    let reader_dir = app.reader_image_dir();
-    let image_path = |url: &str| {
-        if offline {
-            crate::app::reader::image_path(reader_dir.as_deref()?, url)
-        } else {
-            // Feed entries may load remote images but never resolve a local file path.
-            let path = if feed_entry { None } else { doc.as_deref() };
-            crate::app::preview::markdown::image_path(path, url, remote)
-        }
-    };
+    let image_path =
+        |url: &str| crate::app::preview::markdown::image_path(doc.as_deref(), url, remote);
     let token = |kind| p.token(kind);
     let editable = app.markdown_live();
     let properties = parsed
@@ -508,13 +498,7 @@ pub(crate) fn lay_out(
         dark: p.dark,
         images: &app.preview.markdown.images,
         image_path: &image_path,
-        missing_image: if offline {
-            Some(winc_i18n::t!("reader-missing-image"))
-        } else if feed_entry {
-            Some(winc_i18n::t!("reader-image-unavailable"))
-        } else {
-            None
-        },
+        missing_image: None,
         wanted: Vec::new(),
         memo: &mut app.preview.markdown.memo,
         toggled: &app.preview.markdown.toggled,

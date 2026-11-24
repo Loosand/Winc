@@ -478,10 +478,6 @@ fn draw_tab(
         let c = (icon.0 + icons::FILE_WIDTH / 2.0, icon.1);
         super::library::home_icon(frame, c, p.accent, view);
         icon.0 + icons::FILE_WIDTH + 7.0
-    } else if doc.reading == Some(winc_editor::Reading::NoteGraph) {
-        let c = (icon.0 + icons::FILE_WIDTH / 2.0, icon.1);
-        super::note_graph::icon(frame, c, p.accent, view);
-        icon.0 + icons::FILE_WIDTH + 7.0
     } else if doc.log.is_some() {
         let c = (icon.0 + icons::FILE_WIDTH / 2.0, icon.1);
         // 实色的强调色，与文件标签的彩色图标同样醒目。

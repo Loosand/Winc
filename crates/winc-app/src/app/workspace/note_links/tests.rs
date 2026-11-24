@@ -23,18 +23,14 @@ fn both_syntaxes_share_a_target_but_keep_separate_citations() {
     assert_eq!(backlinks.len(), 1);
     assert_eq!(backlinks[&source].len(), 2);
     assert_eq!(backlinks[&source][0].label, "审美");
-    assert_eq!(first.graph.edges, [(0, 1)]);
 
     std::fs::write(&source, "[[音乐审美？]]").unwrap();
     let second = update(&root, Some(&first), Changes::Paths([source.clone()].into()));
     assert_eq!(second.backlinks(&target).unwrap()[&source].len(), 1);
-    assert_eq!(second.graph.edges, [(0, 1)]);
-    assert!(Arc::ptr_eq(&first.graph, &second.graph));
     assert!(Arc::ptr_eq(&first.notes[&target], &second.notes[&target]));
     std::fs::write(&source, "没有引用。").unwrap();
     let third = update(&root, Some(&second), Changes::Paths([source].into()));
     assert!(third.backlinks(&target).is_none());
-    assert!(third.graph.edges.is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -51,7 +47,6 @@ fn url_fragments_and_escapes_are_distinct_from_filename_punctuation() {
     let backlinks = &index.backlinks(&target).unwrap()[&source];
     assert_eq!(backlinks.len(), 1);
     assert_eq!(backlinks[0].label, "中文");
-    assert_eq!(index.graph.edges.len(), 1);
     assert!(index.backlinks(&source).is_none());
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -97,16 +92,6 @@ fn wiki_links_in_the_original_and_its_copy_use_the_nearest_directory() {
     assert_eq!(
         index.backlinks(&copied_target).unwrap()[&copied_source].len(),
         2
-    );
-    let edges: BTreeSet<_> = index
-        .graph
-        .edges
-        .iter()
-        .map(|&(from, to)| (&index.graph.paths[from], &index.graph.paths[to]))
-        .collect();
-    assert_eq!(
-        edges,
-        BTreeSet::from([(&source, &target), (&copied_source, &copied_target)])
     );
 
     std::fs::write(&same_directory, "# Nearer note").unwrap();

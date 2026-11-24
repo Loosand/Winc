@@ -135,11 +135,6 @@ impl App {
                 }
             }
             MenuTarget::Editor(id) => self.run_editor_command(command, id),
-            MenuTarget::ReaderQuote(quote) => {
-                if let MenuCommand::ReaderDraft(id) = command {
-                    self.append_reader_quote(id, quote);
-                }
-            }
             MenuTarget::Markdown => match command {
                 MenuCommand::Cut => self.copy(true),
                 MenuCommand::Copy => self.copy(false),
@@ -237,13 +232,6 @@ impl App {
                     && let Some(&language) = winc_syntax::languages().get(i)
                 {
                     self.settings_toggle_skip(language.id);
-                }
-            }
-            MenuTarget::NamedTheme(_) => {
-                if let MenuCommand::NamedTheme(dark, i) = command
-                    && i < crate::theme::themes(dark).len()
-                {
-                    self.set_named_theme(dark, i);
                 }
             }
             MenuTarget::Locale => {
@@ -547,11 +535,6 @@ impl App {
             MenuCommand::GitRollbackFile => {
                 if let Some(path) = path {
                     self.confirm_rollback(vec![path]);
-                }
-            }
-            MenuCommand::ViewNoteGraph => {
-                if let Some(path) = path.filter(|path| self.note_in_library(path)) {
-                    self.open_note_graph(Some(path));
                 }
             }
             MenuCommand::Close => self.close_tab(index),

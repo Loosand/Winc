@@ -94,7 +94,6 @@ impl App {
             tabs: TabBar::default(),
             panes: Default::default(),
             library: Default::default(),
-            reader: Default::default(),
             note_links: Default::default(),
             diff: Default::default(),
             status: Default::default(),
@@ -122,9 +121,6 @@ impl App {
                 split_share: None,
             },
             motion: crate::app::animation::Motions {
-                setup_intro: None,
-                setup_outro: None,
-                setup_page: None,
                 tool_fold: ToolFold::default(),
                 bar_card: Default::default(),
                 dialog_card: Default::default(),
@@ -200,7 +196,6 @@ impl App {
             },
             pending_chord: None,
             taps: Default::default(),
-            setup: Default::default(),
             settings: SettingsState::default(),
             format: FormatState::new(formatter()),
             git: {

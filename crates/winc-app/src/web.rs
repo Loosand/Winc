@@ -191,30 +191,21 @@ pub(crate) fn fetch(url: &str, timeout: u64, limit: Option<u64>) -> Result<Vec<u
     fits.then_some(output.stdout).ok_or(Failure::Invalid)
 }
 
+/// Failure to download or extract a reading resource.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) enum HttpFailure {
+pub enum HttpFailure {
+    /// Non-success HTTP response code.
     Status(u16),
+    /// curl exit code and whether the request used a proxy.
     Curl(i32, bool),
+    /// curl could not be started.
     MissingCurl,
+    /// The proxy rejected authentication.
     ProxyAuth,
+    /// The response was invalid or exceeded the size limit.
     Invalid,
+    /// No article could be extracted from the response.
     NoArticle,
-}
-
-impl HttpFailure {
-    pub(crate) fn message(self) -> String {
-        match self {
-            Self::Status(code @ (401 | 403 | 429)) => {
-                t!("reader-site-blocked", code = code)
-            }
-            Self::Status(code) => t!("reader-http-status", code = code),
-            Self::Curl(code, proxied) => Failure::from_curl(Some(code), "", proxied).message(),
-            Self::MissingCurl => t!("reader-curl-unavailable").to_owned(),
-            Self::ProxyAuth => Failure::ProxyAuth.message(),
-            Self::Invalid => t!("net-invalid").to_owned(),
-            Self::NoArticle => t!("reader-no-article").to_owned(),
-        }
-    }
 }
 
 /// Bounded HTTP(S) download for user-supplied reading URLs. Resolve relative article
@@ -227,8 +218,13 @@ pub(crate) fn fetch_http(
     fetch_http_with_referer(url, seconds, limit, None)
 }
 
-/// Like `fetch_http`, but image hosts may need to know the origin of the article.
-pub(crate) fn fetch_http_with_referer(
+/// Download bounded HTTP(S) content and return the URL after redirects. An image
+/// request can supply the article origin as a referrer.
+///
+/// # Errors
+///
+/// Returns the HTTP or transport failure, including invalid or oversized responses.
+pub fn fetch_http_with_referer(
     url: &url::Url,
     seconds: u64,
     limit: u64,
@@ -273,14 +269,12 @@ pub(crate) fn fetch_http_with_referer(
             }
         })?;
     let mut output = Vec::new();
-    let cap = limit + 8192;
+    let cap = limit.saturating_add(8192);
     let read = child
         .stdout
         .take()
-        .expect("piped stdout")
-        .take(cap)
-        .read_to_end(&mut output);
-    if read.is_err() || output.len() as u64 >= cap {
+        .is_some_and(|stdout| stdout.take(cap).read_to_end(&mut output).is_ok());
+    if !read || output.len() as u64 >= cap {
         let _ = child.kill();
         let _ = child.wait();
         return Err(HttpFailure::Invalid);

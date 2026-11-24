@@ -27,6 +27,8 @@ mod layout;
 mod macos;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod portal;
+#[allow(clippy::disallowed_methods, reason = "文章离线存档和订阅缓存都在本机")]
+pub mod reader;
 #[cfg(any(windows, target_os = "macos", test))]
 mod recents;
 mod release_notes;
@@ -266,7 +268,7 @@ pub fn run() {
         app.store.state_path = state_path;
         app.backup.root = backup_root;
         app.adopt_restored(restored);
-        // 测量时没有状态文件：不记录版本，开始页也不显示「首次设置」。
+        // 测量时没有状态文件，不记录版本。
         if app.store.state_path.is_some() {
             app.note_version();
         }

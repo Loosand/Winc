@@ -1,7 +1,7 @@
 use super::*;
 
-// A controlled HTTP fixture for the full fetch -> disk -> editor flow.
-pub(in crate::app) mod site {
+// A controlled HTTP fixture for the article and feed caches.
+pub(super) mod site {
     use std::io::{BufRead, BufReader, Write};
     use std::net::{SocketAddr, TcpListener};
     use std::sync::{
@@ -20,14 +20,6 @@ pub(in crate::app) mod site {
       <description><![CDATA[<p>Just a summary.</p>]]></description></item>
       <item><title>Duplicate ID</title><guid>full</guid><link>/duplicate</link></item>
       <item><title>Duplicate URL</title><guid>different</guid><link>/full</link></item>
-      </channel></rss>"#;
-
-    pub(crate) const EXCERPT_FEED: &str = r#"<rss version="2.0"><channel>
-      <title>Two ways to publish</title>
-      <item><title>Story with a preview</title><link>/missing-story</link>
-      <description><![CDATA[<p>Here is a useful publisher-provided excerpt.</p>]]></description></item>
-      <item><title>Story without a preview</title><link>/article</link>
-      <description><![CDATA[<p>Story without a preview</p>]]></description></item>
       </channel></rss>"#;
 
     pub(crate) struct Site {
@@ -99,11 +91,6 @@ pub(in crate::app) mod site {
                             "Content-Type: application/rss+xml\r\n",
                             FEED.as_bytes(),
                         ),
-                        "/excerpt-feed" => (
-                            "200 OK",
-                            "Content-Type: application/rss+xml\r\n",
-                            EXCERPT_FEED.as_bytes(),
-                        ),
                         "/denied" => ("403 Forbidden", "", b"Not the article"),
                         _ => ("404 Not Found", "", b""),
                     };
@@ -165,9 +152,49 @@ fn quote_is_standard_markdown_and_external_source() {
     let text = quote_markdown(
         "Hello *literal*\n\n> Next",
         "https://example.org/blog?a=1&b=2",
+        "Source",
     )
     .unwrap();
     assert!(text.starts_with("> Hello \\*literal\\*\n> \n> \\> Next\n\n"));
     assert!(text.ends_with("<https://example.org/blog?a=1&b=2>\n"));
-    assert!(quote_markdown("\n  ", "https://example.org").is_none());
+    assert!(quote_markdown("\n  ", "https://example.org", "Source").is_none());
+}
+
+#[test]
+fn article_assets_and_feed_read_state_survive_reopening() {
+    use std::sync::atomic::Ordering;
+
+    let Some(site) = site::Site::start() else {
+        return;
+    };
+    let root = std::env::temp_dir().join(format!("minc-reader-backend-{}", std::process::id()));
+    let article = store::article_url(&site.url("/article")).unwrap();
+    let saved = store::import(&root, &article, "Missing image", fetch_http_with_referer).unwrap();
+    assert!(saved.full);
+    store::set_place(&root, &saved.key, (1, 0.5)).unwrap();
+    let (_, body, place) = store::open(&root, &saved.key).unwrap();
+    assert_eq!(place, (1, 0.5));
+    let body = body.unwrap();
+    assert!(body.contains("These are the words I want to quote."));
+    let image = format!("image-{}.png", store::digest(site::IMAGE));
+    assert!(body.contains(&image));
+    let path = store::image_path(&store::dir(&root, &saved.key), &image).unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), site::IMAGE);
+
+    let url = store::article_url(&site.url("/feed")).unwrap();
+    assert!(feed::subscribe(&root, &url).unwrap());
+    let mut feeds = feed::list(&root).unwrap();
+    let subscription = feeds.pop().unwrap();
+    feed::mark_read(&root, &subscription.key, &subscription.entries[0]).unwrap();
+    site.broken.store(true, Ordering::Relaxed);
+    feed::refresh(&root, &[(subscription.key.clone(), subscription.url)]).unwrap();
+    let mut feeds = feed::list(&root).unwrap();
+    let cached = feeds.pop().unwrap();
+    assert!(cached.failed);
+    assert!(cached.entries[0].read);
+    assert_eq!(cached.unread, [1]);
+    feed::unsubscribe(&root, &cached.key).unwrap();
+    assert!(feed::list(&root).unwrap().is_empty());
+    assert!(store::open(&root, &saved.key).is_some());
+    std::fs::remove_dir_all(root).unwrap();
 }

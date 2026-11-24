@@ -100,7 +100,7 @@ fn release_notes_open_in_a_reading_tab() {
 }
 
 /// 更新之后的第一次启动提示一次，提示记着上次运行的版本；第一次运行、版本没有变化或变旧时
-/// 不提示。每种情况都记下当前版本。第一次运行时开始首次设置，没有完成时下次启动接着显示。
+/// 不提示。每种情况都记下当前版本。
 #[test]
 fn the_first_launch_after_an_update_offers_the_release_notes() {
     let current = winc_version::VERSION;
@@ -118,23 +118,13 @@ fn the_first_launch_after_an_update_offers_the_release_notes() {
         app.show_update_notice();
         app
     };
-    // 第一次运行：状态为空，不提示，开始页显示「首次设置」并记入状态。
-    let first = launch(false, None);
-    assert!(first.notice.action.is_none() && first.state.setup_pending);
-    // 上次没有完成首次设置：接着显示。
-    let mut again = blank_app(false);
-    again.state.version = Some(current.to_owned());
-    again.state.setup_pending = true;
-    again.note_version();
-    assert!(again.state.setup_pending && again.setup_shown());
-    // 版本没有变化。
-    let same = launch(true, Some(current));
-    assert!(same.notice.text.is_none() && !same.state.setup_pending);
+    // 全新安装和版本相同时都不显示更新提示。
+    assert!(launch(false, None).notice.action.is_none());
+    assert!(launch(true, Some(current)).notice.text.is_none());
     // 比当前版本新（换回了旧版本）。
     assert!(launch(true, Some("9999.0.0")).notice.text.is_none());
-    // 从旧版本更新而来：提示更新日志，不显示「首次设置」。
+    // 从旧版本更新而来时提示更新日志。
     let app = launch(true, Some("0.0.1"));
-    assert!(!app.state.setup_pending);
     assert!(app.notice.text.as_deref().unwrap().contains(current));
     assert!(matches!(
         &app.notice.action,

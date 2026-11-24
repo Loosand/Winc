@@ -44,26 +44,13 @@ impl App {
     ) -> impl FnOnce() -> Result<Picture, String> + Send + 'static {
         let path = path.to_path_buf();
         let remote = is_remote(url).then(|| url.to_owned());
-        let referer = remote.as_deref().and_then(|url| {
-            let winc_editor::Reading::FeedEntry { image_page, .. } =
-                self.editor.active()?.reading.as_ref()?
-            else {
-                return None;
-            };
-            crate::web::image_referer(
-                &url::Url::parse(image_page).ok()?,
-                &url::Url::parse(url).ok()?,
-            )
-        });
         let embedded = self.preview.markdown.embedded.get(&path).cloned();
         move || match (&remote, embedded) {
             (_, Some(bytes)) if image::is_svg(&path) => std::str::from_utf8(&bytes)
                 .map_err(|e| e.to_string())
                 .and_then(|text| svg::load(text, None, Some(system_glyphs()))),
             (_, Some(bytes)) => image::load_bytes(&bytes),
-            (Some(url), None) => {
-                download(url, &path, referer.as_deref()).and_then(|()| load_downloaded(&path))
-            }
+            (Some(url), None) => download(url, &path).and_then(|()| load_downloaded(&path)),
             (None, None) if image::is_svg(&path) => winc_backend::fs::read_to_string(&path)
                 .map_err(|e| e.to_string())
                 .and_then(|text| svg::load(&text, path.parent(), Some(system_glyphs()))),

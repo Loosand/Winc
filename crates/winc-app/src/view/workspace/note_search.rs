@@ -70,7 +70,6 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         bar.h,
     );
     let placeholder = match search.purpose {
-        Purpose::FocusGraph => t!("workspace-note-graph-search"),
         Purpose::FollowLink(_) => t!("workspace-note-link-choose"),
         Purpose::Open => t!("workspace-notebook-search-placeholder"),
     };
@@ -183,8 +182,6 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     );
     let hint = if search.index.limited {
         t!("workspace-notebook-search-limited")
-    } else if matches!(search.purpose, Purpose::FocusGraph) {
-        t!("workspace-note-graph-search-keys")
     } else {
         t!("workspace-notebook-search-keys")
     };

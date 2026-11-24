@@ -46,14 +46,13 @@ Measured on macOS; results vary with hardware and system load.
 | Formatting | Whole-file formatting with external tools such as rustfmt, Prettier, Black, Ruff, and gofmt |
 | Markdown | Edit in a single formatted view, with math and Mermaid diagrams; notes stay plain `.md` files |
 | Note library | Open a local folder and use Home to browse folder cards and miniature Markdown pages |
-| Reading | Saved articles, RSS / Atom subscriptions, offline reading, and quotes in Markdown drafts |
 | Preview | Images, SVG, JSON graphs, PDF (macOS and Windows), Word documents (docx), and spreadsheets (xlsx, csv) |
 | Git | Side-by-side diffs with word-level highlights, staging by hunk, commit and push, a commit graph, and blame |
 | Project | A file tree, quick open, and project search that follows `.gitignore` |
 | Terminal | An integrated terminal with automatic loading of project-local Python environments |
 | Remote | Experimental SSH remote: open a folder on a Linux host and edit, search, format, use Git, and open terminals there. On Windows, open folders inside WSL distributions |
 | Interface | Sixteen built-in themes, light and dark, and a complete interface in English and Simplified Chinese |
-| Modules | Git, the terminal, and SSH remote can each be turned off. First-time setup on the start page offers the appearance, theme, language, and modules |
+| Modules | Git, the terminal, and SSH remote can each be turned off. Appearance, theme, language, and modules are available in Settings |
 | Updates | Signed in-app updates on all three platforms, with the release notes shown in the app after each update |
 
 Touchscreens support tapping buttons and placing the caret, double-tapping to select a word,
@@ -72,15 +71,9 @@ interactive graph that updates as you edit, even before you save. Click a contai
 or unfold its branch. Drag to pan, use Ctrl/⌘ + scroll or pinch to zoom, and use **Fit to window**
 to see the whole graph. The graph reads standard JSON, not JSONC, JSON5, or JSON Lines.
 
-### Reading and writing
+### Note sidebar
 
-Choose **Read → Paste Article Link** from the sidebar below Home. When no local notebook is open, Read is available in the top bar. Minc saves the extracted body and supported images locally and resumes from your last position. If the body can’t be retrieved, Minc keeps the original link; missing images are marked. Imports don’t run JavaScript or bypass sign-ins or paywalls. Importing and refreshing require system `curl`; reading saved copies does not.
-
-**My Reading** shows feeds as folders and saved articles as note cards. **Saved Articles** and **RSS Subscriptions** show each collection on its own. Add RSS or Atom URLs under **RSS Subscriptions**. Feeds refresh after opening the library and then every 30 minutes, or on demand. Opening an entry marks it read; **Unread Only** filters the list. Cards show a feed excerpt or the start of the supplied article, when available. For excerpt-only or link-only entries, **Read Full Text** tries the original page without bookmarking it. Use **Save Article** to keep an offline copy that survives unsubscribing.
-
-Select article text and choose **Quote to Draft** to create a draft or append the quote and source link to an open Markdown document. Use **Save / Save As** to get a plain `.md` file. Removing a saved article doesn’t change your drafts, and you can still create documents without opening Read.
-
-Home and My Documents show the current folder. Click its name in the sidebar to switch workspaces or open a different folder. Files stay where they are. Manual refreshes on Home and in RSS show a loading state for at least half a second, then show the result.
+Home and My Documents show the current folder. Click its name in the sidebar to switch workspaces or open a different folder. Files stay where they are.
 
 ## Platforms
 

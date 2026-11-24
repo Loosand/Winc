@@ -229,28 +229,3 @@ fn shoot_keys_page() {
         app.settings.key_slide = None;
     }
 }
-
-#[test]
-#[ignore = "截图，手动运行"]
-fn shoot_setup_keys() {
-    use crate::keymap::import::{Editor, Source};
-    for dark in [false, true] {
-        let mut app = blank_app(dark);
-        app.state.setup_pending = true;
-        app.setup_next();
-        app.setup.sources = vec![
-            Source {
-                kind: Editor::Idea,
-                name: "IntelliJ IDEA 2025.3".to_owned(),
-                dir: std::env::temp_dir(),
-            },
-            Source {
-                kind: Editor::VsCode,
-                name: "VS Code".to_owned(),
-                dir: std::env::temp_dir(),
-            },
-        ];
-        let theme = if dark { "dark" } else { "light" };
-        shoot(&mut app, &format!("setup-keys-{theme}"));
-    }
-}

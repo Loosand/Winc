@@ -29,20 +29,6 @@ fn atom_differentiates_summary_and_inline_content_and_uses_xml_base() {
 }
 
 #[test]
-fn card_excerpts_keep_publisher_prose_but_remove_a_repeated_title() {
-    let url = Url::parse("https://example.org/feed").unwrap();
-    let mut feed = parse(super::super::tests::site::EXCERPT_FEED, &url, &url).unwrap();
-    for entry in &mut feed.entries {
-        entry.prepare_card();
-    }
-    assert!(!feed.entries[0].full);
-    assert!(
-        matches!(&feed.entries[0].card_lines[..], [PreviewLine::Text(line)] if line.starts_with("Here is"))
-    );
-    assert!(feed.entries[1].card_lines.is_empty());
-}
-
-#[test]
 fn merging_preserves_old_entries_without_duplicating_by_id_or_link() {
     let rss = Url::parse("https://example.org/feed").unwrap();
     let feed = parse(super::super::tests::site::FEED, &rss, &rss).unwrap();

@@ -58,7 +58,6 @@ pub(in crate::view) fn draw_sidebar(app: &mut App, frame: &mut Frame<'_>) {
         draw_project_header(app, frame);
         super::library::draw_home_button(app, frame);
     }
-    super::reader::sidebar_entry(app, frame);
     if app.layout.tree.h > 0.0 {
         draw_tree(app, frame);
     }

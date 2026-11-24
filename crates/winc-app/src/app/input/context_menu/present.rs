@@ -365,9 +365,6 @@ impl App {
             }
             MenuTarget::SkipOnSave => skip_menu(&self.settings.languages.format),
             MenuTarget::Locale => locale_menu(),
-            MenuTarget::NamedTheme(dark) => (0..crate::theme::themes(*dark).len())
-                .map(|i| MenuEntry::Item(MenuCommand::NamedTheme(*dark, i), true))
-                .collect(),
             MenuTarget::Whitespace => whitespace_menu(),
             MenuTarget::VimClipboard => vim_clipboard_menu(),
             MenuTarget::OpenWorktree => open_worktree_menu(),
@@ -527,20 +524,6 @@ impl App {
                 ]);
                 menu
             }
-            MenuTarget::ReaderQuote(_) => {
-                let mut menu = vec![MenuEntry::Item(
-                    MenuCommand::ReaderDraft(None),
-                    !self.editor.all_locked(),
-                )];
-                menu.extend(
-                    self.editor
-                        .documents
-                        .iter()
-                        .filter(|doc| crate::app::reader::draft_target(doc))
-                        .map(|doc| MenuEntry::Item(MenuCommand::ReaderDraft(Some(doc.id)), true)),
-                );
-                menu
-            }
             MenuTarget::Markdown => {
                 let mut menu = vec![
                     MenuEntry::Item(MenuCommand::Copy, self.markdown_selected_text().is_some()),
@@ -620,12 +603,6 @@ impl App {
                         docs.iter().any(|d| !d.is_dirty()),
                     )
                 };
-                if selected == 1 && path.is_some_and(|path| self.note_in_library(path)) {
-                    menu.extend([
-                        MenuEntry::Separator,
-                        MenuEntry::Item(MenuCommand::ViewNoteGraph, true),
-                    ]);
-                }
                 let doc = &docs[index];
                 if doc.can_lock() && doc.shows_text() {
                     let command = MenuCommand::ReadOnly(!doc.is_locked());
@@ -815,7 +792,6 @@ impl App {
             MenuTarget::CommitButton
                 | MenuTarget::TabList
                 | MenuTarget::Locale
-                | MenuTarget::NamedTheme(_)
                 | MenuTarget::Whitespace
                 | MenuTarget::VimClipboard
                 | MenuTarget::OpenWorktree
@@ -1111,7 +1087,6 @@ impl App {
                 winc_i18n::LocaleChoice::ALL.get(i)
                     == Some(&self.config.language.unwrap_or_default())
             }
-            MenuCommand::NamedTheme(dark, i) => self.theme_slot(dark) == i,
             MenuCommand::KeymapPreset(preset) => crate::keymap::current_preset() == preset,
             MenuCommand::Whitespace(i) => {
                 winc_config::RenderWhitespace::ALL.get(i)

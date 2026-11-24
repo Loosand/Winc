@@ -183,7 +183,6 @@ fn sample() -> State {
         ]
         .into(),
         version: Some("0.1.626".into()),
-        setup_pending: true,
         window: Some(WindowFrame {
             position: Some((-1280.0, 40.0)),
             width: 900.5,
@@ -219,6 +218,9 @@ fn round_trips_through_json() {
     let state = sample();
     assert_eq!(State::parse(&state.to_json()), state);
     assert_eq!(State::parse(&State::default().to_json()), State::default());
+    let before = State::parse(r#"{"setupPending": true, "version": "0.1.626"}"#);
+    assert_eq!(before.version.as_deref(), Some("0.1.626"));
+    assert!(!before.to_json().contains("setupPending"));
 }
 
 #[test]

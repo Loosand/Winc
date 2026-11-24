@@ -108,9 +108,6 @@ pub struct State {
     /// 上次运行的程序的版本号（如 `0.1.626`）；没有记录时为 `None`。启动时与当前版本比较，
     /// 得知这是否为更新之后的第一次启动。
     pub version: Option<String>,
-    /// 首次设置（第一次运行时开始页上的语言、外观、主题和模块）是否尚未完成：第一次运行时
-    /// 置位，用户点击「完成」后清除；未完成时下次启动仍然显示。
-    pub setup_pending: bool,
     /// 从磁盘映像等位置运行时不询问是否移到「应用程序」文件夹：用户曾选择不移动并勾选「不再
     /// 询问」。仅在 macOS 上使用。
     pub stay_outside_applications: bool,
@@ -626,7 +623,6 @@ impl State {
             .get("window")
             .and_then(Json::as_object)
             .and_then(window_frame);
-        state.setup_pending = root.get("setupPending").and_then(Json::as_bool) == Some(true);
         state.version = root
             .get("version")
             .and_then(Json::as_str)
@@ -822,9 +818,6 @@ impl State {
         }
         if let Some(version) = &self.version {
             fields.push(("version", Json::String(version.clone())));
-        }
-        if self.setup_pending {
-            fields.push(("setupPending", Json::Bool(true)));
         }
         if let Some(frame) = &self.window {
             fields.push(("window", window_json(frame)));

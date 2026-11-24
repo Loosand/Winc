@@ -23,31 +23,6 @@ pub(super) fn draw_navigation(app: &App, frame: &mut Frame<'_>) {
         r,
     );
 
-    let graph = nav.graph;
-    draw_button(
-        frame,
-        p,
-        graph,
-        clip,
-        hot(SidebarTarget::Graph),
-        app.note_graph_shown(),
-    );
-    super::note_graph::icon(
-        frame,
-        (graph.x + 15.0, center(graph).1),
-        p.text_muted,
-        graph,
-    );
-    ui_text(
-        frame,
-        app,
-        graph.x + 30.0,
-        graph,
-        t!("workspace-note-graph"),
-        p.text,
-        graph,
-    );
-
     let r = nav.documents;
     let switching = matches!(app.file_hover(), Some(crate::app::DropZone::NotebookSwitch));
     draw_button(frame, p, r, clip, hot(SidebarTarget::Documents), false);

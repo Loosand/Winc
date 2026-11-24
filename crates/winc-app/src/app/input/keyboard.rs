@@ -303,13 +303,6 @@ impl App {
             return;
         }
         if self.editor.active.is_none() {
-            if !event.repeat {
-                self.setup_key(&event.logical_key);
-            }
-            return;
-        }
-        if self.note_graph_shown() {
-            self.note_graph_key(&event.logical_key, cmd);
             return;
         }
         if self.log_active() {

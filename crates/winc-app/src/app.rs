@@ -13,12 +13,10 @@ pub(crate) mod hits;
 mod input;
 mod lifecycle;
 pub(crate) mod preview;
-pub(crate) mod reader;
 mod release_notes;
 pub(crate) mod remote;
 pub(crate) mod scroll;
 mod settings;
-pub(crate) mod setup;
 #[cfg(test)]
 mod snapshot;
 mod status;
@@ -344,10 +342,6 @@ pub enum UserEvent {
     TreeScanned,
     /// 本地笔记库的卡片读取完成。
     LibraryScanned,
-    ReaderDone,
-    ReaderFeedsDone,
-    RemoveReaderArticle(String),
-    RemoveReaderFeed(String),
     NotebookSearchScanned,
     /// 笔记链接索引已在后台更新。
     NoteLinksScanned,
@@ -374,24 +368,16 @@ pub enum PromptKind {
     GoTo,
     /// 十六进制视图里转到偏移（`⌃G`）。
     GoToOffset,
-    ReaderUrl,
-    ReaderFeedUrl,
     /// 储藏改动的说明（可为空）。
     Stash,
     /// 储藏这些文件的更改时输入说明。
     StashFiles(Vec<PathBuf>),
     /// 新 Git 标签的名称；`at` 为标签指向的提交（完整的提交号）。
-    NewTag {
-        at: String,
-    },
+    NewTag { at: String },
     /// 分支的新名称；`old` 为当前名称。
-    RenameBranch {
-        old: String,
-    },
+    RenameBranch { old: String },
     /// Vim 模式下查找的模式；`forward` 为真时向后文查找。
-    VimSearch {
-        forward: bool,
-    },
+    VimSearch { forward: bool },
     /// Vim 模式的命令行。
     VimCommand,
 }
@@ -508,8 +494,6 @@ pub enum Hover {
     ProjectName,
     SidebarButton,
     Library(workspace::library::LibraryTarget),
-    Reader(reader::Target),
-    NoteGraph(workspace::note_links::graph::Target),
     /// JSON 结构图的画布或按钮。
     Json(preview::json::Target),
     NotebookNav(workspace::notebook::SidebarTarget),
@@ -722,10 +706,6 @@ enum Drag {
     Hex,
     /// 在 Markdown 预览中拖选文字（`App::drag_markdown`）。
     MarkdownText,
-    /// 拖动笔记关系图谱的画布。
-    NoteGraph {
-        at: (f32, f32),
-    },
     /// 拖动 JSON 结构图的画布。
     Json {
         at: (f32, f32),
@@ -933,7 +913,6 @@ pub struct App {
     pub(crate) panels: workspace::Panels,
     /// 本地笔记库主页及卡片的状态。
     pub(crate) library: workspace::library::Library,
-    pub(crate) reader: reader::Reader,
     /// 已保存笔记的链接索引和反链页尾状态。
     pub(crate) note_links: workspace::note_links::State,
     /// 滚动的状态：滚轮与触控板的输入、平滑滚动的过渡、惯性滚动和滚动条的显示。
@@ -970,8 +949,6 @@ pub struct App {
     pub(crate) pending_chord: Option<crate::keymap::Stroke>,
     /// 单按修饰键的状态，用于连按两下修饰键的快捷键。
     pub(crate) taps: input::tap::Taps,
-    /// 「首次设置」中快捷键一页的状态。
-    pub(crate) setup: setup::SetupKeys,
 
     /// 设置浮层：当前页、分类和各输入框。
     pub settings: SettingsState,
@@ -1119,8 +1096,6 @@ impl App {
             UserEvent::Reread => self.poll_rereads(),
             UserEvent::TreeScanned => self.poll_tree_scans(),
             UserEvent::LibraryScanned => self.poll_library(),
-            UserEvent::ReaderDone => self.poll_reader(),
-            UserEvent::ReaderFeedsDone => self.poll_subscriptions(),
             UserEvent::NotebookSearchScanned => self.poll_notebook_search(),
             UserEvent::NoteLinksScanned => self.poll_note_links(),
             UserEvent::Saved => self.poll_saves(),

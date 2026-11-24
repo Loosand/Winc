@@ -62,24 +62,6 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>, at: Rect, clip: Rect) {
         p.text,
         clip,
     );
-    let graph = t!("workspace-note-view-graph");
-    let button_w = frame.measure(FontKind::Ui, small, graph) + 20.0;
-    let graph_at = Rect::new(at.right() - button_w, y + 8.0, button_w, ROW);
-    let graph_color = if graph_at.contains(app.mouse().0, app.mouse().1) {
-        p.accent
-    } else {
-        p.text_muted
-    };
-    frame.text(
-        FontKind::Ui,
-        small,
-        graph_at.x + 10.0,
-        y + 24.0,
-        graph,
-        graph_color,
-        clip,
-    );
-    hit(app, graph_at.intersect(clip), Action::Graph);
     let summary = t!(
         "workspace-note-backlink-count",
         notes = groups.len(),

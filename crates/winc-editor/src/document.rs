@@ -158,32 +158,6 @@ impl TableView {
 pub enum Reading {
     /// 由界面绘制的笔记库主页，不对应磁盘上的文件。
     Library,
-    /// The local reading library.
-    Reader,
-    /// An offline article or its link-only fallback, identified independently of its title.
-    Article {
-        /// Stable reading-library identifier.
-        key: String,
-        /// Locally rendered text, including the source or link-only notice.
-        markdown: Arc<str>,
-        /// Whether a full body was saved.
-        full: bool,
-    },
-    /// A cached subscription entry; it is not a saved article until explicitly bookmarked.
-    FeedEntry {
-        /// Pair of subscription and entry identifiers.
-        key: String,
-        /// Original article URL.
-        source: String,
-        /// The page that supplies the image referrer (after any redirect).
-        image_page: String,
-        /// Sanitized Markdown from the feed or original article.
-        markdown: Arc<str>,
-        /// Whether the current reading copy includes full text.
-        full: bool,
-    },
-    /// 由界面绘制的笔记关系图谱，不对应磁盘上的文件。
-    NoteGraph,
     /// 正在取回。
     Loading,
     /// 已取回的 Markdown 原文，排版后显示。

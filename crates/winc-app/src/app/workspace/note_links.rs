@@ -1,4 +1,4 @@
-//! Saved note links for the current local library. Preview navigation, backlinks and the graph share the resolved targets.
+//! Saved note links for the current local library. Preview navigation and backlinks share the resolved targets.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -12,7 +12,6 @@ use super::*;
 use crate::app::preview::markdown::local_target;
 
 pub(crate) mod footer;
-pub(crate) mod graph;
 #[cfg(test)]
 mod tests;
 
@@ -59,14 +58,9 @@ pub(crate) struct Index {
     notes: BTreeMap<PathBuf, Arc<Vec<Citation>>>,
     names: BTreeMap<String, Vec<PathBuf>>,
     incoming: BTreeMap<PathBuf, Backlinks>,
-    pub(crate) graph: Arc<graph::Graph>,
 }
 
 impl Index {
-    pub(crate) fn paths(&self) -> impl Iterator<Item = &PathBuf> {
-        self.notes.keys()
-    }
-
     pub(crate) fn backlinks(&self, path: &Path) -> Option<&Backlinks> {
         self.incoming.get(path)
     }
@@ -114,7 +108,7 @@ fn nearest_note<'a>(source_dir: &Path, paths: &'a [PathBuf]) -> WikiResult<'a> {
             continue;
         };
         // Count steps up to the shared directory and down to the candidate. Only an
-        // unambiguous minimum may add a graph edge; alphabetical order is not evidence.
+        // unambiguous minimum may contribute a backlink; alphabetical order is not evidence.
         let common = source_dir
             .components()
             .zip(dir.components())
@@ -283,7 +277,6 @@ fn update(root: &Path, previous: Option<&Index>, changes: Changes) -> Index {
             }
         }
     }
-    index.graph = graph::Graph::from_notes(&index, previous.map(|index| &index.graph));
     index
 }
 
@@ -301,7 +294,6 @@ pub(crate) struct State {
     pub(crate) expanded: BTreeMap<PathBuf, BTreeSet<PathBuf>>,
     pub(crate) footer_hits: Vec<footer::Action>,
     pub(crate) citation_jump: Option<(DocumentId, u64, usize)>,
-    pub(crate) graph: graph::View,
 }
 
 impl App {
@@ -376,15 +368,7 @@ impl App {
             .and_then(|rx| rx.try_recv().ok())
         {
             self.note_links.response = None;
-            let layout_changed = self
-                .note_links
-                .index
-                .as_ref()
-                .is_none_or(|old| !Arc::ptr_eq(&old.graph, &index.graph));
             self.note_links.index = Some(Arc::new(index));
-            if layout_changed {
-                self.graph_index_updated();
-            }
             self.preview.markdown.links.clear();
             self.request_redraw();
             self.start_note_links();

@@ -196,11 +196,6 @@ impl App {
     }
 
     fn open_markdown_link_target(&mut self, url: &str) {
-        if self.reader_story()
-            && !(url.starts_with('#') || url.starts_with("http://") || url.starts_with("https://"))
-        {
-            return;
-        }
         if let Some(target) = url.strip_prefix(WIKI_TARGET) {
             self.open_wiki(target);
             return;

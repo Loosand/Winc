@@ -35,12 +35,6 @@ fn all_pages_use_the_window_margin_by_default() {
     app.open_path(&dir);
     assert!(app.library_shown());
     check(&mut app);
-    app.press_reader(crate::app::reader::Target::Home, (0.0, 0.0));
-    assert!(app.reader_home());
-    check(&mut app);
-    app.open_note_graph(None);
-    assert!(app.note_graph_shown());
-    check(&mut app);
     app.open_path(&note);
     assert!(app.editor.active().unwrap().path.is_some());
     check(&mut app);

@@ -198,9 +198,6 @@ impl ApplicationHandler<UserEvent> for App {
         self.frame.renderer = Some(renderer);
         self.measure_fonts();
         self.window.handle = Some(window.clone());
-        if !settings {
-            self.start_setup_intro();
-        }
         #[cfg(windows)]
         {
             self.touch.window_input = crate::windows::WindowInput::new(&window);
@@ -491,8 +488,6 @@ impl App {
             | UserEvent::GitBlame
             | UserEvent::Reread
             | UserEvent::TreeScanned
-            | UserEvent::ReaderDone
-            | UserEvent::ReaderFeedsDone
             | UserEvent::LibraryScanned
             | UserEvent::NotebookSearchScanned
             | UserEvent::NoteLinksScanned
@@ -622,8 +617,6 @@ impl App {
             UserEvent::ReopenEncoding(id, encoding) => self.reopen_with_encoding(id, encoding),
             UserEvent::ShowHex(id) => self.show_hex_now(id),
             UserEvent::ImageReady => self.poll_images(),
-            UserEvent::RemoveReaderArticle(key) => self.remove_reader_article(key),
-            UserEvent::RemoveReaderFeed(key) => self.remove_reader_feed(key),
             UserEvent::Terminal => self.poll_terminal(),
         }
     }
@@ -700,7 +693,6 @@ impl App {
             }
         }
         earliest(&mut wake, self.reading_tick(now));
-        earliest(&mut wake, self.reader_tick(now));
         earliest(&mut wake, self.library_refresh_tick(now));
         earliest(&mut wake, self.terminal_settle_tick(now));
         earliest(&mut wake, self.auto_save_tick(now));

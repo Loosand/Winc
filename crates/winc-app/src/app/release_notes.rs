@@ -23,8 +23,7 @@ impl App {
     /// 记下当前运行的版本；这是更新之后的第一次启动时记下一条待显示的更新提示（见
     /// [`App::show_update_notice`]）。
     ///
-    /// 状态为空（第一次运行）时不提示，改为开始首次设置：开始页只显示「首次设置」，直到用户
-    /// 点击「完成」。版本与上次运行时相同或更旧时不提示。
+    /// 第一次运行、版本相同或降级时不提示。
     pub(crate) fn note_version(&mut self) {
         let current = winc_version::VERSION;
         let previous = self.state.version.clone();
@@ -34,7 +33,6 @@ impl App {
         let first_run = self.state == State::default();
         self.update_state(|state| {
             state.version = Some(current.to_owned());
-            state.setup_pending |= first_run;
         });
         let older = previous
             .as_deref()

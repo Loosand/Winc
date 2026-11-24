@@ -179,7 +179,6 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
     terminal::draw_terminal(app, frame);
     // 侧栏开关和窗口按钮画在终端之上：面板在右边、最大化且侧栏收起时伸到它们下面。
     draw_sidebar_button(app, frame);
-    workspace::reader::entry(app, frame);
     draw_window_controls(app, frame);
     draw_status(app, frame);
     draw_island_corners(app, frame, !covered);

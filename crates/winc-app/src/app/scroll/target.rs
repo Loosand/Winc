@@ -46,8 +46,6 @@ pub(crate) enum ScrollTarget {
     Terminal,
     /// 笔记库主页的卡片网格。
     Library,
-    /// Reading shelf. Keep its page generation so inertia does not scroll the next tab.
-    Reader(u64),
     /// Markdown 预览。
     Markdown,
     /// PDF 预览的缩略图栏。
@@ -79,7 +77,6 @@ impl ScrollTarget {
                 | Self::Results
                 | Self::Tree
                 | Self::Library
-                | Self::Reader(_)
                 | Self::TerminalStrip
         )
     }
@@ -154,8 +151,6 @@ impl App {
             ScrollTarget::TerminalStrip
         } else if l.terminal.contains(x, y) {
             ScrollTarget::Terminal
-        } else if self.reader_home() && l.editor.contains(x, y) {
-            self.reader_scroll_target()
         } else if self.library_shown() && l.editor.contains(x, y) {
             ScrollTarget::Library
         } else if self.preview.markdown.area.contains(x, y) {
@@ -260,9 +255,8 @@ impl App {
             ScrollTarget::Table => self.scroll_table(sx, sy, origin),
             ScrollTarget::Json(id) => self.pan_json(id, sx, sy),
             ScrollTarget::Editor(id) => self.scroll_editor_by_pixels(id, sx, sy),
-            ScrollTarget::Picker
-            | ScrollTarget::Library
-            | ScrollTarget::Reader(_)
+            ScrollTarget::Library
+            | ScrollTarget::Picker
             | ScrollTarget::Commit
             | ScrollTarget::Outline
             | ScrollTarget::Results
@@ -278,28 +272,21 @@ impl App {
     pub(crate) fn card_grid_scrollbar(&self) -> Option<(ScrollTarget, Rect, f32, f32)> {
         use crate::app::workspace::library::Grid;
         let editor = self.layout.editor;
-        let (target, grid, count, scroll) = if self.reader_home() {
-            (
-                self.reader_scroll_target(),
-                self.reader_grid(),
-                self.reader_card_count(),
-                self.reader.subscriptions.scroll,
-            )
-        } else if self.library_shown() {
+        if !self.library_shown() {
+            return None;
+        }
+        let grid = Grid::new(editor, &self.library.cards);
+        let track = grid.scroll_track(editor);
+        let content = grid.content_height(self.library.cards.len());
+        let max = content - track.h;
+        (max > 0.0 && track.w > 0.0 && track.h > 0.0).then(|| {
             (
                 ScrollTarget::Library,
-                Grid::new(editor, &self.library.cards),
-                self.library.cards.len(),
-                self.library.scroll,
+                track,
+                self.library.scroll.min(max),
+                content,
             )
-        } else {
-            return None;
-        };
-        let track = grid.scroll_track(editor);
-        let content = grid.content_height(count);
-        let max = content - track.h;
-        (max > 0.0 && track.w > 0.0 && track.h > 0.0)
-            .then(|| (target, track, scroll.min(max), content))
+        })
     }
 
     pub(in crate::app) fn card_grid_key(&mut self, key: &winit::keyboard::Key, cmd: bool) -> bool {
@@ -372,11 +359,6 @@ impl App {
             ScrollTarget::Results => Some(self.panels.global.scroll),
             ScrollTarget::Tree => Some(self.panels.tree.scroll),
             ScrollTarget::Library if self.library_shown() => Some(self.library.scroll),
-            ScrollTarget::Reader(_)
-                if self.reader_home() && target == self.reader_scroll_target() =>
-            {
-                Some(self.reader.subscriptions.scroll)
-            }
             ScrollTarget::LogDetails => {
                 let view = self.editor.active().and_then(|d| d.log.as_deref());
                 view.map(|view| view.details_scroll)
@@ -415,11 +397,6 @@ impl App {
                 );
                 grid.max_scroll(self.library.cards.len())
             }
-            ScrollTarget::Reader(_)
-                if self.reader_home() && target == self.reader_scroll_target() =>
-            {
-                self.reader_grid().max_scroll(self.reader_card_count())
-            }
             ScrollTarget::LogDetails => self.git.log.details_max,
             ScrollTarget::LogBranches => self.git.log.branches_max,
             ScrollTarget::Markdown => self.preview.markdown.max_scroll(),
@@ -453,11 +430,6 @@ impl App {
             ScrollTarget::Results => self.panels.global.scroll = scroll,
             ScrollTarget::Tree => self.panels.tree.scroll = scroll,
             ScrollTarget::Library => self.library.scroll = scroll,
-            ScrollTarget::Reader(_)
-                if self.reader_home() && target == self.reader_scroll_target() =>
-            {
-                self.reader.subscriptions.scroll = scroll
-            }
             ScrollTarget::LogDetails => {
                 let view = self.editor.active_mut().and_then(|d| d.log.as_deref_mut());
                 if let Some(view) = view {

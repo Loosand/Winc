@@ -10,7 +10,6 @@ pub(crate) enum Action {
     Open(PathBuf),
     Cite(PathBuf, Citation),
     Expand(PathBuf),
-    Graph,
 }
 
 impl App {
@@ -53,7 +52,6 @@ impl App {
                 }
                 self.request_redraw();
             }
-            Action::Graph => self.open_note_graph(Some(target)),
         }
         true
     }

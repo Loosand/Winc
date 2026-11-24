@@ -358,7 +358,7 @@ impl App {
     /// 返回边长 `size`（物理像素）的产品图标（RGBA），首次用到或缩放改变时从应用图标的 SVG
     /// 渲染并留存。
     pub(crate) fn product_logo(&mut self, size: u32) -> &[u8] {
-        const LOGO: &str = crate::app::setup::ICON;
+        const LOGO: &str = include_str!("../../assets/icon.svg");
         if self.settings.logo.as_ref().is_none_or(|&(s, _)| s != size) {
             let rgba = winc_preview::svg::load(LOGO, None, None)
                 .map(|picture| picture.render(size, size).rgba)
@@ -908,9 +908,8 @@ impl App {
             Setting::TerminalShellIntegration => self.config.terminal_shell_integration = Some(on),
             _ => return,
         }
-        // 由命令切换（如 ⌥Z 自动换行）时看不到开关，不必播放动画；开关在设置浮层和「首次设置」
-        // 中可见。
-        let visible = self.settings.open || self.setup_shown();
+        // 由命令切换（如 ⌥Z 自动换行）时只在设置可见时播放开关动画。
+        let visible = self.settings.open;
         self.settings.switch_slide = self
             .clock(super::animation::SWITCH_SLIDE)
             .filter(|_| visible)

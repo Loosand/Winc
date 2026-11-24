@@ -124,8 +124,6 @@ pub enum MenuCommand {
     /// 编辑区：复制 `路径:行`。
     CopyReference,
     Rename,
-    /// Open a note’s local relationship graph.
-    ViewNoteGraph,
     Delete,
     /// 文件树里多选时：在编辑区打开选中的各个文件（目录跳过）；搜索结果里：打开这一行所在的
     /// 文件，匹配行还选中这一处。
@@ -229,8 +227,6 @@ pub enum MenuCommand {
     /// 设置中「语言」菜单的一项，参数为 [`LocaleChoice::ALL`](winc_i18n::LocaleChoice::ALL)
     /// 中的序号（从 0 起）。
     Locale(usize),
-    /// 「首次设置」中「主题」菜单的一项：深色（`true`）或浅色主题列表中的序号（从 0 起）。
-    NamedTheme(bool, usize),
     /// 设置中「空白符」菜单的一项，参数为
     /// [`RenderWhitespace::ALL`](winc_config::RenderWhitespace::ALL) 中的序号（从 0 起）。
     Whitespace(usize),
@@ -520,7 +516,6 @@ pub enum MenuCommand {
     PropertyOption(usize),
     /// 在新标签中打开右键点击的本地图片。
     OpenImage,
-    ReaderDraft(Option<DocumentId>),
 }
 
 /// 行尾菜单中可列出的行尾；CR 只在文件本来就是 CR 时才列出。
@@ -555,7 +550,6 @@ impl MenuCommand {
             MenuCommand::CopyRelativePath => t!("cmd-copy-relative-path"),
             MenuCommand::CopyReference => t!("cmd-copy-reference"),
             MenuCommand::Rename => t!("cmd-rename-file"),
-            MenuCommand::ViewNoteGraph => t!("workspace-note-view-graph"),
             MenuCommand::Delete => t!("cmd-delete-file"),
             MenuCommand::Download => t!("menu-download"),
             MenuCommand::Close => t!("common-close"),
@@ -742,9 +736,6 @@ impl MenuCommand {
             MenuCommand::Locale(i) => winc_i18n::LocaleChoice::ALL
                 .get(i)
                 .map_or("", |&choice| crate::layout::locale_label(choice)),
-            MenuCommand::NamedTheme(dark, i) => crate::theme::themes(dark)
-                .get(i)
-                .map_or("", |theme| theme.name()),
             MenuCommand::FontDefault => t!("settings-font-default"),
             MenuCommand::Font(i) | MenuCommand::FallbackFont(i) => winc_render::installed_fonts()
                 .get(i)
@@ -760,7 +751,6 @@ impl MenuCommand {
             MenuCommand::PropertyCheck(false) => t!("properties-uncheck"),
             MenuCommand::PropertyOption(_) => t!("properties-options"),
             MenuCommand::OpenImage => t!("menu-open-image"),
-            MenuCommand::ReaderDraft(_) => t!("reader-new-draft"),
             MenuCommand::ImageWidth(percent) => match percent {
                 25 => "25%",
                 50 => "50%",
@@ -908,7 +898,6 @@ impl MenuCommand {
 /// 菜单所作用的目标：右键点击的位置，或弹出菜单的按钮。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuTarget {
-    ReaderQuote(String),
     /// 文件树中的一项；`None` 表示空白处，即根目录。
     Tree(Option<PathBuf>),
     /// Workspace roots captured when the My Documents menu opens; the current one comes first.
@@ -931,8 +920,6 @@ pub enum MenuTarget {
     SkipOnSave,
     /// 设置的外观页中的「语言」。
     Locale,
-    /// 「首次设置」中的「主题」：深色（`true`）或浅色主题的列表。
-    NamedTheme(bool),
     /// 设置的编辑器页中的「空白符」。
     Whitespace,
     /// 设置的编辑器页中的「Vim 剪贴板」。

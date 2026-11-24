@@ -33,7 +33,6 @@ pub(crate) struct NoteIndex {
 #[derive(Clone)]
 pub(crate) enum Purpose {
     Open,
-    FocusGraph,
     FollowLink(Option<String>),
 }
 
@@ -167,16 +166,6 @@ impl App {
         self.spawn_then(UserEvent::NotebookSearchScanned, move || {
             let _ = send.send(index_notes(&root));
         });
-    }
-
-    pub(super) fn open_graph_search(&mut self) {
-        let Some(index) = self.note_links.index.as_ref() else {
-            return;
-        };
-        self.open_title_picker(
-            &self.note_links.graph.graph(index).paths.clone(),
-            Purpose::FocusGraph,
-        );
     }
 
     pub(in crate::app) fn choose_wiki_note(&mut self, paths: &[PathBuf], anchor: Option<String>) {
@@ -324,7 +313,6 @@ impl App {
             return;
         }
         match purpose {
-            Some(Purpose::FocusGraph) => self.focus_graph_note(&path),
             Some(Purpose::FollowLink(anchor)) => {
                 self.open_markdown_file(&path, anchor.as_deref().unwrap_or_default())
             }

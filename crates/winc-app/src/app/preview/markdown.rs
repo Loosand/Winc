@@ -574,9 +574,6 @@ fn in_fence<'a>(lines: impl Iterator<Item = ropey::RopeSlice<'a>>) -> bool {
 pub(crate) fn shown_area(app: &App) -> Option<winc_render::Rect> {
     let doc = app.editor.active()?;
     // docx、EPUB 和内容已取回的阅读标签没有源代码可切换，总是以整个编辑区显示阅读视图。
-    if app.reader_story() {
-        return Some(app.reader_body_area());
-    }
     let reading = matches!(doc.reading, Some(winc_editor::Reading::Ready(_)));
     let converted =
         (doc.unsupported.as_ref()).is_some_and(winc_editor::Unsupported::reads_as_markdown);
@@ -609,11 +606,9 @@ impl App {
             return;
         };
         let (id, revision) = (doc.id, doc.revision);
-        let place = self.reader_place();
         let md = &mut self.preview.markdown;
         if md.doc != Some(id) {
             md.reset(Some(id));
-            md.restore_reader_place(place);
         }
         if md.checked == Some(revision) {
             return;
@@ -654,11 +649,7 @@ impl App {
         };
         // 阅读标签的原文不在文档的文本中。
         let reading = match &doc.reading {
-            Some(
-                winc_editor::Reading::Ready(text)
-                | winc_editor::Reading::Article { markdown: text, .. }
-                | winc_editor::Reading::FeedEntry { markdown: text, .. },
-            ) => Some(Arc::clone(text)),
+            Some(winc_editor::Reading::Ready(text)) => Some(Arc::clone(text)),
             _ => None,
         };
         md.pending = Some(revision);
@@ -866,7 +857,7 @@ impl App {
             }
             return false;
         }
-        let split = area == self.layout.split && !self.reader_story();
+        let split = area == self.layout.split;
         let typing = matches!(
             key,
             Key::Character(c) if c != " "
@@ -914,7 +905,7 @@ impl App {
     /// （见 [`App::markdown_live`]）；只读文档仍然作用于预览。
     pub(crate) fn markdown_focused(&self) -> bool {
         shown_area(self).is_some_and(|a| {
-            if a == self.layout.editor || self.reader_story() {
+            if a == self.layout.editor {
                 !self.markdown_live()
             } else {
                 self.preview.markdown.focused
@@ -1006,7 +997,6 @@ impl App {
         // 预览时光标不可见，不移动。
         if count == 1
             && !shift
-            && !self.reader_story()
             && shown_area(self).is_some_and(|a| a == self.layout.split)
             && let Some(source) = self.current_source_at(x, y)
         {
@@ -1299,7 +1289,7 @@ const CACHE_MAX: u64 = 200 * 1024 * 1024;
 /// 文件，下载完成后再改名，中途失败不会留下不完整的文件。每次启动后首次下载前清理一次缓存
 /// （[`clean_cache`]）。
 #[allow(clippy::disallowed_methods, reason = "只访问本机：图片缓存在本机")]
-fn download(url: &str, path: &Path, referer: Option<&str>) -> Result<(), String> {
+fn download(url: &str, path: &Path) -> Result<(), String> {
     let dir = path
         .parent()
         .ok_or(t!("preview-markdown-cache-folder-invalid"))?;
@@ -1318,16 +1308,8 @@ fn download(url: &str, path: &Path, referer: Option<&str>) -> Result<(), String>
     if url.starts_with("http://127.0.0.1:") {
         command.args(["--noproxy", "127.0.0.1"]);
     }
-    if let Some(referer) = referer {
-        command.args(["--referer", referer]);
-    }
     command
-        .args([
-            "--proto",
-            "=http,https",
-            "--proto-redir",
-            crate::web::image_redirect_protocols(referer),
-        ])
+        .args(["--proto", "=http,https", "--proto-redir", "=http,https"])
         .args([
             "-fsSL",
             "--globoff",

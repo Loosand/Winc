@@ -9,16 +9,13 @@ const HEADING: f32 = 25.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SidebarTarget {
     Search,
-    Graph,
     Documents,
     FolderMenu,
 }
 
 #[derive(Default)]
 pub(crate) struct Navigation {
-    pub(crate) reader: Rect,
     pub(crate) search: Rect,
-    pub(crate) graph: Rect,
     pub(crate) folder_menu: Rect,
     pub(crate) documents: Rect,
 }
@@ -67,7 +64,7 @@ impl App {
             return;
         }
         if !self.notebook_sidebar() {
-            let row = 2.0 * super::library::HOME_ROW;
+            let row = super::library::HOME_ROW;
             self.layout.tree.y += row;
             self.layout.tree.h = (self.layout.tree.h - row).max(0.0);
             return;
@@ -78,10 +75,8 @@ impl App {
             return;
         }
         let row = |y, h| Rect::new(home.x, y, home.w, h).intersect(sidebar);
-        let reader = row(home.bottom() + 2.0, ROW);
-        let search = row(reader.bottom() + 2.0, ROW);
-        let graph = row(search.bottom() + 2.0, ROW);
-        let documents = row(graph.bottom() + 8.0, HEADING);
+        let search = row(home.bottom() + 2.0, ROW);
+        let documents = row(search.bottom() + 8.0, HEADING);
         let tree = &mut self.layout.tree;
         let bottom = tree.bottom();
         tree.y = documents.bottom().min(bottom);
@@ -99,9 +94,7 @@ impl App {
         )
         .intersect(documents);
         self.panels.sidebar.navigation = Navigation {
-            reader,
             search,
-            graph,
             folder_menu,
             documents,
         };
@@ -134,7 +127,6 @@ impl App {
         let nav = &self.panels.sidebar.navigation;
         [
             (nav.search, SidebarTarget::Search),
-            (nav.graph, SidebarTarget::Graph),
             (nav.folder_menu, SidebarTarget::FolderMenu),
             (nav.documents, SidebarTarget::Documents),
         ]
@@ -145,7 +137,6 @@ impl App {
     pub(in crate::app) fn press_notebook_sidebar(&mut self, target: SidebarTarget) {
         match target {
             SidebarTarget::Search => self.open_notebook_search(),
-            SidebarTarget::Graph => self.open_note_graph(None),
             SidebarTarget::FolderMenu => {
                 let menu = self.panels.sidebar.navigation.folder_menu;
                 self.open_notebook_workspaces((menu.x, menu.bottom()));

@@ -19,22 +19,6 @@ pub enum StartAction {
     Recent(usize),
     /// 从最近列表中移除一项（悬停时右端的 ✕），参数为列表下标（从 0 起）。
     Forget(usize),
-    /// 「首次设置」：弹出「语言」菜单。
-    Language,
-    /// 「首次设置」：改用外观（跟随系统、浅色或深色）。
-    Appearance(winc_config::ThemeChoice),
-    /// 「首次设置」：弹出当前外观的「主题」菜单。
-    Theme,
-    /// 「首次设置」：开启或关闭一个可选模块。
-    Module(crate::keymap::Module),
-    /// 「首次设置」第一页底部的「继续」：进入快捷键一页。
-    SetupNext,
-    /// 「首次设置」快捷键一页底部的「返回」。
-    SetupBack,
-    /// 「首次设置」快捷键一页中的一项，参数见 `SetupKeys::choice`。
-    SetupKeymap(usize),
-    /// 「首次设置」快捷键一页底部的「完成」：结束首次设置。
-    FinishSetup,
 }
 
 impl App {
@@ -346,7 +330,6 @@ impl App {
     /// 内容包括：有路径且仍在磁盘上的标签、有备份的未保存内容、书签、折叠的块、大纲里收起的
     /// 符号、各 PDF 文件的阅读位置，以及当前标签。
     pub(in crate::app) fn remember_session(&mut self) {
-        self.flush_reader_positions();
         let Some(folder) = self.editor.root().map(Path::to_path_buf) else {
             return;
         };
@@ -500,32 +483,6 @@ impl App {
             StartAction::Open => self.pick(Pick::Open),
             StartAction::OpenFolder => self.pick(Pick::OpenFolder),
             StartAction::Remote => self.open_remote_picker(),
-            StartAction::Language | StartAction::Theme => {
-                use crate::app::input::context_menu::{MenuTarget, menu_below};
-                // 菜单从被点击的控件下方弹出，右端与控件对齐。
-                let Some(&(control, _)) = self.hits.start.iter().find(|(_, a)| *a == action) else {
-                    return;
-                };
-                let target = match action {
-                    StartAction::Language => MenuTarget::Locale,
-                    _ => MenuTarget::NamedTheme(self.palette.dark),
-                };
-                let (_, y) = menu_below(control);
-                self.open_context_menu(target, (control.right(), y));
-            }
-            StartAction::Appearance(choice) => self.set_theme_choice(choice),
-            StartAction::SetupNext => self.setup_next(),
-            StartAction::SetupBack => self.setup_back(),
-            StartAction::SetupKeymap(choice) => self.setup_choose(choice),
-            StartAction::FinishSetup => self.finish_setup(),
-            StartAction::Module(module) => {
-                use crate::keymap::Module;
-                self.settings_toggle(match module {
-                    Module::Git => Setting::GitModule,
-                    Module::Terminal => Setting::TerminalModule,
-                    Module::Remote => Setting::RemoteModule,
-                });
-            }
             StartAction::Recent(index) => {
                 let Some(folder) = self.state.recent.get(index).cloned() else {
                     return;
