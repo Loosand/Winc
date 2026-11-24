@@ -392,3 +392,18 @@ fn wide_tables_keep_their_columns_and_scroll_sideways() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_table_cell_in_verbatim_layout_displays_ime_preedit() {
+    use crate::app::preview::markdown::laid::full_text;
+    use winit::event::Ime;
+
+    let source = "| A | B |\n|---|---|\n| > 待补 | normal |\n";
+    let (mut app, dir) = live_doc("md-table-literal-preedit", source);
+    put_caret(&mut app, "待补", true);
+    app.on_ime(Ime::Preedit("nihao".into(), Some((5, 5))));
+    paint(&mut app);
+    assert!(full_text(&app).unwrap().contains("> 待补nihao"));
+    assert_eq!(doc_text(&app), source);
+    std::fs::remove_dir_all(dir).unwrap();
+}

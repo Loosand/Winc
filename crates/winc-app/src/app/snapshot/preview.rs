@@ -5,6 +5,7 @@ use winc_editor::PreviewMode;
 
 use super::*;
 
+mod caret;
 mod epub;
 mod images;
 mod json;
@@ -16,7 +17,11 @@ mod paste;
 mod pdf;
 #[cfg(any(target_os = "macos", windows))]
 mod pdf_places;
+mod performance;
+mod properties;
 mod reading;
+mod reflow;
+mod screenshots;
 mod selection;
 mod tables;
 mod writing;
@@ -157,6 +162,10 @@ fn clicking_where_markers_appear_does_not_select() {
     }
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn long_notes(sections: usize) -> String {
+    (0..sections).map(|i| format!("## 第 {i} 节\n\n中英文 mixed {i}，**重点**，图表和引用。👩‍💻 e\u{301}\n\n- 列表项\n- 条目\n\n")).collect()
 }
 
 /// 打开内容为 `text` 的 Markdown 文件，只看预览，等待解析、排版完成。

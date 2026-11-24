@@ -373,3 +373,244 @@ fn triple_click_drag_keeps_its_initial_range_when_parsing_catches_up() {
     assert_eq!(app.editor.active().unwrap().selection.range(), 0..paragraph);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn shift_arrows_cross_a_separator_and_ime_replaces_only_the_selection() {
+    use winc_core::Selection;
+    use winc_editor::Command;
+    use winit::{
+        event::Ime,
+        keyboard::{Key, ModifiersState, NamedKey},
+    };
+    let source = "# 标题\n\n前段👩‍💻\n\n后段e\u{301}\n";
+    let at = |text| source[..source.find(text).unwrap()].chars().count();
+    let (a, b) = (at("前段"), at("后段"));
+    for reverse in [false, true] {
+        let (mut app, dir) = live_doc(&format!("md-extend-ime-{reverse}"), source);
+        let (from, expected, key) = if reverse {
+            ("后段", Selection::new(b, a), NamedKey::ArrowUp)
+        } else {
+            ("前段", Selection::new(a, b), NamedKey::ArrowDown)
+        };
+        put_caret(&mut app, from, false);
+        app.pointer.modifiers = ModifiersState::SHIFT;
+        assert!(app.markdown_key(&Key::Named(key), false));
+        paint(&mut app);
+        app.pointer.modifiers = ModifiersState::empty();
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        app.on_ime(Ime::Preedit("ni".into(), Some((2, 2))));
+        paint(&mut app);
+        assert_eq!(doc_text(&app), source);
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        app.on_ime(Ime::Commit("你".into()));
+        assert_eq!(doc_text(&app), "# 标题\n\n你后段e\u{301}\n");
+        app.run(Command::Undo);
+        assert_eq!(doc_text(&app), source);
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        // Replay multiple commits without allowing a frame or background parse between them.
+        for text in ["你好", "👩‍💻", "e\u{301}"] {
+            app.on_ime(Ime::Commit(text.into()));
+        }
+        settle(&mut app);
+        assert_eq!(doc_text(&app), "# 标题\n\n你好👩‍💻e\u{301}后段e\u{301}\n");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn shift_down_selects_a_wrapped_row_for_paste_and_undo() {
+    use winc_core::Selection;
+    use winc_editor::Command;
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
+    let first = "甲乙丙丁".repeat(40);
+    let source = format!("{first}\n\n下一段");
+    let (mut app, dir) = live_doc("md-select-wrapped-paste", &source);
+    let y = caret_screen_y(&app);
+    app.pointer.modifiers = ModifiersState::SHIFT;
+    assert!(app.markdown_key(&Key::Named(NamedKey::ArrowDown), false));
+    app.pointer.modifiers = ModifiersState::empty();
+    settle(&mut app);
+    let selected = app.editor.active().unwrap().selection;
+    assert_eq!(selected.anchor, 0);
+    assert!((1..first.chars().count()).contains(&selected.head));
+    assert!(caret_screen_y(&app) > y);
+    let rest = source.char_indices().nth(selected.head).unwrap().0;
+    app.clipboard.copied = Some("替换".into());
+    app.paste();
+    assert_eq!(doc_text(&app), format!("替换{}", &source[rest..]));
+    let doc = app.editor.active().unwrap();
+    assert_eq!(doc.selection, Selection::point(2));
+    app.run(Command::Undo);
+    assert_eq!(doc_text(&app), source);
+    assert_eq!(app.editor.active().unwrap().selection, selected);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn replacing_across_blocks_keeps_the_unselected_emphasis_balanced() {
+    use winc_core::Selection;
+    use winc_editor::Command;
+    use winit::event::Ime;
+    let source = "开头 **保留 删除**\r\n\r\n选中部分 后文";
+    let (mut app, dir) = live_doc("md-replace-bold-boundary", source);
+    let at = |word| source[..source.find(word).unwrap()].chars().count();
+    let selection = Selection::new(at(" 后文"), at("删除"));
+    app.editor.active_mut().unwrap().selection = selection;
+    settle(&mut app);
+    app.on_ime(Ime::Commit("换掉".into()));
+    assert_eq!(with_caret(&app), "开头 **保留** 换掉| 后文");
+    app.run(Command::Undo);
+    assert_eq!(doc_text(&app), source);
+    assert_eq!(app.editor.active().unwrap().selection, selection);
+    app.run(Command::Redo);
+    assert_eq!(with_caret(&app), "开头 **保留** 换掉| 后文");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn deleting_hidden_multiline_emphasis_removes_only_fully_selected_delimiters() {
+    use winc_core::Selection;
+    use winc_editor::Command;
+
+    let source = "前 **甲\r\n乙** 后";
+    let (mut app, dir) = live_doc("md-delete-multiline-bold", source);
+    let at = |word| source[..source.find(word).unwrap()].chars().count();
+
+    let selection = Selection::new(at("** 后"), at("甲"));
+    app.editor.active_mut().unwrap().selection = selection;
+    settle(&mut app);
+    app.run(Command::Delete { word: false });
+    assert_eq!(doc_text(&app), "前  后");
+    app.run(Command::Undo);
+    assert_eq!(doc_text(&app), source);
+    assert_eq!(app.editor.active().unwrap().selection, selection);
+
+    app.editor.active_mut().unwrap().selection = Selection::new(at("甲"), at("乙"));
+    settle(&mut app);
+    app.run(Command::Delete { word: false });
+    assert_eq!(doc_text(&app), "前 **乙** 后");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn copy_in_a_note_offers_text_and_html_or_explicit_markdown() {
+    use crate::keymap::Action;
+    use winc_core::Selection;
+    let source = "A **重点** 和 [资料](https://example.com)。\n\n```\n**代码原样**\n```\n";
+    let (mut app, dir) = live_doc("md-clipboard-copy", source);
+    let select = |app: &mut App, needle: &str| {
+        let doc = app.editor.active_mut().unwrap();
+        let rope = doc.text().rope().unwrap();
+        let start = source.find(needle).unwrap();
+        doc.selection = Selection::new(
+            rope.byte_to_char(start),
+            rope.byte_to_char(start + needle.len()),
+        );
+    };
+    select(&mut app, "重点");
+    let selection = app.editor.active().unwrap().selection;
+    assert!(app.run_action(Action::Copy));
+    assert_eq!(app.clipboard.copied.as_deref(), Some("重点"));
+    assert!(
+        app.clipboard
+            .copied_html
+            .as_deref()
+            .unwrap()
+            .contains("<strong>重点</strong>")
+    );
+    assert!(app.run_action(Action::MarkdownCopy));
+    assert_eq!(app.clipboard.copied.as_deref(), Some("**重点**"));
+    assert!(app.clipboard.copied_html.is_none());
+    assert_eq!(app.editor.active().unwrap().selection, selection);
+    assert_eq!(doc_text(&app), source);
+    select(&mut app, "点");
+    assert!(app.run_action(Action::Copy));
+    assert_eq!(app.clipboard.copied.as_deref(), Some("点"));
+    assert_eq!(
+        app.clipboard.copied_html.as_deref(),
+        Some("<strong>点</strong>")
+    );
+    select(&mut app, "资料");
+    assert!(app.run_action(Action::MarkdownCopy));
+    assert_eq!(
+        app.clipboard.copied.as_deref(),
+        Some("[资料](https://example.com)")
+    );
+    select(&mut app, "**代码原样**");
+    assert!(app.run_action(Action::Copy));
+    assert_eq!(app.clipboard.copied.as_deref(), Some("**代码原样**"));
+    assert!(app.clipboard.copied_html.is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn copying_across_blocks_keeps_only_the_visible_selection() {
+    use crate::keymap::Action;
+    use winc_core::Selection;
+    let source = "前 **甲乙**\n\n## 丙丁\n\n后文";
+    let char_at = |word| source[..source.find(word).unwrap()].chars().count();
+    let (a, b) = (char_at('乙'), char_at('丁'));
+    for reverse in [false, true] {
+        let (mut app, dir) = live_doc(&format!("md-copy-across-{reverse}"), source);
+        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let point = |ch| point_of(&app, shown[..shown.find(ch).unwrap()].chars().count());
+        let (from, to) = (point('乙'), point('丁'));
+        let ((x, y), (x2, y2), expected) = if reverse {
+            (to, from, Selection::new(b, a))
+        } else {
+            (from, to, Selection::new(a, b))
+        };
+        app.on_mouse_move(x, y);
+        app.on_mouse_down(MouseButton::Left);
+        paint(&mut app);
+        app.on_mouse_move(x2, y2);
+        app.on_mouse_up(MouseButton::Left);
+        settle(&mut app);
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        assert!(app.run_action(Action::Copy));
+        assert_eq!(app.clipboard.copied.as_deref(), Some("乙\n丙"));
+        let html = app.clipboard.copied_html.as_deref().unwrap();
+        assert!(
+            html.contains("<strong>乙</strong>") && html.contains("<h2>丙</h2>"),
+            "{html}"
+        );
+        assert!(!html.contains(['甲', '丁']));
+        assert_eq!(doc_text(&app), source);
+        assert_eq!(app.editor.active().unwrap().selection, expected);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn dragging_across_blocks_keeps_the_layout_still() {
+    let (mut app, dir) = live_doc("md-drag", "第一段文字\n\n第二段文字\n\n第三段文字\n");
+    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let at = |s: &str| shown[..shown.find(s).unwrap()].chars().count();
+    let (x, y) = point_of(&app, at("第一段") + 1);
+    let (x2, y2) = point_of(&app, at("第三段") + 1);
+    app.on_mouse_move(x, y);
+    app.on_mouse_down(MouseButton::Left);
+    paint(&mut app);
+    // 按住鼠标拖动期间排版不变（尚未开始编辑，全部按排版显示），鼠标下方的内容不移位。
+    assert!(app.preview.markdown.layout.as_ref().unwrap().live.is_none());
+    app.on_mouse_move(x2, y2 + 1.0);
+    paint(&mut app);
+    assert!(app.preview.markdown.layout.as_ref().unwrap().live.is_none());
+    assert_eq!(
+        crate::app::preview::markdown::laid::full_text(&app).unwrap(),
+        shown
+    );
+    app.on_mouse_up(MouseButton::Left);
+    paint(&mut app);
+    let doc = app.editor.active().unwrap();
+    let text = doc_text(&app);
+    let rope = doc.text().rope().unwrap();
+    let selected =
+        &text[rope.char_to_byte(doc.selection.from())..rope.char_to_byte(doc.selection.to())];
+    assert!(
+        selected.starts_with("一段") && selected.contains("第二段文字"),
+        "{selected}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

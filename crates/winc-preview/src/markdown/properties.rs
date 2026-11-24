@@ -672,5 +672,4 @@ pub fn list_input(items: &[String]) -> String {
 }
 
 #[cfg(test)]
-#[path = "properties_tests.rs"]
 mod tests;
