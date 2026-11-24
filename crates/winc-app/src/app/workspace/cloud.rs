@@ -20,6 +20,10 @@ pub(crate) enum CloudStatus {
 }
 
 impl CloudStatus {
+    pub(crate) fn transferring(self) -> bool {
+        matches!(self, Self::Downloading | Self::Uploading)
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::OnlineOnly => t!("workspace-icloud-online-only"),

@@ -106,11 +106,14 @@ impl App {
                 };
                 nav.tree_menu = tool(toggle.w);
                 nav.search = tool(toggle.w + step);
-                nav.folder_menu = header.intersect(side);
+                nav.folder_menu = Rect::new(
+                    header.x,
+                    bar.y + (bar.h - header.h) / 2.0,
+                    header.w,
+                    header.h,
+                )
+                .intersect(side);
                 let tree = &mut self.layout.tree;
-                let extra = (tree.y - header.bottom() - 3.0).max(0.0);
-                tree.y -= extra;
-                tree.h += extra;
                 let footer_height = tree.h.min(FOOTER);
                 tree.h -= footer_height;
                 nav.new_file = Rect::new(

@@ -264,6 +264,7 @@ impl App {
             Target::RulerChange(hunk) => Hover::RulerChange(hunk),
             Target::Crumb(index) => Hover::Crumb(index),
             Target::Status(item) => Hover::Status(item),
+            Target::TreeDisclosure(row) => Hover::TreeRow(row),
             Target::Tree(row) => row.map_or(Hover::None, |row| {
                 if self
                     .hits
@@ -510,7 +511,24 @@ impl App {
             return Target::Library(crate::app::workspace::library::LibraryTarget::Root);
         }
         if l.tree.contains(x, y) || self.in_tree_overflow(x, y) {
-            return Target::Tree(self.tree_row_at(y));
+            let row = self.tree_row_at(y);
+            if self.notebook_sidebar()
+                && l.tree.contains(x, y)
+                && let Some(row) = row
+                && let Some(entry) = self
+                    .editor
+                    .workspace
+                    .as_ref()
+                    .and_then(|ws| ws.rows().get(row))
+                && entry.kind == winc_editor::EntryKind::Dir
+            {
+                let left =
+                    crate::layout::tree_indent_x(l.tree.x, entry.depth, self.panels.tree.scroll_x);
+                if (left - 3.0..left + 14.0).contains(&x) {
+                    return Target::TreeDisclosure(row);
+                }
+            }
+            return Target::Tree(row);
         }
         if self.library_shown() && l.editor.contains(x, y) {
             return hit(&self.hits.library, x, y).map_or(Target::Blocked, Target::Library);
@@ -1102,6 +1120,7 @@ pub(super) enum Target {
     ResizeEdge(winit::window::ResizeDirection),
     /// 文件树（含向右展开显示全名的区域），参数为鼠标所在的行。
     Tree(Option<usize>),
+    TreeDisclosure(usize),
     Placeholder(crate::app::PlaceholderAction),
     Diff(crate::app::DiffTarget),
     Log(crate::app::git::log::LogTarget),

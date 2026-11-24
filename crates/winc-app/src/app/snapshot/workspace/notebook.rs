@@ -26,6 +26,9 @@ fn notebook_places_icloud_badges_to_the_right_and_marks_an_opening_file() {
     );
     assert_eq!(badges[0].0.x, badges[1].0.x);
     assert!(badges[0].0.right() < app.layout.tree.right());
+    assert!(app.animating());
+    app.config.ui_animations = Some(false);
+    assert!(!app.animating());
     let badge = badges[0].0;
     app.on_mouse_move(badge.x + badge.w / 2.0, badge.y + badge.h / 2.0);
     assert!(matches!(app.pointer.hover, Hover::CloudBadge(_)));
@@ -37,6 +40,43 @@ fn notebook_places_icloud_badges_to_the_right_and_marks_an_opening_file() {
     assert!(app.editor.active().unwrap().is_pending());
     paint(&mut app);
     assert_eq!(app.hits.cloud_badges[0].1, CloudStatus::Downloading);
+    app.config.ui_animations = Some(true);
+    app.set_sidebar(false);
+    paint(&mut app);
+    assert!(app.hits.cloud_badges.is_empty());
+    assert!(!app.animating());
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn notebook_folder_arrow_toggles_without_opening_the_folder() {
+    let (mut app, root) = note_app("minc-folder-arrow");
+    let folder = root.join("Recipes");
+    let note = root.join("薄荷.md");
+    let original = std::fs::read_to_string(&note).unwrap();
+    app.open_path(&note);
+    app.run(Command::Insert("unsaved edit\n".into()));
+    paint(&mut app);
+
+    for expanded in [true, false] {
+        let row = row_of(&app, "Recipes");
+        let (_, y) = tree_row_center(&app, row);
+        let x = app.layout.tree.x + 18.0;
+        click(&mut app, (x, y));
+        paint(&mut app);
+        let ws = app.editor.workspace.as_ref().unwrap();
+        assert_eq!(ws.rows()[row].expanded, expanded);
+        assert_ne!(ws.selected, Some(row));
+        assert!(!app.library_shown());
+        assert_eq!(app.editor.active().unwrap().path.as_ref(), Some(&note));
+        assert!(app.editor.active().unwrap().is_dirty());
+    }
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), original);
+
+    let at = tree_row_center(&app, row_of(&app, "Recipes"));
+    click(&mut app, at);
+    assert!(app.library_shown());
+    assert_eq!(app.library.folder.as_ref(), Some(&folder));
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
@@ -171,6 +211,12 @@ fn notebook_menu_has_a_full_width_trigger_and_a_single_workspace_path_row() {
     paint(&mut app);
     let heading = app.panels.sidebar.navigation.folder_menu;
     assert_eq!(heading.w, app.layout.sidebar.w - 16.0);
+    let bar = app.layout.sidebar_header;
+    assert_eq!(heading.y + heading.h / 2.0, bar.y + bar.h / 2.0);
+    if std::env::var_os("WINC_SNAPSHOT_DIR").is_some() {
+        app.on_mouse_move(heading.x + heading.w / 2.0, heading.y + heading.h / 2.0);
+        shoot(&mut app, "notebook-workspace-hover");
+    }
     click(
         &mut app,
         (heading.right() - 3.0, heading.y + heading.h / 2.0),
@@ -552,13 +598,56 @@ fn notebook_links_with_equally_near_targets_open_a_choice_not_a_note() {
 }
 
 #[test]
+fn notebook_save_shortcut_clears_the_title_dot_without_a_notice() {
+    use crate::keymap::{KeyCode, Mods, Os, Stroke};
+
+    use_vscode_keys();
+    let (mut app, root) = note_app("minc-writing-manual-save");
+    let note = root.join("薄荷.md");
+    let original = std::fs::read_to_string(&note).unwrap();
+    app.open_path(&note);
+    paint(&mut app);
+    let title = app.hits.document_title;
+    app.run(Command::Insert("manual edit\n".into()));
+    paint(&mut app);
+    let dirty_title = app.hits.document_title;
+    assert!(dirty_title.right() > title.right());
+    if std::env::var_os("WINC_SNAPSHOT_DIR").is_some() {
+        shoot(&mut app, "notebook-unsaved-title");
+    }
+    assert_eq!(app.auto_save_tick(Instant::now()), None);
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), original);
+    assert!(app.editor.active().unwrap().is_dirty());
+
+    assert!(app.on_shortcut(Stroke {
+        key: KeyCode::Char('s'),
+        mods: if Os::CURRENT == Os::Mac {
+            Mods::META
+        } else {
+            Mods::CTRL
+        },
+    }));
+    app.wait_for_saves();
+    paint(&mut app);
+    assert!(
+        std::fs::read_to_string(&note)
+            .unwrap()
+            .contains("manual edit")
+    );
+    assert!(!app.editor.active().unwrap().is_dirty());
+    assert_eq!(app.hits.document_title, title);
+    assert!(app.notice.text.is_none() && app.status.message.is_none());
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn notebook_saves_within_one_second_and_flushes_the_latest_edit_before_switching() {
     use std::time::{Duration, Instant};
 
     let (mut app, root) = note_app("minc-writing-autosave");
     let tea = root.join("Recipes/茶.md");
     let mint = root.join("薄荷.md");
-    app.config.auto_save = Some(winc_config::AutoSave::Off);
+    app.config.auto_save = Some(winc_config::AutoSave::AfterDelay);
     app.open_path(&tea);
     let tea_id = app.editor.active().unwrap().id;
     app.run(Command::Insert("first edit\n".into()));

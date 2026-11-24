@@ -38,17 +38,19 @@ pub(super) fn draw_navigation(app: &App, frame: &mut Frame<'_>) {
     if switching {
         frame.rect_clipped(title, p.accent.alpha(0.13), RADIUS_ROW, clip);
     }
+    let (x, y) = (title.right() - 12.0, center(title).1);
+    let baseline =
+        ui_baseline(app, title, size) + (y - text_icon_center_y(app, title, size, &name));
     frame.text_faux(
         FontKind::Ui,
         weight,
         size,
         title.x + 7.0,
-        ui_baseline(app, title, size),
+        baseline,
         &name,
         p.text,
         title,
     );
-    let (x, y) = (title.right() - 12.0, center(title).1);
     for (dy, direction) in [(-2.5, icons::Direction::Up), (2.5, icons::Direction::Down)] {
         icons::chevron(frame, (x, y + dy), 5.0, direction, p.text_muted, title);
     }

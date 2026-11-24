@@ -31,7 +31,7 @@ pub enum FileGlyph {
     Json,
     /// 配置（TOML、YAML、INI、.editorconfig、各种 rc）：一个齿轮，按格式配色。
     Config,
-    /// Markdown：一个井号 #（标题）。
+    /// Markdown：带短横线的圆角文档。
     Markdown,
     /// Docker（Dockerfile、compose、.dockerignore）：叠起来的集装箱。
     Docker,
@@ -298,6 +298,28 @@ pub fn document(
     frame.stroke(&outline, STROKE, color, clip);
 }
 
+/// 绘制笔记标题栏中的 Markdown 徽标。
+pub(crate) fn markdown_badge(
+    frame: &mut Frame<'_>,
+    (x, y): (f32, f32),
+    fill: Color,
+    ink: Color,
+    clip: Rect,
+) {
+    frame.rect_clipped(Rect::new(x, y - 4.5, FILE_WIDTH, 9.0), fill, 2.0, clip);
+    let line = |x0, y0, x1, y1| Stroke::Line(x + x0, y + y0, x + x1, y + y1);
+    let marks = [
+        line(2.2, 2.0, 2.2, -2.0),
+        line(2.2, -2.0, 4.1, 0.3),
+        line(4.1, 0.3, 6.0, -2.0),
+        line(6.0, -2.0, 6.0, 2.0),
+        line(8.9, -2.0, 8.9, 2.0),
+        line(7.6, 0.7, 8.9, 2.0),
+        line(8.9, 2.0, 10.2, 0.7),
+    ];
+    frame.stroke(&marks, 1.0, ink, clip);
+}
+
 /// 绘制文件图标，占 12×15 的位置：线条风格，只画表示类型的记号，约 11 像素见方，与目录图标
 /// 一样大，笔宽 `STROKE`；文档类（`Text`、`Binary`、`Plain`）在记号外加一张折角的纸。
 ///
@@ -445,14 +467,11 @@ pub fn file(frame: &mut Frame<'_>, (x, y): (f32, f32), glyph: FileGlyph, color: 
             frame.stroke(&brace(1.0), STROKE, color, clip);
         }
         FileGlyph::Markdown => {
-            // 井号的两竖略向右倾。
-            let marks = [
-                line(-0.75, -3.25, -1.5, 3.25),
-                line(1.75, -3.25, 1.0, 3.25),
-                line(-3.0, -1.25, 3.25, -1.25),
-                line(-3.25, 1.25, 3.0, 1.25),
-            ];
-            frame.stroke(&marks, STROKE, color, clip);
+            let page = rounded_outline(cx - 4.5, cy - 6.25, 9.0, 12.5, 1.25);
+            let row = |dy, w| Stroke::Line(cx - 2.5, cy + dy, cx - 2.5 + w, cy + dy);
+            let marks = [row(-3.2, 5.0), row(-1.1, 5.0), row(1.0, 5.0), row(3.1, 3.0)];
+            let lines: Strokes<12> = joined(&[&page, &marks]);
+            frame.stroke(lines.as_slice(), 0.9, color, clip);
         }
         FileGlyph::Docker => {
             // 下面三个、上面两个集装箱（实心小方块），底下一道船身。

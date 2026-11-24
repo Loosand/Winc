@@ -117,7 +117,7 @@ impl App {
         let path = doc.path.clone();
         match doc.finish_save(saved) {
             Ok(()) => {
-                if !quiet {
+                if !quiet && !self.writing_workspace() {
                     self.flash(winc_i18n::t!("workspace-saved", name = name));
                 }
                 self.blame_saved(id);

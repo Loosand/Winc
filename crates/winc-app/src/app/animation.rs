@@ -471,6 +471,12 @@ impl App {
     pub(super) fn animating(&self) -> bool {
         self.panels.sidebar.motion.is_some()
             || self.panels.tree.motion.is_some()
+            || (self
+                .hits
+                .cloud_badges
+                .iter()
+                .any(|(badge, status)| badge.w > 0.0 && badge.h > 0.0 && status.transferring())
+                && self.animations_on())
             || self.library.animating()
             || self.log_tree_animating()
             || self.panels.tree.labels.moving()

@@ -1,5 +1,7 @@
 //! 顶栏绘制：标签栏和新建标签按钮，由应用绘制标题栏时右端还有窗口按钮。
 
+use std::path::Path;
+
 use super::*;
 use crate::app::TabHit;
 
@@ -55,15 +57,25 @@ fn draw_workspace_history(app: &mut App, frame: &mut Frame<'_>) {
         .map_or_else(|| doc.name(), winc_editor::display_name);
     let icon_x = x + 2.0;
     let text_x = icon_x + icons::FILE_WIDTH + 7.0;
-    let room = bar.right() - text_x - 8.0;
+    let dirty = doc.is_dirty();
+    let dot_space = if dirty { 10.0 } else { 0.0 };
+    let room = bar.right() - text_x - 8.0 - dot_space;
     if room <= 0.0 {
         return;
     }
     let cy = icon_center_y(app, bar, app.fonts.ui);
-    draw_file_icon(frame, p, (icon_x, cy), &name, bar);
+    if winc_preview::markdown::is_markdown(Path::new(name.as_ref())) {
+        icons::markdown_badge(frame, (icon_x, cy), p.text_dim, p.editor_bg, bar);
+    } else {
+        draw_file_icon(frame, p, (icon_x, cy), &name, bar);
+    }
     let name = truncate_end(frame, &name, app.fonts.ui, room);
     let end = ui_text(frame, app, text_x, bar, &name, p.text_muted, bar);
-    app.hits.document_title = Rect::new(x, bar.y, end + 4.0 - x, bar.h).intersect(bar);
+    if dirty {
+        let dot = Rect::new(end + 5.0, cy - 2.5, 5.0, 5.0);
+        frame.rect_clipped(dot, p.modified_dot, 2.5, bar);
+    }
+    app.hits.document_title = Rect::new(x, bar.y, end + dot_space + 4.0 - x, bar.h).intersect(bar);
 }
 
 /// 绘制顶栏右端的窗口按钮（最小化、最大化或还原、关闭），由应用绘制标题栏时才有。

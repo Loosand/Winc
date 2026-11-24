@@ -815,7 +815,7 @@ impl App {
 
         let writing = self.writing_workspace();
         let watch = &mut self.auto_save_watch;
-        if !writing && self.config.auto_save != Some(AutoSave::AfterDelay) {
+        if self.config.auto_save != Some(AutoSave::AfterDelay) {
             watch.due = None;
             return None;
         }
@@ -865,7 +865,7 @@ impl App {
     /// 窗口上有提示框时也不保存，提示框会使窗口失去焦点，用户随后点「不保存」就不再有效。保存成功
     /// 时不提示，失败时仍然提示。
     pub(in crate::app) fn auto_save(&mut self, ids: &[DocumentId]) {
-        if !self.writing_workspace() && self.config.auto_save.unwrap_or_default() == AutoSave::Off {
+        if self.config.auto_save.unwrap_or_default() == AutoSave::Off {
             return;
         }
         #[cfg(target_os = "macos")]
@@ -1034,7 +1034,7 @@ impl App {
 
         match result {
             Ok(()) => {
-                if !quiet {
+                if !quiet && !self.writing_workspace() {
                     self.flash(t!("workspace-saved", name = name));
                 }
                 self.blame_saved(id);
@@ -1050,6 +1050,7 @@ impl App {
                     }
                     self.picker_touched(path.into_iter().collect());
                 }
+                self.request_redraw();
                 true
             }
             // 另存为的新位置不以管理员身份重试：那是用户刚选的地方，可以换一个。

@@ -206,6 +206,7 @@ impl App {
         let keeps_preview = matches!(
             target,
             Target::MarkdownText(_)
+                | Target::TreeDisclosure(_)
                 | Target::Scrollbar(Scrollbar::Markdown | Scrollbar::MarkdownTable, _)
         );
         if !keeps_preview && self.preview.markdown.focused {
@@ -300,6 +301,13 @@ impl App {
             Target::WindowControl(control) => self.pointer.control_pressed = Some(control),
             Target::ResizeEdge(direction) => self.start_resize(direction),
             Target::Tree(_) => self.click_tree(x, y),
+            Target::TreeDisclosure(row) => {
+                if self.pointer.modifiers.alt_key() {
+                    self.toggle_dir_recursively(row);
+                } else {
+                    self.set_dir_expanded(row, None);
+                }
+            }
             Target::Placeholder(action) => self.run_placeholder_action(action),
             Target::Suggest(row) => self.accept_suggest(row),
             Target::SelectionTool(tool) => self.run_selection_tool(tool),

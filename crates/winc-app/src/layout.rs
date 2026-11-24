@@ -277,6 +277,10 @@ pub fn drawn_scroll_line(line: f64, lh: f32) -> f64 {
     (line * lh).round() / lh
 }
 
+pub(crate) fn tree_indent_x(left: f32, depth: usize, scroll_x: f32) -> f32 {
+    left + 14.0 + depth as f32 * TREE_INDENT - scroll_x
+}
+
 /// 返回文件树第 `v` 行（从 0 起）的位置和裁剪范围；动画中行序按展开后的状态计算。
 ///
 /// `block` 是正在展开或收起的子行范围（行序，不含末尾），`hidden` 是该范围尚未露出的高度（像素）。

@@ -4,7 +4,7 @@
 //! 每一行的矩形和点击命中由 `app::tree` 在绘制时记录。
 
 use std::borrow::Cow;
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::{Path, PathBuf};
 
 use winc_editor::git::Change;
@@ -16,8 +16,8 @@ use crate::app::animation::stage;
 use crate::app::{DropZone, Focus, LabelCause, LabelView, NameInput, TreeMotion};
 use crate::icons::Direction;
 use crate::layout::{
-    SidebarView, TREE_NAME_MIN, TreeTool, folding_tools, hscrollbar_thumb, tree_row_slot_at_height,
-    tree_tools,
+    SidebarView, TREE_NAME_MIN, TreeTool, folding_tools, hscrollbar_thumb, tree_indent_x,
+    tree_row_slot_at_height, tree_tools,
 };
 use crate::theme::SCROLLBAR_HIT;
 
@@ -689,16 +689,16 @@ fn draw_tree_entry(
         frame.rect_corners(pill.0, color, pill.1, clip);
     }
 
-    let indent = row.x + 14.0 + shift;
+    let scroll_x = app.panels.tree.scroll_x;
     let cy = icon_center_y(app, row, app.fonts.ui);
 
     // 缩进参考线：每级一条，位于父目录箭头的正下方，相邻行的参考线连成竖线。
     for level in 0..entry.depth {
-        let x = (indent + level as f32 * TREE_INDENT + 4.0).round();
+        let x = (tree_indent_x(row.x, level, scroll_x) + 4.0).round();
         frame.rect_clipped(Rect::new(x, row.y, 1.0, row.h), p.indent_guide, 0.0, clip);
     }
 
-    let mut x = indent + entry.depth as f32 * TREE_INDENT;
+    let mut x = tree_indent_x(row.x, entry.depth, scroll_x);
 
     if entry.kind == EntryKind::Dir {
         let angle = open * FRAC_PI_2;
@@ -710,6 +710,15 @@ fn draw_tree_entry(
     if entry.kind == EntryKind::Dir {
         let top = (cy - 6.0).round();
         icons::folder(frame, (x, top), entry.expanded, p.folder, clip);
+    } else if app.notebook_sidebar() && winc_preview::markdown::is_markdown(&entry.path) {
+        let color = if selected { p.text } else { p.text_dim };
+        icons::file(
+            frame,
+            (x + 1.5, cy - 7.5),
+            icons::FileGlyph::Markdown,
+            color,
+            clip,
+        );
     } else {
         draw_file_icon(frame, p, (x + 1.5, cy), &entry.name, clip);
     }
@@ -841,7 +850,11 @@ fn draw_cloud_badge(
         CloudStatus::Downloading | CloudStatus::Uploading => {
             let radius = 4.5;
             frame.stroke(&[Stroke::Circle(x, y, radius)], 1.3, p.separator, clip);
-            let start = -std::f32::consts::FRAC_PI_2;
+            let start = if app.animations_on() {
+                icons::spin_turn().rem_euclid(1.0) * TAU - PI
+            } else {
+                -FRAC_PI_2
+            };
             frame.stroke(
                 &[Stroke::Arc(x, y, radius, start, start + 2.2)],
                 1.3,
