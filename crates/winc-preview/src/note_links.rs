@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
 /// Marks a Wiki target in the preview's string-only link address channel.
 /// Markdown input cannot supply a literal NUL to that channel.
@@ -41,7 +41,7 @@ pub struct NoteLink {
 pub fn extract(text: &str) -> impl Iterator<Item = NoteLink> + '_ {
     let mut image_depth = 0;
     let mut pending: Option<NoteLink> = None;
-    events(text).filter_map(move |(event, source)| match event {
+    events(text, crate::markdown_options()).filter_map(move |(event, source)| match event {
         Event::Start(Tag::Image { .. }) => {
             image_depth += 1;
             None
@@ -84,10 +84,13 @@ pub fn extract(text: &str) -> impl Iterator<Item = NoteLink> + '_ {
 }
 
 /// Share the Markdown event stream with the renderer, including its legacy standalone `[[TOC]]` marker.
-pub(crate) fn events(text: &str) -> impl Iterator<Item = (Event<'_>, Range<usize>)> + '_ {
+pub(crate) fn events(
+    text: &str,
+    options: Options,
+) -> impl Iterator<Item = (Event<'_>, Range<usize>)> + '_ {
     let mut toc = false;
     let mut skip_link = false;
-    Parser::new_ext(text, crate::markdown::options())
+    Parser::new_ext(text, options)
         .into_offset_iter()
         .filter_map(move |(event, range)| match event {
             Event::Start(Tag::Paragraph) => {

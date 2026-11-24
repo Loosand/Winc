@@ -233,7 +233,13 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             if !resumed {
                 app.preview.markdown.find_doc = None;
                 let clicked = app.preview.markdown.clicked.take();
-                still = old_caret(app, old.as_ref(), source, live_key.as_ref(), clicked);
+                still = app
+                    .markdown_live()
+                    .then(|| app.live_caret_source())
+                    .flatten()
+                    .and_then(|caret| {
+                        old_caret(app, old.as_ref(), source, live_key.as_ref(), clicked, caret)
+                    });
                 let slide = std::mem::take(&mut app.preview.markdown.slide);
                 before = old
                     .as_ref()

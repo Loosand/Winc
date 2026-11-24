@@ -370,12 +370,9 @@ pub(crate) fn old_caret(
     source: usize,
     live: Option<&LiveKey>,
     clicked: Option<usize>,
+    caret: usize,
 ) -> Option<(usize, f32)> {
     let old = old?;
-    let caret = app
-        .markdown_live()
-        .then(|| app.live_caret_source())
-        .flatten()?;
     if clicked == Some(caret) && !app.scroll.keyed {
         return None;
     }

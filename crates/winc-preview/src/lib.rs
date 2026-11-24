@@ -22,3 +22,17 @@ pub mod svg;
 pub mod table;
 pub mod xml;
 mod zip;
+
+use pulldown_cmark::Options;
+
+/// 解析时启用的扩展：GFM 的表格、删除线、任务列表、提示块，以及脚注、文首的 YAML 和公式。
+pub(crate) fn markdown_options() -> Options {
+    Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_GFM
+        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+        | Options::ENABLE_MATH
+        | Options::ENABLE_WIKILINKS
+}

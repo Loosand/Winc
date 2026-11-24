@@ -1,6 +1,6 @@
 //! 窗口坐标到 Markdown 源码或显示字符的命中测试。
 
-use super::{App, Item, Laid, Rect, line_box};
+use super::{App, Laid, Rect, line_box};
 
 /// 预览上窗口坐标 `(x, y)`（逻辑像素）处是整份文字里的第几个字符（落在两个字中间时取
 /// 近的那边）；不在字上时取同一行最近的字，不在任何一行上时取上下最近的一行。
@@ -63,19 +63,13 @@ fn table_cell(
 ) -> Option<(usize, Rect)> {
     for block in blocks {
         let y = y - laid.tops[block];
-        for (k, item) in laid.blocks[block].1.items.iter().enumerate() {
-            let Item::Table {
-                rect, cols, rows, ..
-            } = item
-            else {
-                continue;
-            };
+        for (k, rect, cols, rows) in laid.blocks[block].1.tables() {
             // 可横向滚动的表格：只认显示区域内的点，单元格按滚动位置左移。
             let (off, strip) = laid.shift(block, k);
             if strip.is_some_and(|s| !s.contains(x, y)) {
                 continue;
             }
-            let rect = &Rect::new(rect.x - off, rect.y, rect.w, rect.h);
+            let rect = Rect::new(rect.x - off, rect.y, rect.w, rect.h);
             if !rect.contains(x, y) {
                 continue;
             }
@@ -144,21 +138,12 @@ fn hit(app: &App, x: f32, y: f32) -> Option<Hit> {
     // 点击图片时光标移到图片的原文处，因为图片中没有可定位的文字。
     for block in blocks {
         let top = laid.tops[block];
-        for (k, item) in laid.blocks[block].1.items.iter().enumerate() {
+        for (k, rect, (start, source)) in laid.blocks[block].1.source_spots() {
             let off = laid.shift(block, k).0;
-            let spot = match item {
-                Item::Image {
-                    rect, at: Some(at), ..
-                }
-                | Item::Spot { rect, at } => Some((rect, at)),
-                _ => None,
-            };
-            if let Some((rect, (start, source))) = spot
-                && rect.contains(x + off, y - top)
-            {
+            if rect.contains(x + off, y - top) {
                 return Some(Hit {
                     offset: Some(laid.starts[block] + start),
-                    source: laid.ranges.get(block).map(|r| r.start + *source as usize),
+                    source: laid.ranges.get(block).map(|r| r.start + source as usize),
                 });
             }
         }

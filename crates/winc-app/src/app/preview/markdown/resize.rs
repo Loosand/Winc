@@ -3,7 +3,6 @@
 
 use winc_preview::markdown::resize::{self, Width};
 use winc_render::Rect;
-use winc_typeset::Item;
 
 use crate::app::App;
 
@@ -203,14 +202,8 @@ impl App {
         if md.checked != Some(revision) {
             return None;
         }
-        let item = laid.blocks.get(image.block)?.1.items.get(image.item)?;
-        let Item::Image {
-            at: Some((_, at)), ..
-        } = item
-        else {
-            return None;
-        };
+        let at = laid.blocks.get(image.block)?.1.image_source(image.item)? as usize;
         let range = laid.ranges.get(image.block)?;
-        Some((range.start + *at as usize, range.end, *at == 0))
+        Some((range.start + at, range.end, at == 0))
     }
 }

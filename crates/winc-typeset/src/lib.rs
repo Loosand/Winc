@@ -254,6 +254,66 @@ impl LaidBlock {
         self.scrolls.iter().position(|s| s.items.contains(&item))
     }
 
+    /// 块内各表格的绘制项序号、矩形、列宽和行高，按绘制顺序返回。
+    pub fn tables(&self) -> impl Iterator<Item = (usize, Rect, &[f32], &[f32])> {
+        self.items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| match item {
+                Item::Table {
+                    rect, cols, rows, ..
+                } => Some((i, *rect, &**cols, &**rows)),
+                _ => None,
+            })
+    }
+
+    /// 图片和公式的命中区域及源码坐标，按绘制顺序返回。坐标均相对顶层块。
+    pub fn source_spots(&self) -> impl Iterator<Item = (usize, Rect, (usize, u32))> + '_ {
+        self.items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| match item {
+                Item::Image {
+                    rect, at: Some(at), ..
+                }
+                | Item::Spot { rect, at } => Some((i, *rect, *at)),
+                _ => None,
+            })
+    }
+
+    /// 返回第 `item` 项的图片在原文中的字节偏移，相对顶层块起点。
+    pub fn image_source(&self, item: usize) -> Option<u32> {
+        match self.items.get(item)? {
+            Item::Image {
+                at: Some((_, source)),
+                ..
+            } => Some(*source),
+            _ => None,
+        }
+    }
+
+    /// 返回源码位置所在文字段的字体、模拟字形和字号，用于绘制输入法组字。
+    /// `source` 是相对顶层块的字节偏移，取起点不超过它的最后一段。
+    pub fn font_at_source(&self, source: usize) -> Option<(FontKind, Faux, f32)> {
+        self.items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Text {
+                    font,
+                    faux,
+                    size,
+                    span: Some(span),
+                    ..
+                } => span
+                    .source
+                    .filter(|&at| at as usize <= source)
+                    .map(|at| (at, (*font, *faux, *size))),
+                _ => None,
+            })
+            .max_by_key(|(at, _)| *at)
+            .map(|(_, font)| font)
+    }
+
     /// 块里有没有用到 `paths` 里的图片（排版时还在读的也算）。
     pub fn uses_any(&self, paths: &[PathBuf]) -> bool {
         let kept = self.shed.iter().flat_map(|shed| shed.images.iter());

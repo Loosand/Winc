@@ -9,9 +9,9 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::Path;
 
-use pulldown_cmark::{
-    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Tag, TagEnd,
-};
+use pulldown_cmark::{Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Tag, TagEnd};
+
+pub(crate) use crate::markdown_options as options;
 
 /// 行内图片在 [`Inline::text`] 里占的字符；第 n 个此字符对应 [`Inline::images`] 的第 n 项。
 pub const IMAGE_MARK: char = '\u{FFFC}';
@@ -590,18 +590,6 @@ impl Inline {
     }
 }
 
-/// 解析时启用的扩展：GFM 的表格、删除线、任务列表、提示块，以及脚注、文首的 YAML 和公式。
-pub(crate) fn options() -> Options {
-    Options::ENABLE_TABLES
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_GFM
-        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
-        | Options::ENABLE_MATH
-        | Options::ENABLE_WIKILINKS
-}
-
 /// 编辑器核心 · Markdown 解析入口：从原文构建块、行内样式和源码位置映射。
 /// 映射供点击、选区和结构编辑回到原文使用；解析结果不作为保存时的文本来源。
 pub fn parse(text: &str) -> Markdown {
@@ -609,7 +597,7 @@ pub fn parse(text: &str) -> Markdown {
         source: text,
         ..Builder::default()
     };
-    for (event, range) in crate::note_links::events(text) {
+    for (event, range) in crate::note_links::events(text, options()) {
         // 顶层块开始的地方：不在任何容器、段落、代码块、HTML 块里。分隔线没有开始、结束两个
         // 事件，只有一个。
         if matches!(event, Event::Start(_) | Event::Rule)

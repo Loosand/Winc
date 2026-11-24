@@ -1,6 +1,6 @@
 //! Markdown 源码位置与显示行、光标坐标的对应。
 
-use super::{App, CachedCaret, Item, Laid, Point, line_box};
+use super::{App, CachedCaret, Laid, Point, line_box};
 
 impl Laid {
     /// 查找原文字节所属的显示块。脚注的显示顺序与原文不同。
@@ -204,25 +204,7 @@ pub(crate) fn font_at(
 ) -> Option<(winc_render::FontKind, winc_render::Faux, f32)> {
     let block = laid.block_at_source(source)?;
     let source = source - laid.ranges[block].start;
-    laid.blocks[block]
-        .1
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Text {
-                font,
-                faux,
-                size,
-                span: Some(span),
-                ..
-            } => span
-                .source
-                .filter(|&s| s as usize <= source)
-                .map(|s| (s, (*font, *faux, *size))),
-            _ => None,
-        })
-        .max_by_key(|(s, _)| *s)
-        .map(|(_, font)| font)
+    laid.blocks[block].1.font_at_source(source)
 }
 
 /// 整份文字里第 `offset` 个字符所在那一行的上边缘（和滚动位置同一个量法）。
