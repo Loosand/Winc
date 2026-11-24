@@ -226,7 +226,7 @@ impl App {
         let previous_revision = doc.revision;
         doc.collapse_selections();
         doc.selection = winc_core::Selection::new(a, b);
-        self.run(winc_editor::Command::Insert(
+        self.run_source_edit(winc_editor::Command::Insert(
             new[prefix..new.len() - suffix].to_owned(),
         ));
         if let Some(doc) = self.editor.active_mut()
@@ -347,10 +347,10 @@ impl App {
             return false;
         };
         let chars = rope.len_chars();
-        let (from, to) = (
-            doc.selection.from().min(chars),
-            doc.selection.to().min(chars),
-        );
+        let selection = self
+            .markdown_operation_range()
+            .unwrap_or_else(|| doc.selection.range());
+        let (from, to) = (selection.start.min(chars), selection.end.min(chars));
         let (from, to) = (rope.char_to_byte(from), rope.char_to_byte(to));
         let line_of = |at: usize| rope.byte_to_line(at);
         let line_text = |line: usize| {
@@ -413,7 +413,7 @@ impl App {
         let previous_revision = doc.revision;
         let opens_empty_paragraph =
             a == b && doc.selection.is_empty() && after.is_empty() && edit.text == "\n\n";
-        if text.len() > edit.text.len() {
+        if text.len() > edit.text.len() || selection != doc.selection.range() {
             // 保留右侧的块边界或同次更新后续列表项时，光标停在插入文本中间。随事务记录该位置，
             // 重做后也回到这里。新换行按文档风格写，后续列表中复制的文字保持原样。
             if !doc.fits_edit(a, b) {
@@ -449,7 +449,7 @@ impl App {
                 doc.collapse_selections();
                 doc.selection = winc_core::Selection::new(a, b);
             }
-            self.run(winc_editor::Command::Insert(text));
+            self.run_source_edit(winc_editor::Command::Insert(text));
         }
         if opens_empty_paragraph {
             self.remember_empty_paragraph(previous_revision, a, trailing.len());
@@ -609,7 +609,7 @@ impl App {
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::new(a, b);
         }
-        self.run(winc_editor::Command::Insert(indent));
+        self.run_source_edit(winc_editor::Command::Insert(indent));
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = after;
         }
@@ -718,7 +718,7 @@ impl App {
             if let Some(doc) = self.editor.active_mut() {
                 doc.selection = winc_core::Selection::new(from, to);
             }
-            self.run(winc_editor::Command::Insert(String::new()));
+            self.run_source_edit(winc_editor::Command::Insert(String::new()));
             self.preview.markdown.goal = None;
             self.start_live_editing();
             return true;
@@ -730,7 +730,7 @@ impl App {
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::new(a, b);
         }
-        self.run(winc_editor::Command::Insert(edit.text));
+        self.run_source_edit(winc_editor::Command::Insert(edit.text));
         self.preview.markdown.goal = None;
         self.start_live_editing();
         true
@@ -818,7 +818,7 @@ impl App {
             };
         }
         if prose {
-            self.run(winc_editor::Command::Insert(String::new()));
+            self.run_source_edit(winc_editor::Command::Insert(String::new()));
         }
         self.preview.markdown.goal = None;
         self.start_live_editing();
@@ -859,7 +859,7 @@ impl App {
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::new(a, b);
         }
-        self.run(winc_editor::Command::Insert(edit.text));
+        self.run_source_edit(winc_editor::Command::Insert(edit.text));
         self.preview.markdown.goal = None;
         self.start_live_editing();
         true
@@ -933,7 +933,7 @@ impl App {
             doc.collapse_selections();
             doc.selection = winc_core::Selection::new(a, b);
         }
-        self.run(winc_editor::Command::Insert(text));
+        self.run_source_edit(winc_editor::Command::Insert(text));
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::point(a);
         }
@@ -1139,7 +1139,7 @@ impl App {
         }
         if changed {
             // 按粘贴处理：整段替换，不触发输入单个字符时的括号、引号配对。
-            self.run(winc_editor::Command::Paste(t.text));
+            self.run_source_edit(winc_editor::Command::Paste(t.text));
         }
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::new(select.0, select.1);

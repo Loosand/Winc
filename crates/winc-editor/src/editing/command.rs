@@ -375,8 +375,36 @@ impl Document {
 
     /// 把编辑类命令转换为事务；命令没有产生修改时返回 `None`。
     pub(crate) fn transaction(&self, command: &Command, tab_width: usize) -> Option<Transaction> {
+        self.transaction_at(command, tab_width, self.selection)
+    }
+
+    /// Plan an edit over a structural range while retaining the actual selection for undo.
+    pub fn transaction_with_range(
+        &self,
+        command: &Command,
+        tab_width: usize,
+        range: std::ops::Range<usize>,
+    ) -> Option<Transaction> {
+        if !self.fits_edit(range.start, range.end) {
+            return None;
+        }
+        let selection = if self.selection.anchor <= self.selection.head {
+            Selection::new(range.start, range.end)
+        } else {
+            Selection::new(range.end, range.start)
+        };
+        let mut transaction = self.transaction_at(command, tab_width, selection)?;
+        transaction.before = self.selection;
+        Some(transaction)
+    }
+
+    fn transaction_at(
+        &self,
+        command: &Command,
+        tab_width: usize,
+        sel: Selection,
+    ) -> Option<Transaction> {
         let text = &self.text;
-        let sel = self.selection;
         let language = self.highlighter.language();
         let line_ending = self.line_ending.as_str();
         let options = EditOptions {

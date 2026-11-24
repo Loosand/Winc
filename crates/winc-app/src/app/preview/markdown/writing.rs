@@ -158,7 +158,7 @@ impl App {
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::new(from, to);
         }
-        self.run(winc_editor::Command::Paste(link));
+        self.run_source_edit(winc_editor::Command::Paste(link));
         self.finish_writing(select);
     }
 
@@ -209,7 +209,7 @@ impl App {
             doc.collapse_selections();
             doc.selection = winc_core::Selection::new(start, end);
         }
-        self.run(winc_editor::Command::Paste(text.to_owned()));
+        self.run_source_edit(winc_editor::Command::Paste(text.to_owned()));
         self.finish_writing(select);
     }
 

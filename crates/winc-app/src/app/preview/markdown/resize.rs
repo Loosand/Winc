@@ -177,7 +177,7 @@ impl App {
         doc.collapse_selections();
         doc.selection = winc_core::Selection::new(a, b);
         self.preview.markdown.slide = true;
-        self.run(winc_editor::Command::Insert(new));
+        self.run_source_edit(winc_editor::Command::Insert(new));
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::new(keep(old.anchor), keep(old.head));
         }

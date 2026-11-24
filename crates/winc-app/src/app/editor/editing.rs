@@ -8,6 +8,13 @@ use super::*;
 
 use crate::app::scroll::editor::TopRow;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditTarget {
+    Selection,
+    SourceRange,
+    PropertyPatch,
+}
+
 /// 括号配对缓存的键：文档、版本号和光标位置都不变时，配对结果不变。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BraceKey {
@@ -523,6 +530,9 @@ impl App {
         let whole_line = selection.is_empty();
         let range = if whole_line {
             doc.text().line_span(doc.text().line_of(selection.head))
+        } else if cut && self.focus == Focus::Editor && self.vim.is_none() {
+            self.markdown_operation_range()
+                .unwrap_or_else(|| selection.range())
         } else {
             selection.range()
         };
@@ -653,16 +663,22 @@ impl App {
     /// 普通文本与排版视图都经这里改同一份原文。界面层保护 YAML、处理 Vim 和跨格式选区，
     /// 实际写入及撤销由 `Document::execute` / `Document::apply` 负责。只读时提示原因。
     pub(in crate::app) fn run(&mut self, command: Command) {
-        self.execute_text_command(command, false);
+        self.execute_text_command(command, EditTarget::Selection);
+    }
+
+    /// 已按原文计算出范围的编辑，例如列表续行和补全链接。
+    pub(in crate::app) fn run_source_edit(&mut self, command: Command) {
+        self.execute_text_command(command, EditTarget::SourceRange);
     }
 
     /// A validated property patch targets YAML rather than the visible body.
     pub(in crate::app) fn run_note_property_patch(&mut self, command: Command) {
         debug_assert!(matches!(command, Command::Paste(_)));
-        self.execute_text_command(command, true);
+        self.execute_text_command(command, EditTarget::PropertyPatch);
     }
 
-    fn execute_text_command(&mut self, command: Command, property_patch: bool) {
+    fn execute_text_command(&mut self, command: Command, target: EditTarget) {
+        let property_patch = target == EditTarget::PropertyPatch;
         let page = self.page_lines();
         let tab_width = self.editor.active_tab_width();
         let lines_before = self.line_count();
@@ -672,9 +688,10 @@ impl App {
             && !matches!(command, Command::Undo | Command::Redo))
         .then(|| self.property_body_start())
         .flatten();
-        let repair = (!property_patch && self.focus == Focus::Editor && self.vim.is_none())
-            .then(|| self.markdown_selection_replacement(&command))
-            .flatten();
+        let repair =
+            (target == EditTarget::Selection && self.focus == Focus::Editor && self.vim.is_none())
+                .then(|| self.markdown_selection_replacement(&command, tab_width))
+                .flatten();
 
         let Some(doc) = self.editor.active_mut() else {
             return;

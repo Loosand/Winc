@@ -4,7 +4,7 @@
 //! 宽度、字号、配色或图片大小变化时整篇重排。位置查询在预览坐标与原文位置之间换算，
 //! 供点击、选择、滚动同步和可编辑的预览使用。绘制在 `view::preview::markdown` 中。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use winc_render::{Color, Frame, Rect};
@@ -69,8 +69,6 @@ pub(crate) struct Laid {
     pub(crate) stale: Vec<bool>,
     /// 排版时保留了排版结果的范围（见 [`Near`]）；文档不长、全部保留时为 `None`。
     pub(crate) near: Option<Near>,
-    /// 各顶层块作为标题时下面可以收起的一节（见 `Markdown::sections`）。
-    pub(crate) sections: Vec<Option<winc_preview::markdown::Section>>,
 }
 
 #[derive(Clone, Copy)]
@@ -340,14 +338,7 @@ pub(crate) struct Leaving {
 /// 包含顶层块、叶子块和文档版本；位于表格或正文中时还包含光标位置（切换单元格需要重排，
 /// 正文中光标接触的标记需要显示）；位于代码块的首尾几行时包含所在的行（围栏行需要显示，
 /// 见 `LiveLeaf::edge`）。
-pub(crate) type LiveKey = (
-    usize,
-    std::ops::Range<usize>,
-    u64,
-    Option<usize>,
-    String,
-    Option<std::ops::Range<usize>>,
-);
+pub(crate) type LiveKey = (usize, std::ops::Range<usize>, u64, Option<usize>, String);
 
 /// `preedit` 是输入法正在组合的文字，在正文中排入光标所在的行，因此其变化同样需要重排。
 pub(crate) fn live_key(live: &crate::app::preview::markdown::LiveLeaf, preedit: &str) -> LiveKey {
@@ -361,7 +352,6 @@ pub(crate) fn live_key(live: &crate::app::preview::markdown::LiveLeaf, preedit: 
         } else {
             String::new()
         },
-        live.selection.clone(),
     )
 }
 
@@ -392,11 +382,8 @@ pub(crate) fn old_caret(
         if app.preview.markdown.table_edit_revision == Some((doc.id, doc.revision)) {
             return None;
         }
-        let (previous, next) = (old.live.as_ref()?, live?);
         let scroll = app.preview.markdown.scroll();
-        if previous.2 != next.2
-            || previous.3 != Some(caret)
-            || next.3 != Some(caret)
+        if app.preview.markdown.followed != Some((doc.id, caret, doc.revision))
             || y + h <= scroll
             || y >= scroll + app.preview.markdown.area.h
         {
@@ -422,29 +409,6 @@ pub(crate) fn keep_caret_still(app: &mut App, still: Option<(usize, f32)>, laid:
         let scroll = app.preview.markdown.scroll();
         app.preview.markdown.scroll_to(scroll + dy);
     }
-}
-
-/// 收起的标题下面不显示的顶层块：`folded` 是收起的标题，光标在 `caret` 块时它所在的一节
-/// 始终显示。
-pub(crate) fn hidden_blocks(
-    sections: &[Option<winc_preview::markdown::Section>],
-    folded: Option<&HashSet<String>>,
-    caret: Option<usize>,
-) -> Vec<bool> {
-    let mut hidden = vec![false; sections.len()];
-    let Some(folded) = folded.filter(|f| !f.is_empty()) else {
-        return hidden;
-    };
-    for (i, section) in sections.iter().enumerate() {
-        let Some(section) = section.as_ref().filter(|s| folded.contains(&s.key)) else {
-            continue;
-        };
-        if caret.is_some_and(|c| c > i && c < section.end) {
-            continue;
-        }
-        hidden[i + 1..section.end].fill(true);
-    }
-    hidden
 }
 
 /// 编辑器核心 · 排版入口：把解析块变成带屏幕坐标的绘制项，由 `winc-typeset` 排字、折行。
@@ -477,12 +441,7 @@ pub(crate) fn lay_out(
         let preedit =
             ((live.prose || live.table) && !preedit.is_empty()).then(|| Arc::from(preedit));
         let parsed_end = live.parsed_end.saturating_sub(start);
-        let mut raw = Raw::new(text, leaf, parsed_end, caret, live.prose, preedit);
-        raw.selection = live.selection.as_ref().and_then(|range| {
-            let from = range.start.max(start);
-            let to = range.end.min(end);
-            (from < to).then(|| from - start..to - start)
-        });
+        let raw = Raw::new(text, leaf, parsed_end, caret, live.prose, preedit);
         Some((live.block, raw))
     });
     let p = app.palette;
@@ -539,10 +498,7 @@ pub(crate) fn lay_out(
         color: cx.colors.text,
         depth: 0,
     };
-    let sections = parsed.sections();
-    let folded = (app.editor.active()).and_then(|d| app.preview.markdown.folds.get(&d.id));
-    let hidden = hidden_blocks(&sections, folded, live.map(|l| l.block));
-    let mut blocks = Vec::with_capacity(parsed.blocks.len());
+    let mut blocks: Vec<(u64, Arc<LaidBlock>)> = Vec::with_capacity(parsed.blocks.len());
     let mut tops = Vec::with_capacity(parsed.blocks.len());
     let mut starts = Vec::with_capacity(parsed.blocks.len());
     let (mut y, mut below, mut chars) = (0.0, None, 0);
@@ -557,16 +513,12 @@ pub(crate) fn lay_out(
             .is_some_and(|d| app.preview.markdown.checked == Some(d.revision));
     let blank = &parsed.blank_rows;
     let blank_before = |i: usize, offsets: std::ops::Range<usize>| {
-        (checked
-            && !offsets.is_empty()
-            && parsed.collapsed_separator_before(i).is_none()
-            && !hidden[i]
-            && (i == 0 || !hidden[i - 1]))
+        (checked && !offsets.is_empty() && parsed.collapsed_separator_before(i).is_none())
             .then_some(offsets)
     };
     let after = blank.after();
     // A single conventional final newline need not add a permanent row.
-    let blank_after = checked && after.len() > 2 && hidden.last() == Some(&false);
+    let blank_after = checked && after.len() > 2;
     let mapped = live.is_some_and(|live| {
         [
             blank_before(live.block, blank.before(live.block)),
@@ -598,14 +550,6 @@ pub(crate) fn lay_out(
         };
         cx.repeat = repeat;
         cx.toggles.clear();
-        // 收起的一节里的块不排版，占一个高度为 0 的空块，换一个键存：展开时重新排。
-        if hidden[i] {
-            starts.push(chars);
-            tops.push(y);
-            let empty = LaidBlock::new(0.0, Vec::new(), Vec::new(), "".into(), 0, Box::default());
-            blocks.push((!hash, Arc::new(empty)));
-            continue;
-        }
         let raw = raw
             .as_ref()
             .filter(|r| !mapped && r.0 == i && !(i == 0 && properties.is_some()));
@@ -635,7 +579,7 @@ pub(crate) fn lay_out(
         let offsets = blank.before(i);
         let extra_rows = offsets.len().saturating_sub(1 + usize::from(i != 0));
         let mapped_gap = blank_before(i, offsets);
-        let gap = if editable && (i == 0 || !hidden[i - 1]) {
+        let gap = if editable {
             (extra_rows as f32 * blank_row - already).max(0.0)
         } else {
             0.0
@@ -712,7 +656,7 @@ pub(crate) fn lay_out(
         below = Some(margin_bottom);
         blocks.push((hash, laid));
     }
-    if editable && hidden.last() == Some(&false) {
+    if editable && !blocks.is_empty() {
         let already = blocks.last().map_or(0.0, |(_, b)| b.editing_blank_height);
         let extra = after.len().saturating_sub(2) as f32 * blank_row;
         if already == 0.0 && blank_after {
@@ -815,7 +759,6 @@ pub(crate) fn lay_out(
         followed: None,
         stale,
         near,
-        sections,
     }
 }
 
@@ -1033,7 +976,8 @@ impl Laid {
             .copied()
     }
 
-    pub(super) fn blank_point(&self, source: usize) -> Option<Point> {
+    /// Position and hit height of an explicit blank row.
+    pub(crate) fn blank_point(&self, source: usize) -> Option<Point> {
         let i = self
             .gaps
             .partition_point(|gap| self.blank_offsets[gap.offsets.start] <= source)
@@ -1045,6 +989,23 @@ impl Laid {
         }
         let row = starts.partition_point(|&s| s <= source) - 1;
         Some((0.0, self.pad + gap.top + row as f32 * gap.row, gap.row))
+    }
+
+    /// Whether a byte begins an actual glyph in the visible source mapping.
+    pub(super) fn shows_source(&self, source: usize) -> bool {
+        let Some(block) = self
+            .ranges
+            .iter()
+            .rposition(|range| range.contains(&source))
+        else {
+            return false;
+        };
+        let source = source - self.ranges[block].start;
+        self.spans(block..block + 1).any(|(.., span, _, text)| {
+            span.char_at_source(text, source).is_some_and(|at| {
+                at < span.advances.len() && span.source_of(text, at) == Some(source)
+            })
+        })
     }
 
     /// An arrow's normal line-height step may cross a shorter blank row. Stop on its
@@ -1465,8 +1426,6 @@ pub(crate) const EXPAND: &str = "\u{1}expand";
 
 /// 勾选框链接的地址前缀，其后为 `[ ]` 在原文中的位置（字节偏移）；点击时切换勾选状态。
 pub(crate) const TASK: &str = "\u{1}task:";
-/// 标题折叠箭头的地址前缀，其后为标题的键（`Section::key`）；点击时收起或展开这一节。
-pub(crate) const FOLD: &str = "\u{1}fold:";
 /// 表格工具栏按钮链接的地址前缀，其后为操作名（见 [`table_tools`]）。
 pub(crate) const TABLE: &str = "\u{1}table:";
 

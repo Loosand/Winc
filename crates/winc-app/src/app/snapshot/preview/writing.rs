@@ -433,66 +433,6 @@ fn focus_and_typewriter_modes_follow_the_caret() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 点标题左边的箭头收起下面的一节，再点一次展开；收起时光标在这一节里的移到标题末尾。
-#[test]
-fn headings_fold_their_sections_in_the_preview() {
-    let (mut app, dir) = live_doc(
-        "md-fold",
-        "# 甲\n\n第一段\n\n## 子\n\n第二段\n\n# 乙\n\n第三段\n",
-    );
-    let shown = |app: &App| crate::app::preview::markdown::laid::full_text(app).unwrap();
-    let full = app.preview.markdown.height;
-    assert!(shown(&app).contains("第一段"));
-    // 光标放进要收起的一节里，再收起：光标回到标题末尾，这一节不再显示。
-    put_caret(&mut app, "第二段", true);
-    app.start_live_editing();
-    app.toggle_heading_fold("甲");
-    settle(&mut app);
-    assert_eq!(app.live_caret_source(), doc_text(&app).find("\n"));
-    let text = shown(&app);
-    assert!(!text.contains("第一段") && !text.contains("第二段") && text.contains("第三段"));
-    assert!(app.preview.markdown.height < full);
-
-    // 鼠标停在标题上时显示箭头，单击展开。
-    let laid = app.preview.markdown.layout.as_ref().unwrap();
-    let area = app.preview.markdown.area;
-    let top = area.y - app.preview.markdown.scroll() + laid.pad + laid.tops[0];
-    app.on_mouse_move(area.x + area.w / 2.0, top + 4.0);
-    paint(&mut app);
-    shoot(&mut app, "md-fold");
-    let (arrow, _) = (app.hits.markdown_links.iter())
-        .find(|(_, url)| url.ends_with("fold:甲"))
-        .unwrap()
-        .clone();
-    let point = (arrow.x + arrow.w / 2.0, arrow.y + arrow.h / 2.0);
-    let toc_overlap = app
-        .hits
-        .markdown_toc
-        .iter()
-        .any(|(rect, _)| rect.contains(point.0, point.1));
-    assert!(
-        !toc_overlap,
-        "fold arrow overlaps the table-of-contents hit area"
-    );
-    super::click(&mut app, point);
-    settle(&mut app);
-    assert!(shown(&app).contains("第一段"));
-
-    // 分栏时左边的光标在标题「乙」上：箭头与标出光标所在行的竖条同一列，竖条不再另画。
-    app.set_preview_mode(PreviewMode::Split);
-    app.focus = crate::app::Focus::Editor;
-    put_caret(&mut app, "# 乙", true);
-    settle(&mut app);
-    let laid = app.preview.markdown.layout.as_ref().unwrap();
-    let area = app.preview.markdown.area;
-    let heading = laid.sections.iter().rposition(|s| s.is_some()).unwrap();
-    let top = area.y - app.preview.markdown.scroll() + laid.pad + laid.tops[heading];
-    app.on_mouse_move(area.x + area.w / 2.0, top + 4.0);
-    paint(&mut app);
-    shoot(&mut app, "md-fold-split");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// 可编辑的预览中在两处之间来回单击时内容不漂移。
 #[test]
 fn clicking_back_and_forth_does_not_drift() {
@@ -608,32 +548,6 @@ fn an_image_loading_above_keeps_the_view_still() {
         "{} != {before}",
         top_of(&app, 40)
     );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// 收起、展开视口中的标题时，视口顶边的内容位置不变。
-#[test]
-fn folding_a_heading_keeps_the_view_still() {
-    let sections: String = (0..12)
-        .map(|i| format!("## 第 {i} 节\n\n{}\n\n", "正文。".repeat(80)))
-        .collect();
-    let (mut app, dir) = live_doc("md-fold-still", &sections);
-    let top_of = |app: &App, i: usize| {
-        let laid = app.preview.markdown.layout.as_ref().unwrap();
-        laid.tops[i] - app.preview.markdown.scroll()
-    };
-    // 第 3 节的正文位于视口顶边，第 4 节的标题位于视口中。
-    app.preview
-        .markdown
-        .scroll_to(top_of(&app, 7) + app.preview.markdown.scroll() + 20.0);
-    settle(&mut app);
-    let before = top_of(&app, 7);
-    app.toggle_heading_fold("第-4-节");
-    settle(&mut app);
-    assert!((top_of(&app, 7) - before).abs() < 1.0);
-    app.toggle_heading_fold("第-4-节");
-    settle(&mut app);
-    assert!((top_of(&app, 7) - before).abs() < 1.0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -758,29 +672,35 @@ fn resizing_picks_the_clicked_image_when_an_earlier_one_fails() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 指向收起的一节中标题的链接不标为失效，跳转时展开该节。
 #[test]
-fn links_into_folded_sections_unfold_them() {
-    let text = "# 总\n\n见[子](#子)\n\n## 节\n\n### 子\n\n内容\n\n## 后\n\n尾\n";
-    let (mut app, dir) = live_doc("md-fold-anchor", text);
-    app.toggle_heading_fold("节");
-    settle(&mut app);
-    assert!(crate::app::preview::markdown::laid::anchor_box(&app, "子").is_none());
+fn headings_remain_visible_and_navigable() {
+    use crate::app::preview::markdown::{TocTarget, laid};
+    let text = format!(
+        "# 总\n\n见[子](#子)\n\n## 节\n\n### 子\n\n内容\n\n## 后\n\n{}",
+        "尾段。\n\n".repeat(45)
+    );
+    let (mut app, dir) = live_doc("md-heading-navigation", &text);
+    let top = laid::anchor_top(&app, "子").unwrap();
     assert_eq!(app.check_markdown_link("#子"), None);
+    assert_eq!(app.hits.markdown_toc_tops.len(), 4);
+    let (_, heading_y) = point_of(&app, 0);
+    let left = app.preview.markdown.layout.as_ref().unwrap().left;
+    app.on_mouse_move(left - 12.0, heading_y);
+    paint(&mut app);
+    assert!(app.markdown_link_at(left - 12.0, heading_y).is_none());
+    super::click(&mut app, (left - 12.0, heading_y));
+    settle(&mut app);
+    assert!(laid::full_text(&app).unwrap().contains("内容"));
+
     app.jump_to_anchor("子");
-    settle(&mut app);
-    let id = app.editor.active().unwrap().id;
-    assert!(!app.preview.markdown.folds.contains_key(&id));
-    assert!(crate::app::preview::markdown::laid::anchor_box(&app, "子").is_some());
-    // 在标题列表中点收起的一节里的标题同样展开。
-    app.toggle_heading_fold("节");
-    settle(&mut app);
-    assert_eq!(app.hits.markdown_toc_blocks.len(), 4);
-    app.press_toc(crate::app::preview::markdown::TocTarget::Heading(2));
-    settle(&mut app);
-    assert!(!app.preview.markdown.folds.contains_key(&id));
-    assert!(crate::app::preview::markdown::laid::anchor_box(&app, "子").is_some());
-    let _ = std::fs::remove_dir_all(&dir);
+    app.settle_glide_of(crate::app::ScrollTarget::Markdown);
+    assert!((app.preview.markdown.scroll() - top).abs() < 1.0);
+    app.preview.markdown.scroll_to(0.0);
+    paint(&mut app);
+    app.press_toc(TocTarget::Heading(2));
+    app.settle_glide_of(crate::app::ScrollTarget::Markdown);
+    assert!((app.preview.markdown.scroll() - top).abs() < 1.0);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// 内容相同的两张高图各自记录开合状态。

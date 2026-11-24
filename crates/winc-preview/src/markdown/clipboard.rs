@@ -7,6 +7,15 @@ use pulldown_cmark::{Event, Parser, Tag, TagEnd, html};
 /// Recover boundary markers when a whole formatted span was selected by its visible text.
 /// A partial selection does not pull in any unselected words.
 pub fn include_markers(line: &str, selection: Range<usize>) -> Range<usize> {
+    include_hidden_markers(line, selection, None)
+}
+
+/// Expand a formatted selection while keeping any syntax already shown at the layout caret.
+pub fn include_hidden_markers(
+    line: &str,
+    selection: Range<usize>,
+    revealed_at: Option<usize>,
+) -> Range<usize> {
     let mut result = selection.clone();
     let mut stack: Vec<(Range<usize>, Option<Range<usize>>)> = Vec::new();
     for (event, range) in Parser::new_ext(line, super::options()).into_offset_iter() {
@@ -18,7 +27,10 @@ pub fn include_markers(line: &str, selection: Range<usize>) -> Range<usize> {
                 TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link,
             ) => {
                 if let Some((syntax, Some(visible))) = stack.pop() {
-                    if selection.start <= visible.start && selection.end >= visible.end {
+                    if selection.start <= visible.start
+                        && selection.end >= visible.end
+                        && !revealed_at.is_some_and(|at| syntax.start <= at && at <= syntax.end)
+                    {
                         result.start = result.start.min(syntax.start);
                         result.end = result.end.max(syntax.end);
                     }

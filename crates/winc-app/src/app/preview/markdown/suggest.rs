@@ -318,7 +318,7 @@ impl App {
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::new(start, caret);
         }
-        self.run(winc_editor::Command::Paste(text));
+        self.run_source_edit(winc_editor::Command::Paste(text));
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::point(end);
         }

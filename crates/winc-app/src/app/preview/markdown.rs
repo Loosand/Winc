@@ -26,7 +26,6 @@ use crate::app::{App, Focus, UserEvent};
 use crate::system;
 
 mod book;
-mod folds;
 mod images;
 pub(crate) mod laid;
 pub(crate) mod links;
@@ -216,6 +215,8 @@ pub(crate) struct MarkdownPreview {
     pub synced: Option<(DocumentId, f64, f32)>,
     /// 可编辑的预览中拖动选择文字的状态。
     live_drag: Option<live_selection::LiveDrag>,
+    /// 最近一次用于单光标排版的位置，拖选和键盘扩选时继续使用。
+    layout_caret: Option<(DocumentId, u64, usize)>,
     /// 回车刚创建的空段，按退格时可整段收回。
     empty_paragraph: Option<live::EmptyParagraph>,
     /// 可编辑的预览中 ↑↓ 移动的目标横坐标（相对内容左边）和移动后光标的位置（字符偏移）：
@@ -249,10 +250,6 @@ pub(crate) struct MarkdownPreview {
     receiver: mpsc::Receiver<Done>,
     /// 补全链接地址的列表。
     pub(crate) suggest: suggest::Suggest,
-    /// 收起的标题（`Section::key`），按文档分开记。
-    pub(crate) folds: HashMap<DocumentId, HashSet<String>>,
-    /// 刚收起或展开了标题：下一帧重新排各块的位置。
-    pub(crate) refold: bool,
     /// 最近一次单击放下的光标（原文字节偏移）：因此重新排版时不为保持光标不动而滚动（见
     /// `laid::old_caret`）。
     pub(crate) clicked: Option<usize>,
@@ -387,6 +384,7 @@ impl Default for MarkdownPreview {
             find_serial: 0,
             synced: None,
             live_drag: None,
+            layout_caret: None,
             empty_paragraph: None,
             goal: None,
             line_end: None,
@@ -406,18 +404,15 @@ impl Default for MarkdownPreview {
             menu_picture: None,
             menu_image: None,
             resizing: None,
-            folds: HashMap::new(),
-            refold: false,
             clicked: None,
         }
     }
 }
 
 impl MarkdownPreview {
-    /// 标签 `id` 关闭后释放其滚动位置和收起的标题。
+    /// 标签 `id` 关闭后释放其滚动位置。
     pub(crate) fn forget(&mut self, id: DocumentId) {
         self.scrolls.remove(&id);
-        self.folds.remove(&id);
     }
 
     /// 和 `other` 交换各本书的阅读位置。

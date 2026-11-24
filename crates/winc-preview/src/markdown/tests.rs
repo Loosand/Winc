@@ -791,30 +791,6 @@ fn html_blocks_holding_only_a_line_break_are_dropped() {
 }
 
 #[test]
-fn headings_fold_down_to_the_next_heading_of_their_level() {
-    let doc = parse("# 甲\n\n一\n\n## 乙\n\n二\n\n## 乙\n\n# 丙\n\n三[^a]\n\n[^a]: 注\n");
-    let sections = doc.sections();
-    let ends: Vec<_> = (sections.iter())
-        .map(|s| s.as_ref().map(|s| (s.key.as_str(), s.end)))
-        .collect();
-    // 第二个「乙」下面没有内容；「丙」一节到脚注之前为止。
-    assert_eq!(
-        ends,
-        [
-            Some(("甲", 5)),
-            None,
-            Some(("乙", 4)),
-            None,
-            None,
-            Some(("丙", 7)),
-            None,
-            None,
-            None
-        ]
-    );
-}
-
-#[test]
 fn image_sizes_written_by_other_editors_are_read() {
     let image = |text: &str| paragraph(&parse(text).blocks[0]).images[0].clone();
     // 替代文字末尾的 `|宽` 或 `|宽x高`。

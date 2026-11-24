@@ -27,9 +27,6 @@ pub(super) struct LiveDrag {
     unit: SelectionUnit,
     document: DocumentId,
     revision: u64,
-    /// 稳定拖选期间的排版。按下前还没进入编辑时为 `None`。
-    caret_before: Option<usize>,
-    selection_before: Option<Selection>,
     tail_click: Option<(f32, f32)>,
 }
 
@@ -44,34 +41,37 @@ impl LiveDrag {
 }
 
 impl App {
-    /// 按住鼠标时沿用按下前的光标，避免标记显隐改变鼠标下的排版。
-    pub(super) fn live_layout_caret(&self) -> Option<usize> {
-        match self.preview.markdown.live_drag {
-            Some(drag) if self.pointer.drag == Drag::MarkdownText => drag.caret_before,
-            _ => self.live_caret_source(),
+    /// 选择期间沿用起选时的语法显示位置。输入法组字仍跟随实际光标。
+    pub(crate) fn live_layout_leaf(&mut self) -> Option<super::LiveLeaf> {
+        if !self.live_editing() {
+            self.preview.markdown.layout_caret = None;
+            return None;
         }
-    }
-
-    pub(super) fn live_layout_selection(&self) -> Option<Selection> {
         let doc = self.editor.active()?;
-        match self.preview.markdown.live_drag {
-            Some(drag)
-                if self.pointer.drag == Drag::MarkdownText
-                    && drag.document == doc.id
-                    && drag.revision == doc.revision =>
-            {
-                drag.selection_before
-            }
-            _ => Some(doc.selection),
+        let caret = self.live_caret_source()?;
+        let composing = !self.preedit_at(crate::app::Focus::Editor).is_empty();
+        let preview = &self.preview.markdown;
+        let selecting = !doc.selection.is_empty()
+            || (self.pointer.drag == Drag::MarkdownText
+                && preview
+                    .live_drag
+                    .is_some_and(|drag| drag.document == doc.id && drag.revision == doc.revision));
+        if selecting && !composing {
+            let (_, _, at) = preview
+                .layout_caret
+                .filter(|&(id, revision, _)| id == doc.id && revision == doc.revision)?;
+            return self.live_leaf_at(at);
         }
-        .filter(|selection| !selection.is_empty())
+        let leaf = self.live_leaf_at(caret);
+        if !selecting {
+            self.preview.markdown.layout_caret =
+                leaf.as_ref().map(|_| (doc.id, doc.revision, caret));
+        }
+        leaf
     }
 
     /// 单击定位、双击选词、三击选段。按住 ⇧ 单击时扩展已有选区。
     pub(super) fn click_live(&mut self, x: f32, y: f32, native_click_count: Option<u8>) {
-        let editing = self.editor.active().map(|doc| doc.id) == self.preview.markdown.editing;
-        let caret_before = self.live_caret_source().filter(|_| editing);
-        let selection_before = caret_before.and_then(|_| self.live_layout_selection());
         self.ime.preedit.clear();
         self.preview.markdown.selection = None;
         self.preview.markdown.goal = None;
@@ -130,8 +130,6 @@ impl App {
             unit,
             document: doc.id,
             revision: doc.revision,
-            caret_before,
-            selection_before,
             tail_click: tail.then_some((x, y)),
         });
         self.pointer.drag = Drag::MarkdownText;
@@ -189,21 +187,23 @@ impl App {
         };
         if drag.tail_click.is_some() && doc.selection.is_empty() {
             self.open_paragraph_below_body();
-        } else if matches!(
-            drag.unit,
-            SelectionUnit::Character | SelectionUnit::Paragraph
-        ) && !doc.selection.is_empty()
-            && let Some(rope) = doc.text().rope()
-        {
-            let selection = self.include_selection_markers(rope, doc.selection);
-            if let Some(doc) = self.editor.active_mut() {
-                doc.selection = selection;
-            }
         }
+        self.request_redraw();
     }
 
-    /// 用原文补齐选区端点被排版隐藏的标记，整条列表项包含它的行首记号。
-    fn include_selection_markers(&self, rope: &ropey::Rope, selection: Selection) -> Selection {
+    /// 编辑和复制时补齐隐藏的语法。已展开的标记可以按实际选区单独编辑。
+    pub(in crate::app) fn markdown_operation_range(&self) -> Option<std::ops::Range<usize>> {
+        let doc = self.editor.active()?;
+        let selection = doc.selection;
+        if !self.markdown_live() || selection.is_empty() || doc.has_cursors() {
+            return None;
+        }
+        let rope = doc.text().rope()?;
+        let preview = &self.preview.markdown;
+        let revealed_at = preview
+            .layout_caret
+            .filter(|&(id, revision, _)| id == doc.id && revision == doc.revision)
+            .map(|(_, _, at)| at);
         let (from, to) = (
             rope.char_to_byte(selection.from()),
             rope.char_to_byte(selection.to()),
@@ -219,10 +219,16 @@ impl App {
             let text = text.to_string();
             let text = text.trim_end_matches(['\r', '\n']);
             let part = from.saturating_sub(base)..(to - base).min(text.len());
-            if part.is_empty() || self.live_prose_at(base + part.start) != Some(true) {
+            if part.is_empty()
+                || (self.live_prose_at(base + part.start) != Some(true)
+                    && self.live_prose_at(base + part.end) != Some(true))
+            {
                 continue;
             }
-            let mut expanded = clipboard::include_markers(text, part);
+            let revealed_at = revealed_at
+                .and_then(|at| at.checked_sub(base))
+                .filter(|&at| at <= text.len());
+            let mut expanded = clipboard::include_hidden_markers(text, part, revealed_at);
             if let Some(marker) = enter::list_prefix(text)
                 && expanded.start <= marker.end
                 && expanded.end >= text.trim_end().len()
@@ -232,12 +238,7 @@ impl App {
             start = start.min(base + expanded.start);
             end = end.max(base + expanded.end);
         }
-        let (start, end) = (rope.byte_to_char(start), rope.byte_to_char(end));
-        if selection.anchor <= selection.head {
-            Selection::new(start, end)
-        } else {
-            Selection::new(end, start)
-        }
+        Some(rope.byte_to_char(start)..rope.byte_to_char(end))
     }
 
     /// 点击正文时，选区从属性面板下方的原文开始。
@@ -284,10 +285,7 @@ impl App {
                 let (start, end) = movement::word_at(doc.text(), position);
                 Selection::new(start, end)
             }
-            SelectionUnit::Paragraph => {
-                let selection = self.paragraph_selection(doc, rope, source)?;
-                self.include_selection_markers(rope, selection)
-            }
+            SelectionUnit::Paragraph => self.paragraph_selection(doc, rope, source)?,
             SelectionUnit::Line => {
                 let span = doc.text().line_span(rope.char_to_line(position));
                 Selection::new(span.start, span.end)

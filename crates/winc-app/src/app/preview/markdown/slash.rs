@@ -298,7 +298,7 @@ impl App {
         };
         let caret = doc.selection.head;
         doc.selection = winc_core::Selection::new(start, caret);
-        self.run(winc_editor::Command::Insert(String::new()));
+        self.run_source_edit(winc_editor::Command::Insert(String::new()));
         let Some((line, _, _)) = self.selected_lines() else {
             return;
         };

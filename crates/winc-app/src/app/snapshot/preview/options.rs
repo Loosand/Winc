@@ -125,11 +125,11 @@ fn the_heading_list_can_be_pinned_open() {
         assert!(row.right() <= left, "{width:?}: {row:?} {left}");
         assert!(left - area.x >= 180.0 + 12.0, "{width:?}: {left}");
         assert!(left + body <= area.right() - 32.0 + 0.5, "{width:?}");
-        // 取消钉住后正文恢复居中，宽于让出一列时。
+        // 取消钉住后正文恢复居中，有空间时恢复原来的宽度。
         app.state.markdown_toc_pinned = false;
         settle(&mut app);
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        assert!(laid.left < left && laid.key.width > body, "{width:?}");
+        assert!(laid.left < left && laid.key.width >= body, "{width:?}");
         app.state.markdown_toc_pinned = true;
         settle(&mut app);
     }

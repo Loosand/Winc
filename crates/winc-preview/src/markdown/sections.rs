@@ -1,48 +1,10 @@
-//! 标题下面的一节（预览中按标题收起），以及脚注的文字（悬停在编号上时提示）。
+//! 标题的锚点和脚注的悬停提示文字。
 
 use std::collections::HashMap;
 
 use super::*;
 
-/// 标题下面可以收起的一节：标题的级别、区分同名标题的键，以及这一节到哪个顶层块为止（不含）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Section {
-    /// 标题的级别，1 至 6。
-    pub level: u8,
-    /// 标题的锚点（[`slug`]），同名的第二个起加上 `-1`、`-2`。
-    pub key: String,
-    /// 这一节之后的第一个顶层块：下一个同级或更高级的标题，或者文末的脚注。
-    pub end: usize,
-}
-
 impl Markdown {
-    /// 各顶层块作为标题时下面的一节；不是标题，或者下面没有内容时为 `None`。
-    pub fn sections(&self) -> Vec<Option<Section>> {
-        // 脚注和它前面生成的分隔线排在正文之后，不属于任何一节。
-        let mut main = (self.blocks.iter())
-            .position(|b| matches!(b, Block::Footnote(..)))
-            .unwrap_or(self.blocks.len());
-        if main > 0 && matches!(self.blocks[main - 1], Block::Rule(None)) {
-            main -= 1;
-        }
-        let keys = self.heading_keys();
-        (self.blocks.iter().zip(keys).enumerate())
-            .map(|(i, (block, key))| {
-                let (Block::Heading(level, _), Some(key)) = (block, key) else {
-                    return None;
-                };
-                let next = (self.blocks[i + 1..main].iter())
-                    .position(|b| matches!(b, Block::Heading(l, _) if l <= level))
-                    .map_or(main, |j| i + 1 + j);
-                (i < main && next > i + 1).then_some(Section {
-                    level: *level,
-                    key,
-                    end: next,
-                })
-            })
-            .collect()
-    }
-
     /// 返回各顶层块作为标题时的锚点，同名的第二个起加上 `-1`、`-2`；不是标题时为 `None`。
     pub fn heading_keys(&self) -> Vec<Option<String>> {
         let mut seen: HashMap<String, usize> = HashMap::new();

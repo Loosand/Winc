@@ -1639,15 +1639,14 @@ mod mark;
 pub mod properties;
 mod shrink;
 pub(crate) use html::named_entity;
+#[cfg(test)]
+mod corpus;
 pub mod math;
 pub mod mermaid;
 pub mod paragraph;
 pub mod resize;
-mod sections;
-pub use sections::Section;
-#[cfg(test)]
-mod corpus;
 pub mod reveal;
+mod sections;
 #[cfg(test)]
 mod tests;
 pub mod words;

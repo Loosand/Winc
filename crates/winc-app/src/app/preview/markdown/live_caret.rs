@@ -85,7 +85,13 @@ impl App {
         }
         let start = rope.line_to_char(line);
         let hidden = self.live_hidden_prefix(line);
-        if pos - start >= hidden {
+        if pos - start >= hidden
+            || (current
+                && preview
+                    .layout
+                    .as_ref()
+                    .is_some_and(|laid| laid.shows_source(rope.char_to_byte(pos))))
+        {
             return pos;
         }
         if !forward {

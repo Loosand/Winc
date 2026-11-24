@@ -100,8 +100,6 @@ pub struct Hits {
     /// 上一帧标题指示条列出的各标题在内容里的高度（逻辑像素），与 [`TocTarget::Heading`] 的
     /// 序号对应；点击标题时滚动到该处。
     pub(crate) markdown_toc_tops: Vec<f32>,
-    /// 标题指示条列出的各标题所在的顶层块，与 `markdown_toc_tops` 对应。
-    pub(crate) markdown_toc_blocks: Vec<usize>,
     /// PDF 预览缩略图栏中各页的位置，以及点击后正文滚动到的位置（逻辑像素）。
     pub(crate) pdf_thumbs: Vec<(Rect, f32)>,
     /// PDF 预览右下角工具栏上各按钮的位置。
@@ -159,7 +157,6 @@ impl Hits {
             markdown_table_bar,
             markdown_toc,
             markdown_toc_tops,
-            markdown_toc_blocks,
             suggest_card,
             suggest,
             selection_card,
@@ -211,7 +208,6 @@ impl Hits {
         *markdown_table_bar = None;
         markdown_toc.clear();
         markdown_toc_tops.clear();
-        markdown_toc_blocks.clear();
         pdf_thumbs.clear();
         pdf_tools.clear();
         install_links.clear();

@@ -34,10 +34,9 @@ pub(crate) struct LiveLeaf {
     pub blank: bool,
     /// 查找该块所用的位置（字节偏移）。
     ///
-    /// 通常是光标位置；按住鼠标期间是按下之前的光标位置。表格中该位置所在的单元格显示原文，
+    /// 由调用者选择实际光标或起选时的排版位置。表格中该位置所在的单元格显示原文，
     /// 正文中显示该位置接触到的标记。
     pub at: usize,
-    pub selection: Option<std::ops::Range<usize>>,
     /// 光标位于代码块、公式等叶子块的第一行或最后两行时，光标所在的行号。
     ///
     /// 围栏行只在光标位于其上时显示，因此光标进出这些行时需要重排；在中间各行移动时不重排。
@@ -47,30 +46,15 @@ pub(crate) struct LiveLeaf {
 impl App {
     /// 返回可编辑的预览中光标所在的叶子块，见 [`LiveLeaf`]；尚未解析或没有叶子块时为 `None`。
     ///
-    /// 光标在第一个叶子块之前时取第一个。拖选期间取鼠标按下前的光标所在的块：
-    /// 拖到其他块上时该块不切换回排版，鼠标下方的内容不移位。
     pub(crate) fn live_leaf(&self) -> Option<LiveLeaf> {
+        self.live_leaf_at(self.live_caret_source()?)
+    }
+
+    pub(super) fn live_leaf_at(&self, caret: usize) -> Option<LiveLeaf> {
         let doc = self.editor.active()?;
         let parsed = self.preview.markdown.parsed.as_ref()?;
         let rope = doc.text().rope()?;
         let len = rope.len_bytes();
-        let mut caret = self.live_layout_caret()?;
-        let selection = self.live_layout_selection().map(|selection| {
-            rope.char_to_byte(selection.from())..rope.char_to_byte(selection.to())
-        });
-        if let Some(selection) = &selection
-            && caret == selection.start
-            && leaf_at_or_before(parsed, selection.end).is_some_and(|leaf| {
-                leaf.prose
-                    && selection.start < leaf.range.start
-                    && selection.end <= leaf.range.end
-                    && rope.byte_to_line(selection.start)
-                        == rope.byte_to_line(leaf.range.start.min(len))
-            })
-        {
-            // 反向选中列表项时，起点可能在列表标记上，使用另一端定位正文。
-            caret = selection.end;
-        }
         let delta = len as i64 - parsed.len as i64;
         let shift = |at: usize| usize::try_from(at as i64 + delta).unwrap_or(0).min(len);
         let i = parsed.leaves.partition_point(|l| l.range.start <= caret);
@@ -141,7 +125,6 @@ impl App {
             table,
             blank,
             at: caret,
-            selection,
             edge,
         })
     }

@@ -584,10 +584,10 @@ fn dragging_across_blocks_keeps_the_layout_still() {
     app.on_mouse_down(MouseButton::Left);
     paint(&mut app);
     // 按住鼠标拖动期间排版不变（尚未开始编辑，全部按排版显示），鼠标下方的内容不移位。
-    assert!(app.live_leaf().is_none());
+    assert!(app.preview.markdown.layout.as_ref().unwrap().live.is_none());
     app.on_mouse_move(x2, y2 + 1.0);
     paint(&mut app);
-    assert!(app.live_leaf().is_none());
+    assert!(app.preview.markdown.layout.as_ref().unwrap().live.is_none());
     assert_eq!(
         crate::app::preview::markdown::laid::full_text(&app).unwrap(),
         shown
@@ -1387,18 +1387,17 @@ fn shoot_preview_heading_indicator() {
     }
 }
 
-/// ←→ 不停留在预览中不显示的列表记号、引用标记里：从项的开头向左到上一行的末尾，向右到
+/// ←→ 不停留在预览中不显示的列表记号里：从项的开头向左到上一行的末尾，向右到
 /// 下一块内容的开头。
 #[test]
 fn arrows_skip_the_hidden_block_markers() {
     use winit::keyboard::{Key, NamedKey};
     let left = Key::Named(NamedKey::ArrowLeft);
     let right = Key::Named(NamedKey::ArrowRight);
-    let (mut app, dir) = live_doc("md-hidden-markers", "- 一\n- 二\n  - 三\n\n> 引\n");
+    let (mut app, dir) = live_doc("md-hidden-markers", "- 一\n- 二\n  - 三\n");
     for (needle, before, after) in [
         ("二", "- 一|\n- 二\n", "- 一\n- |二\n"),
         ("三", "- 二|\n  - 三\n", "- 二\n  - |三\n"),
-        ("引", "  - 三|\n\n> 引\n", "  - 三\n\n> |引\n"),
     ] {
         put_caret(&mut app, needle, false);
         assert!(app.markdown_key(&left, false), "{needle}");

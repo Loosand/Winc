@@ -16,14 +16,15 @@ use super::{Block, Inline, Run, SourceMap, Style, options, parse};
 ///
 /// `text` 是叶子块的原文，续行带有引用的 `>` 和列表的缩进；`caret` 是光标相对 `text` 的
 /// 字节偏移，为 `None` 时不显示标记；`insert` 是输入法组字，排在光标处并加下划线，没有原文位置。
+/// `leading_quote` 表示首行同样带有外层引用的前缀。
 /// 对照以 `text` 的开头为准（`Inline::source` 为 0）；原文已不是段落时逐字显示，不带样式。
 pub fn reveal(
     text: &str,
     caret: Option<usize>,
     insert: Option<&str>,
-    selection: Option<Range<usize>>,
+    leading_quote: bool,
 ) -> Block {
-    let lines = Lines::strip(text);
+    let lines = Lines::strip(text, leading_quote);
     let plain = &lines.plain;
     // 去掉引用标记后没有内容（只输入了 `>`）：逐字显示原文，光标仍有位置可落。
     if plain.trim().is_empty() && !text.trim().is_empty() {
@@ -48,7 +49,7 @@ pub fn reveal(
     let elements = elements(plain);
     let mut out = Out {
         insert: caret.zip(insert).map(|(at, text)| (at, text.to_owned())),
-        selection: selection.map(|range| lines.to_plain(range.start)..lines.to_plain(range.end)),
+        quote: caret.and_then(|at| quote_at(text, at, leading_quote)),
         ..Out::default()
     };
     let caret = caret.map(|c| lines.to_plain(c));
@@ -152,6 +153,24 @@ fn touches(range: &Range<usize>, caret: Option<usize>) -> bool {
     caret.is_some_and(|c| range.start <= c && c <= range.end)
 }
 
+/// An existing quote prefix is editable from its first marker through the start of its text.
+fn quote_at(text: &str, caret: usize, leading_quote: bool) -> Option<(&str, usize)> {
+    let line = text.get(..caret)?.rfind('\n').map_or(0, |end| end + 1);
+    if line == 0 && !leading_quote {
+        return None;
+    }
+    let content = text[line..].split('\n').next()?;
+    let prefix = content.trim_start_matches([' ', '\t']);
+    if !prefix.starts_with('>') {
+        return None;
+    }
+    let start = line + content.len() - prefix.len();
+    let end = prefix
+        .find(|c| !matches!(c, '>' | ' ' | '\t'))
+        .unwrap_or(prefix.len());
+    (caret <= start + end).then_some((&prefix[..end], start))
+}
+
 /// 去掉续行开头引用 `>` 和缩进后的原文，以及它与原文的对应关系。
 struct Lines {
     plain: String,
@@ -161,25 +180,19 @@ struct Lines {
 
 impl Lines {
     /// 返回去掉续行开头 `>` 和缩进后的文字，并记下各行在两个字符串中的起点。
-    fn strip(text: &str) -> Lines {
+    fn strip(text: &str, leading_quote: bool) -> Lines {
         let mut plain = String::with_capacity(text.len());
         let mut starts = Vec::new();
         let mut start = 0;
         for (i, line) in text.split('\n').enumerate() {
             // 段落续行开头的 `>` 只能视为引用标记，否则该行将开始一个新的引用。
-            let skip = if i == 0 {
+            if i > 0 {
+                plain.push('\n');
+            }
+            let skip = if i == 0 && !leading_quote {
                 0
             } else {
-                plain.push('\n');
-                let mut at = 0;
-                let bytes = line.as_bytes();
-                while let Some(&b) = bytes.get(at) {
-                    if !matches!(b, b' ' | b'\t' | b'>') {
-                        break;
-                    }
-                    at += 1;
-                }
-                at
+                line.len() - line.trim_start_matches([' ', '\t', '>']).len()
             };
             starts.push((plain.len(), start + skip));
             plain.push_str(&line[skip..]);
@@ -229,17 +242,29 @@ impl Lines {
 
 /// 拼接生成的文字。
 #[derive(Default)]
-struct Out {
+struct Out<'a> {
     text: String,
     runs: Vec<Run>,
     map: SourceMap,
     /// 尚未写入的输入法组字及其在原文中的位置；写入到原文位置不小于该值的第一个字符之前。
     insert: Option<(usize, String)>,
-    selection: Option<Range<usize>>,
+    quote: Option<(&'a str, usize)>,
 }
 
-impl Out {
+impl Out<'_> {
     fn push(&mut self, c: char, style: Style, source: Option<usize>) {
+        if let Some((quote, start)) = self.quote
+            && source.is_some_and(|source| source >= start + quote.len())
+        {
+            self.quote = None;
+            let style = Style {
+                flags: Style::SYNTAX,
+                link: 0,
+            };
+            for (offset, c) in quote.char_indices() {
+                self.push(c, style, Some(start + offset));
+            }
+        }
         if source.is_some_and(|s| self.insert.as_ref().is_some_and(|(at, _)| s >= *at)) {
             self.flush();
         }
@@ -330,17 +355,13 @@ impl Out {
                 continue;
             }
             let at = gap.start + i;
-            let selected = self
-                .selection
-                .as_ref()
-                .is_some_and(|range| range.contains(&at));
             let show = match innermost(elements, at) {
-                Some(e) => selected || touches(e, caret),
+                Some(e) => touches(e, caret),
                 None => {
                     let p = piece(i);
                     let p = gap.start + p.start..gap.start + p.end;
                     // 行首、行尾的空白（续行的缩进、硬换行的两个空格）不视为标记。
-                    !plain[p.clone()].trim().is_empty() && (selected || touches(&p, caret))
+                    !plain[p.clone()].trim().is_empty() && touches(&p, caret)
                 }
             };
             if show {

@@ -109,29 +109,40 @@ impl App {
         Some(spot.block(&converted.text, end_in_prose))
     }
 
-    /// Keep the unselected ends of a simple emphasis span intact when replacing
-    /// across source lines. Use one transaction with the original selection for undo.
+    /// Edit the visible selection and any hidden Markdown syntax it fully covers.
     pub(in crate::app) fn markdown_selection_replacement(
         &self,
         command: &winc_editor::Command,
+        tab_width: usize,
     ) -> Option<winc_core::Transaction> {
-        use winc_core::{Change, EditKind, Selection, Transaction};
         use winc_editor::Command;
         let replace = match command {
-            Command::Insert(text) | Command::Paste(text) if !text.contains(['\n', '\r']) => text,
+            Command::Insert(text) | Command::Paste(text) => text,
             Command::Backspace { .. } | Command::Delete { .. } => "",
             _ => return None,
         };
+        let range = self.markdown_operation_range()?;
         let doc = self.editor.active()?;
-        if !self.markdown_live() || doc.has_cursors() || doc.selection.is_empty() {
-            return None;
+        if let Some(repair) = self.repair_markdown_emphasis(doc, range.clone(), replace) {
+            return Some(repair);
         }
+        (range != doc.selection.range())
+            .then(|| doc.transaction_with_range(command, tab_width, range))
+            .flatten()
+    }
+
+    /// Keep the unselected ends of a simple emphasis span intact across source lines.
+    fn repair_markdown_emphasis(
+        &self,
+        doc: &winc_editor::Document,
+        range: std::ops::Range<usize>,
+        replace: &str,
+    ) -> Option<winc_core::Transaction> {
+        use winc_core::{Change, EditKind, Selection, Transaction};
         let rope = doc.text().rope()?;
-        let (first, last) = (
-            rope.char_to_line(doc.selection.from()),
-            rope.char_to_line(doc.selection.to()),
-        );
+        let (first, last) = (rope.char_to_line(range.start), rope.char_to_line(range.end));
         if first == last
+            || replace.contains(['\n', '\r'])
             || rope
                 .line(first)
                 .len_bytes()
@@ -140,10 +151,7 @@ impl App {
         {
             return None;
         }
-        let (mut a, mut b) = (
-            rope.char_to_byte(doc.selection.from()),
-            rope.char_to_byte(doc.selection.to()),
-        );
+        let (mut a, mut b) = (rope.char_to_byte(range.start), rope.char_to_byte(range.end));
         let (left, right) = (rope.line_to_byte(first), rope.line_to_byte(last));
         let (before, after) = (rope.line(first).to_string(), rope.line(last).to_string());
         let marker = markdown::format::emphasis_boundary;
@@ -219,8 +227,9 @@ impl App {
         }
         use winc_preview::markdown::clipboard;
         const HTML_BUDGET: usize = 512 * 1024;
-        let mut start = sel.from();
-        let mut end = sel.to();
+        let operation = self.markdown_operation_range();
+        let expanded = operation.clone().unwrap_or_else(|| sel.range());
+        let (mut start, mut end) = (expanded.start, expanded.end);
         let line = rope.char_to_line(start);
         let end_line = rope.char_to_line(end);
         let parsed = self
@@ -245,8 +254,12 @@ impl App {
             let offset = rope.line_to_byte(line);
             let source = rope.line(line).to_string();
             let range = rope.char_to_byte(start) - offset..rope.char_to_byte(end) - offset;
-            let expanded = clipboard::include_markers(&source, range.clone());
-            if !markdown && expanded == range {
+            let expanded = if operation.is_some() {
+                range.clone()
+            } else {
+                clipboard::include_markers(&source, range.clone())
+            };
+            if !markdown && expanded == range && (start..end) == sel.range() {
                 copied_run = clipboard::formatted_run(&source, range);
             }
             start = rope.byte_to_char(offset + expanded.start);

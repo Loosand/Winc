@@ -185,7 +185,7 @@ impl Cx<'_, '_> {
         let flow = self.flow(summary, x + indent, y, width - indent, para, &mut out.items);
         let arrow = if open { "▾" } else { "▸" };
         out.items
-            .push(self.marker(arrow, x + indent, y, flow.first_baseline, para.color, None));
+            .push(self.marker(arrow, x + indent, y, flow.first_baseline, para.color));
         // 整行都能点；排在标题的链接后面，标题里的链接先认。
         out.items.push(Item::Link {
             rect: Rect::new(x, y, width, flow.height),

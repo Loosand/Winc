@@ -697,8 +697,6 @@ pub struct Raw {
     pub done: bool,
     /// 光标在 `block` 中的位置：表格只把光标所在的单元格显示为原文。
     pub caret: usize,
-    /// 当前选区相对于 `block` 的字节范围。
-    pub selection: Option<std::ops::Range<usize>>,
     /// 叶子块的种类，决定原文的显示方式。
     pub kind: RawKind,
     /// 输入法正在组合的文字（仅限正文），排入光标所在的行，见 `reveal`。
@@ -736,7 +734,6 @@ impl Raw {
             leaf,
             done: false,
             caret,
-            selection: None,
             kind: RawKind::Plain,
             preedit,
         };
@@ -814,20 +811,47 @@ fn blanks(raw: &Raw) -> Vec<usize> {
 /// 返回光标所在的段落、标题按当前原文生成的块（见 `winc_preview::markdown::reveal`）、
 /// 光标位于其后的空行上时需要排版的空行（原文起点，相对顶层块），以及组字是否已排入该块。
 fn reveal(raw: &Raw) -> (Block, Vec<usize>, bool) {
-    let text = raw.block.get(raw.leaf.clone()).unwrap_or_default();
-    let caret = raw.caret.saturating_sub(raw.leaf.start).min(text.len());
+    let before = &raw.block[..raw.leaf.start];
+    let prefix = before
+        .rsplit(['\n', '\r'])
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches([' ', '\t']);
+    let before_quote = prefix.starts_with('>')
+        && prefix.bytes().all(|c| matches!(c, b'>' | b' ' | b'\t'))
+        && !raw
+            .block
+            .get(raw.leaf.clone())
+            .unwrap_or_default()
+            .trim()
+            .is_empty();
+    let start = raw.leaf.start - if before_quote { prefix.len() } else { 0 };
+    let text = raw.block.get(start..raw.leaf.end).unwrap_or_default();
+    let quote_body = text.trim_start_matches([' ', '\t', '>']);
+    // A callout opener displayed at its own source position must keep its line.
+    let alert = quote_body.lines().next().is_some_and(|line| {
+        [
+            "[!NOTE]",
+            "[!TIP]",
+            "[!IMPORTANT]",
+            "[!WARNING]",
+            "[!CAUTION]",
+        ]
+        .iter()
+        .any(|kind| line.trim_end().eq_ignore_ascii_case(kind))
+    });
+    let leading_quote = text.trim_start_matches([' ', '\t']).starts_with('>')
+        && !quote_body.trim().is_empty()
+        && !alert;
+    let caret = raw.caret.saturating_sub(start).min(text.len());
     let content = text.trim_end().len();
     let blanks = blanks(raw);
     let at = (caret <= content).then_some(caret);
     let preedit = raw.preedit.as_deref().filter(|_| at.is_some());
-    let selection = raw.selection.as_ref().map(|range| {
-        let relative = |at: usize| at.saturating_sub(raw.leaf.start).min(content);
-        relative(range.start)..relative(range.end)
-    });
     let mut block =
-        winc_preview::markdown::reveal::reveal(&text[..content], at, preedit, selection);
+        winc_preview::markdown::reveal::reveal(&text[..content], at, preedit, leading_quote);
     if let Block::Paragraph(inline) | Block::Heading(_, inline) = &mut block {
-        inline.source = raw.leaf.start;
+        inline.source = start;
     }
     (block, blanks, preedit.is_some())
 }
@@ -1002,14 +1026,8 @@ impl Cx<'_, '_> {
                 out.anchors.push((format!("fn-{label}"), y));
                 let flow = self.blocks(blocks, x + indent, y, width - indent, env, out);
                 let marker = format!("{label}.");
-                out.items.push(self.marker(
-                    &marker,
-                    x + indent,
-                    y,
-                    flow.first_baseline,
-                    env.color,
-                    None,
-                ));
+                out.items
+                    .push(self.marker(&marker, x + indent, y, flow.first_baseline, env.color));
                 flow
             }
             Block::Details {
@@ -1039,18 +1057,14 @@ impl Cx<'_, '_> {
         y: f32,
         baseline: Option<f32>,
         color: Color,
-        span: Option<Span>,
     ) -> Item {
         let size = self.base;
         let baseline = baseline.unwrap_or_else(|| {
             let m = self.frame.metrics(FontKind::Ui, size);
             y + (size * 1.5 - m.ascent - m.descent) / 2.0 + m.ascent
         });
-        let (gap, width) = if let Some(span) = &span {
-            (0.0, span.advances.iter().sum())
-        } else {
-            (size * 0.4, self.frame.measure(FontKind::Ui, size, marker))
-        };
+        let gap = size * 0.4;
+        let width = self.frame.measure(FontKind::Ui, size, marker);
         Item::Text {
             x: content_x - gap - width,
             baseline,
@@ -1059,28 +1073,8 @@ impl Cx<'_, '_> {
             faux: Faux::default(),
             size,
             color,
-            span,
+            span: None,
         }
-    }
-
-    fn selected_list_prefix(&self, item: &ListItem) -> Option<(usize, &str)> {
-        let raw = self.raw.as_ref().filter(|raw| !raw.done)?;
-        let selection = raw.selection.as_ref()?;
-        let (Block::Paragraph(inline) | Block::Heading(_, inline)) = item.blocks.first()? else {
-            return None;
-        };
-        if !(raw.leaf.start..=raw.parsed_end).contains(&inline.source) {
-            return None;
-        }
-        let before = raw.block.get(..raw.leaf.start)?;
-        let start = before.rfind(['\n', '\r']).map_or(0, |at| at + 1);
-        let line_prefix = &before[start..];
-        let marker = winc_preview::markdown::enter::list_prefix(line_prefix)?;
-        let source = start + marker.start;
-        (marker.end == line_prefix.len()
-            && selection.start <= source
-            && selection.end >= raw.leaf.start)
-            .then(|| (source, &line_prefix[marker]))
     }
 
     /// 画无序列表项的记号：第一层实心圆点，第二层空心圆圈，更深的层实心方块。
@@ -1158,38 +1152,11 @@ impl Cx<'_, '_> {
             } else {
                 (content_x, room)
             };
-            let selected = self
-                .selected_list_prefix(item)
-                .map(|(source, prefix)| (source, prefix.to_owned(), self.chars));
-            if let Some((_, prefix, _)) = &selected {
-                self.text.push_str(prefix);
-                self.chars += prefix.chars().count();
-            }
             let flow = self.blocks(&item.blocks, item_x, top, item_room, inner, out);
             first_baseline = first_baseline.or(flow.first_baseline);
             let baseline = flow.first_baseline;
             match (item.task, start) {
                 _ if item.bare => {}
-                _ if let Some((source, prefix, start)) = selected => {
-                    let chars: Vec<_> = prefix.chars().collect();
-                    let span = Span {
-                        start,
-                        advances: self
-                            .frame
-                            .advances_faux(FontKind::Ui, Faux::default(), base, &chars)
-                            .into(),
-                        source: u32::try_from(source).ok(),
-                        jumps: None,
-                    };
-                    out.items.push(self.marker(
-                        &prefix,
-                        content_x,
-                        top,
-                        baseline,
-                        self.colors.muted,
-                        Some(span),
-                    ));
-                }
                 (Some(checked), _) => {
                     let size = (base * 0.85).round();
                     let line_mid = baseline.map_or(top + base * 0.75, |b| b - base * 0.35);
@@ -1207,7 +1174,7 @@ impl Cx<'_, '_> {
                 (None, Some(start)) => {
                     let marker = format!("{}.", start + i as u64);
                     out.items
-                        .push(self.marker(&marker, content_x, top, baseline, env.color, None));
+                        .push(self.marker(&marker, content_x, top, baseline, env.color));
                 }
                 (None, None) => self.bullet(content_x, top, baseline, env, &mut out.items),
             }

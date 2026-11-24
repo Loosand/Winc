@@ -949,6 +949,23 @@ fn a_click_below_the_body_opens_one_empty_paragraph() {
 }
 
 #[test]
+fn a_blank_paragraph_at_the_end_has_a_body_height_caret() {
+    let (mut app, dir) = live_doc("md-caret-height-at-end", "最后一段。\n");
+    put_caret(&mut app, "最后一段。", true);
+    let body_caret = app.ime.cursor.unwrap();
+    let area = app.preview.markdown.area;
+    let layout = app.preview.markdown.layout.as_ref().unwrap();
+    let x = layout.left + 10.0;
+    let y = area.y + layout.height() - app.preview.markdown.scroll() + 20.0;
+    super::click(&mut app, (x, y));
+    settle(&mut app);
+    assert_eq!(with_caret(&app), "最后一段。\n\n|");
+    let blank_caret = app.ime.cursor.unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(blank_caret.h, body_caret.h);
+}
+
+#[test]
 fn a_separator_after_properties_places_the_caret_in_the_body() {
     use winit::keyboard::{Key, NamedKey};
 

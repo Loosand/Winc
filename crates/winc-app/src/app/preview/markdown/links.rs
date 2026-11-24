@@ -107,13 +107,12 @@ impl App {
     /// 第 `index` 个链接是否为预览自身的控件（代码块的复制按钮、图的全屏按钮、折叠块的标题、
     /// 勾选框），而非正文中的链接。
     pub(crate) fn markdown_link_is_control(&self, index: usize) -> bool {
-        use crate::app::preview::markdown::laid::{COPY, DETAILS, EXPAND, FOLD, TABLE, TASK};
+        use crate::app::preview::markdown::laid::{COPY, DETAILS, EXPAND, TABLE, TASK};
         self.hits.markdown_links.get(index).is_some_and(|(_, url)| {
             [
                 COPY,
                 DETAILS,
                 EXPAND,
-                FOLD,
                 TABLE,
                 TASK,
                 winc_preview::markdown::properties::PROPERTY,
@@ -183,10 +182,6 @@ impl App {
             if let Ok(at) = at.parse() {
                 self.toggle_markdown_task(at);
             }
-            return;
-        }
-        if let Some(key) = url.strip_prefix(crate::app::preview::markdown::laid::FOLD) {
-            self.toggle_heading_fold(key);
             return;
         }
         if let Some(id) = url.strip_prefix(crate::app::preview::markdown::laid::DETAILS) {
@@ -306,7 +301,7 @@ impl App {
             doc.collapse_selections();
             doc.selection = winc_core::Selection::new(pos, pos + 1);
         }
-        self.run(winc_editor::Command::Insert(next.to_owned()));
+        self.run_source_edit(winc_editor::Command::Insert(next.to_owned()));
         if let Some(doc) = self.editor.active_mut() {
             // 替换的只有一个字符，其前后的位置均不变。
             doc.set_selections(selections, primary);
