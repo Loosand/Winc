@@ -71,13 +71,6 @@ pub(super) fn draw_navigation(app: &App, frame: &mut Frame<'_>) {
 
     let r = nav.new_file;
     if r.h > 0.0 {
-        let y = app.layout.tree.bottom();
-        frame.rect_clipped(
-            Rect::new(clip.x + 8.0, y, clip.w - 16.0, 1.0),
-            p.separator,
-            0.0,
-            clip,
-        );
         draw_button(frame, p, r, clip, hot(SidebarTarget::NewFile), false);
         icons::plus(frame, (r.x + 13.0, center(r).1), 9.0, p.text_muted, r);
         ui_text(

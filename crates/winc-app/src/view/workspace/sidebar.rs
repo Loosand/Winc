@@ -600,7 +600,7 @@ fn draw_tree(app: &mut App, frame: &mut Frame<'_>) {
     }
 }
 
-/// 绘制文件树的一行：选中或悬停的底色、缩进参考线、箭头、图标和名称。
+/// 绘制文件树的一行：选中或悬停的底色、箭头、图标和名称。
 ///
 /// `open` 是目录箭头已转过的比例（0 为收起，1 为展开）。返回从行左边缘到名称末尾的宽度（逻辑像素，
 /// 不含横向滚动偏移），横向滚动范围据此计算。
@@ -686,12 +686,6 @@ fn draw_tree_entry(
 
     let scroll_x = app.panels.tree.scroll_x;
     let cy = icon_center_y(app, row, app.fonts.ui);
-
-    // 缩进参考线：每级一条，位于父目录箭头的正下方，相邻行的参考线连成竖线。
-    for level in 0..entry.depth {
-        let x = (tree_indent_x(row.x, level, scroll_x) + 4.0).round();
-        frame.rect_clipped(Rect::new(x, row.y, 1.0, row.h), p.indent_guide, 0.0, clip);
-    }
 
     let mut x = tree_indent_x(row.x, entry.depth, scroll_x);
 
@@ -938,17 +932,6 @@ fn draw_name_input(
     // 缩进和图标按普通行的位置放置，与上下相邻的条目对齐。
     let indent = row.x + 14.0 + shift;
     let x = indent + depth as f32 * TREE_INDENT + 14.0;
-
-    // 缩进参考线：与普通行相同，每级一条。
-    for level in 0..depth {
-        let guide = (indent + level as f32 * TREE_INDENT + 4.0).round();
-        frame.rect_clipped(
-            Rect::new(guide, row.y, 1.0, row.h),
-            p.indent_guide,
-            0.0,
-            row_clip,
-        );
-    }
 
     // 重命名目录时仍然绘制箭头，使该行看起来就是原来的那一行变成了输入框。
     let open = match entry.rename {
