@@ -13,8 +13,8 @@ use winc_i18n::t;
 
 use crate::app::{ChangeTarget, fold_column};
 use crate::icons::Direction;
-use crate::view::diff::hunk_shade;
 use crate::view::editor::draw_glyphs;
+use crate::view::editor::hunk_shade;
 use crate::view::*;
 
 /// 标题栏的最小高度（逻辑像素）；绘制时向上取整到行高的整数倍，使卡片覆盖整数行。

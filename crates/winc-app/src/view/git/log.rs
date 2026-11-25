@@ -35,7 +35,6 @@ use crate::app::{StatusEntry, StatusRow};
 use crate::icons::Direction;
 use crate::keymap::{self, Action};
 use crate::layout::editor_content_height;
-use crate::view::workspace::sidebar::git_color;
 use crate::view::*;
 use winc_editor::git::LogQuery;
 
@@ -483,7 +482,7 @@ fn draw_uncommitted(
         let inner = r - GRAPH_LINE;
         let hole = Rect::new(cx - inner, cy - inner, 2.0 * inner, 2.0 * inner);
         let bg = if hovered {
-            crate::view::workspace::panel::over(p.editor_bg, p.hover)
+            crate::view::controls::over(p.editor_bg, p.hover)
         } else {
             p.editor_bg
         };

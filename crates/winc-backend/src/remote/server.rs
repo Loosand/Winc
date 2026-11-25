@@ -264,11 +264,14 @@ fn handle(frame: &Frame) -> io::Result<Vec<u8>> {
             let path = path(&mut input)?;
             input.finish()?;
             let metadata = if frame.kind == kind::METADATA {
-                crate::fs::metadata(path)?
+                std::fs::metadata(path)?
             } else {
-                crate::fs::symlink_metadata(path)?
+                std::fs::symlink_metadata(path)?
             };
-            Ok(wire::write_metadata(Writer::default(), &metadata).finish())
+            Ok(
+                wire::write_metadata(Writer::default(), &crate::meta::Metadata::from(&metadata))
+                    .finish(),
+            )
         }
         kind::READ => {
             let (data, end) = read(&frame.payload)?;
@@ -277,7 +280,7 @@ fn handle(frame: &Frame) -> io::Result<Vec<u8>> {
         kind::READ_LINK => {
             let path = path(&mut input)?;
             input.finish()?;
-            let target = crate::fs::read_link(path)?;
+            let target = std::fs::read_link(path)?;
             Ok(Writer::default()
                 .bytes(target.as_os_str().as_bytes())
                 .finish())
@@ -287,9 +290,9 @@ fn handle(frame: &Frame) -> io::Result<Vec<u8>> {
             let all = input.u8()? != 0;
             input.finish()?;
             if all {
-                crate::fs::create_dir_all(path)?;
+                std::fs::create_dir_all(path)?;
             } else {
-                crate::fs::create_dir(path)?;
+                std::fs::create_dir(path)?;
             }
             Ok(Vec::new())
         }
@@ -298,9 +301,16 @@ fn handle(frame: &Frame) -> io::Result<Vec<u8>> {
             let contents = input.bytes()?;
             input.finish()?;
             if frame.kind == kind::CREATE_NEW {
-                crate::fs::create_new(path, contents)?;
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?;
+                if let Err(error) = file.write_all(contents) {
+                    let _ = std::fs::remove_file(path);
+                    return Err(error);
+                }
             } else {
-                crate::fs::write(path, contents)?;
+                std::fs::write(path, contents)?;
             }
             Ok(Vec::new())
         }
@@ -308,16 +318,20 @@ fn handle(frame: &Frame) -> io::Result<Vec<u8>> {
             let (from, to) = (path(&mut input)?, path(&mut input)?);
             input.finish()?;
             match frame.kind {
-                kind::RENAME => crate::fs::rename(from, to)?,
-                kind::COPY_SYMLINK => crate::fs::copy_symlink(from, to)?,
-                _ => return Ok(Writer::default().u64(crate::fs::copy(from, to)?).finish()),
+                kind::RENAME => std::fs::rename(from, to)?,
+                kind::COPY_SYMLINK => {
+                    let target = std::fs::read_link(from)?;
+                    std::os::unix::fs::symlink(&target, to)?;
+                }
+                _ => return Ok(Writer::default().u64(std::fs::copy(from, to)?).finish()),
             }
             Ok(Vec::new())
         }
         kind::SET_MODE => {
             let (path, mode) = (path(&mut input)?, input.u32()?);
             input.finish()?;
-            crate::fs::set_mode(path, mode)?;
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
             Ok(Vec::new())
         }
         kind::SYMLINK => {
@@ -330,13 +344,17 @@ fn handle(frame: &Frame) -> io::Result<Vec<u8>> {
         kind::REMOVE_FILE => {
             let path = path(&mut input)?;
             input.finish()?;
-            crate::fs::remove_file(path)?;
+            std::fs::remove_file(path)?;
             Ok(Vec::new())
         }
         kind::REMOVE_ALL => {
             let path = path(&mut input)?;
             input.finish()?;
-            crate::fs::remove_all(path)?;
+            if std::fs::symlink_metadata(path)?.is_dir() {
+                std::fs::remove_dir_all(path)?;
+            } else {
+                std::fs::remove_file(path)?;
+            }
             Ok(Vec::new())
         }
         _ => Err(io::Error::new(
@@ -366,10 +384,28 @@ fn read(payload: &[u8]) -> io::Result<(Vec<u8>, bool)> {
         ));
     }
     let mut data = vec![0; len as usize];
-    let handle = crate::fs::open(path, 0)?.into_handle();
-    let read = handle.read_full(offset, &mut data)?;
+    let file = std::fs::File::open(path)?;
+    let read = read_full_at(&file, offset, &mut data)?;
     data.truncate(read);
     Ok((data, read < len as usize))
+}
+
+fn read_full_at(file: &std::fs::File, mut offset: u64, mut buf: &mut [u8]) -> io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+    let mut total = 0;
+    while !buf.is_empty() {
+        match file.read_at(buf, offset) {
+            Ok(0) => break,
+            Ok(n) => {
+                total += n;
+                offset += n as u64;
+                buf = &mut buf[n..];
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(total)
 }
 
 /// 读取请求的长度超过多少字节时分段应答（字节，256 KiB，与保存时一段的大小相同）。
@@ -507,7 +543,7 @@ fn finish_upload(upload: Option<Upload>, payload: &[u8]) -> io::Result<Vec<u8>> 
     if let Some(error) = upload.failed.take() {
         return Err(error);
     }
-    let options = crate::fs::SaveOptions {
+    let options = crate::local::SaveOptions {
         bom: upload.bom,
         in_memory: upload.in_memory,
         ..Default::default()
@@ -519,7 +555,7 @@ fn finish_upload(upload: Option<Upload>, payload: &[u8]) -> io::Result<Vec<u8>> 
         reason = "服务进程只在 Unix 上运行，路径没有需要去掉的前缀"
     )]
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let saved = crate::fs::save(&target, &options, |out| match &mut upload.spilled {
+    let saved = crate::local::save_local(&target, &options, |out| match &mut upload.spilled {
         Some(file) => {
             use std::io::Seek;
             file.rewind()?;
@@ -531,10 +567,10 @@ fn finish_upload(upload: Option<Upload>, payload: &[u8]) -> io::Result<Vec<u8>> 
         Ok(metadata) => {
             return Ok(wire::write_metadata(Writer::default().u8(kind::SAVED), &metadata).finish());
         }
-        Err(crate::fs::SaveError::ReadOnly) => kind::SAVE_READ_ONLY,
-        Err(crate::fs::SaveError::IdentityWouldChange) => kind::SAVE_IDENTITY,
-        Err(crate::fs::SaveError::TemporaryFile) => kind::SAVE_TEMPORARY,
-        Err(crate::fs::SaveError::Io(error)) => return Err(error),
+        Err(crate::local::SaveError::ReadOnly) => kind::SAVE_READ_ONLY,
+        Err(crate::local::SaveError::IdentityWouldChange) => kind::SAVE_IDENTITY,
+        Err(crate::local::SaveError::TemporaryFile) => kind::SAVE_TEMPORARY,
+        Err(crate::local::SaveError::Io(error)) => return Err(error),
     };
     Ok(Writer::default().u8(result).finish())
 }
@@ -606,7 +642,7 @@ fn list(frame: &Frame, output: &Output) -> Result<(), Failure> {
         let mut input = Reader::new(&frame.payload);
         let path = path(&mut input)?;
         input.finish()?;
-        crate::fs::read_dir(path)
+        std::fs::read_dir(path)
     })()
     .map_err(Failure::Request)?;
     let send = |count: u32, items: Writer| {
@@ -617,8 +653,13 @@ fn list(frame: &Frame, output: &Output) -> Result<(), Failure> {
     };
     let (mut count, mut size, mut items) = (0u32, 0usize, Writer::default());
     for entry in entries.flatten() {
-        let name = entry.name.as_bytes();
-        items = items.u8(wire::kind_byte(entry.kind)).bytes(name);
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let kind = crate::meta::Kind::from(file_type);
+        let name = entry.file_name();
+        let name = name.as_bytes();
+        items = items.u8(wire::kind_byte(kind)).bytes(name);
         count += 1;
         size += name.len() + 5;
         if size >= CHUNK {

@@ -83,17 +83,6 @@ fn rank(needle: &[char], row: LanguageRow) -> Option<(u8, u32)> {
 }
 
 impl App {
-    /// 已保存的 Markdown 文件和未命名的笔记都不通过语言菜单切换到源码编辑器。
-    pub(in crate::app) fn can_change_language(&self) -> bool {
-        self.editor.active().is_some_and(|doc| {
-            doc.title.is_none()
-                && !doc.path.as_deref().map_or_else(
-                    || doc.preview_kind() == Some(winc_editor::PreviewKind::Markdown),
-                    winc_preview::markdown::is_markdown,
-                )
-        })
-    }
-
     /// 命令「更改文件的语言」：在面板中列出全部语言，选中当前文档的语言。
     pub(in crate::app) fn open_language_menu(&mut self) {
         if !self.can_change_language() {

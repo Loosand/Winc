@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use zeno::{Command, Fill, Mask, Stroke};
 
+use super::canvas::{Blend, Layer, over};
 use super::syntax::Affine;
 use super::*;
 
@@ -24,57 +25,6 @@ thread_local! {
  /// 渲染结束时清空，不随绘图常驻内存。
     /// 渲染结束时清空，不随绘图常驻内存。
     static TILES: RefCell<HashMap<*const Pattern, Tile>> = RefCell::new(HashMap::new());
-}
-
-/// 画布上的一块矩形区域（像素，右边界和下边界不含）。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct Area {
-    /// 左边界（像素列号，含）。
-    pub x0: usize,
-    /// 上边界（像素行号，含）。
-    pub y0: usize,
-    /// 右边界（像素列号，不含）。
-    pub x1: usize,
-    /// 下边界（像素行号，不含）。
-    pub y1: usize,
-}
-
-impl Area {
-    /// 空区域，`x0`、`y0` 取最大值，`x1`、`y1` 为 0；与任何区域求并集时结果等于对方。
-    const EMPTY: Area = Area {
-        x0: usize::MAX,
-        y0: usize::MAX,
-        x1: 0,
-        y1: 0,
-    };
-
-    /// 是否为空区域（宽或高为 0）。
-    pub(super) fn is_empty(&self) -> bool {
-        self.x0 >= self.x1 || self.y0 >= self.y1
-    }
-
-    /// 返回同时包含 `self` 和 `o` 的最小矩形；`o` 为空时返回 `self`。
-    fn union(self, o: Area) -> Area {
-        if o.is_empty() {
-            return self;
-        }
-        Area {
-            x0: self.x0.min(o.x0),
-            y0: self.y0.min(o.y0),
-            x1: self.x1.max(o.x1),
-            y1: self.y1.max(o.y1),
-        }
-    }
-
-    /// 返回 `self` 与 `o` 的交集；二者不相交时返回空区域。
-    pub(super) fn intersect(self, o: Area) -> Area {
-        Area {
-            x0: self.x0.max(o.x0),
-            y0: self.y0.max(o.y0),
-            x1: self.x1.min(o.x1),
-            y1: self.y1.min(o.y1),
-        }
-    }
 }
 
 /// 覆盖度缓冲的像素数相对画布像素数的最大倍数（倍）。
@@ -166,152 +116,33 @@ fn device_path(path: &[Command], t: Affine) -> Vec<Command> {
     })
 }
 
-/// 预乘 alpha 的 RGBA 画布。
-pub(super) struct Layer {
-    /// 宽度（像素）。
-    pub width: usize,
-    /// 高度（像素）。
-    pub height: usize,
-    /// 按行排列的像素，每个像素是预乘的 `[R, G, B, A]`，长度为 `width * height`。
-    pub px: Vec<[u8; 4]>,
-    /// 已绘制过的区域；叠加、裁剪、蒙版只处理这一块。
-    pub touched: Area,
-}
-
-impl Layer {
-    /// 创建 `width` × `height` 像素的全透明画布。
-    pub(super) fn new(width: usize, height: usize) -> Layer {
-        Layer {
-            width,
-            height,
-            // 全零内存通过 `alloc_zeroed` 申请，操作系统按需提交物理页；大画布上只绘制一小块时，
-            // 不会立即占满内存。
-            // 不会立即占满内存。
-            px: vec![[0; 4]; width * height],
-            touched: Area::EMPTY,
-        }
-    }
-
-    /// 返回覆盖整个画布的区域。
-    pub(super) fn full(&self) -> Area {
-        Area {
-            x0: 0,
-            y0: 0,
-            x1: self.width,
-            y1: self.height,
-        }
-    }
-
-    /// 返回覆盖度缓冲与画布相交的区域，以及 `placement` 的左、上偏移和缓冲每行的宽度
-    ///（像素）；二者不相交时返回 `None`。
-    /// 和缓冲每行的宽度（像素）；二者不相交时返回 `None`。
-    fn clip_placement(&self, placement: zeno::Placement) -> Option<(Area, i32, i32, usize)> {
-        let (left, top) = (placement.left, placement.top);
-        let (mw, mh) = (placement.width as i32, placement.height as i32);
-        let area = Area {
-            x0: left.max(0) as usize,
-            y0: top.max(0) as usize,
-            x1: (left + mw).clamp(0, self.width as i32) as usize,
-            y1: (top + mh).clamp(0, self.height as i32) as usize,
-        };
-        (!area.is_empty()).then_some((area, left, top, mw as usize))
-    }
-
-    /// 按覆盖度缓冲 `mask`（位置为 `placement`）把 `paint` 叠加到画布上。
-    ///
-    /// `to_pixels` 是从形状自身坐标到画布像素的变换。
-    fn paint(&mut self, mask: &[u8], placement: zeno::Placement, paint: &Paint, to_pixels: Affine) {
-        let Some((area, left, top, mw)) = self.clip_placement(placement) else {
-            return;
-        };
-        let sampler = Sampler::new(paint, to_pixels);
-        for y in area.y0..area.y1 {
-            let row = (y as i32 - top) as usize * mw;
-            for x in area.x0..area.x1 {
-                let coverage = mask[row + (x as i32 - left) as usize];
-                if coverage == 0 {
-                    continue;
-                }
-                let src = sampler.at(x as i32, y as i32);
-                let dst = &mut self.px[y * self.width + x];
-                *dst = over(*dst, src, u32::from(coverage));
+/// 按覆盖度缓冲 `mask`（位置为 `placement`）把 `paint` 叠加到画布 `layer` 上。
+///
+/// `to_pixels` 是从形状自身坐标到画布像素的变换。
+fn paint_layer(
+    layer: &mut Layer,
+    mask: &[u8],
+    placement: zeno::Placement,
+    paint: &Paint,
+    to_pixels: Affine,
+) {
+    let Some((area, left, top, mw)) = layer.clip_placement(placement) else {
+        return;
+    };
+    let sampler = Sampler::new(paint, to_pixels);
+    for y in area.y0..area.y1 {
+        let row = (y as i32 - top) as usize * mw;
+        for x in area.x0..area.x1 {
+            let coverage = mask[row + (x as i32 - left) as usize];
+            if coverage == 0 {
+                continue;
             }
-        }
-        self.touched = self.touched.union(area);
-    }
-
-    /// 把 `layer` 按不透明度 `alpha`（0 到 1）叠加到本层上。
-    fn merge(&mut self, layer: &Layer, alpha: f32) {
-        let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
-        let area = layer.touched.intersect(self.full());
-        if area.is_empty() || a == 0 {
-            return;
-        }
-        for y in area.y0..area.y1 {
-            let row = y * self.width;
-            for x in area.x0..area.x1 {
-                let src = layer.px[row + x];
-                if src[3] > 0 {
-                    let dst = &mut self.px[row + x];
-                    *dst = over(*dst, src, a);
-                }
-            }
-        }
-        self.touched = self.touched.union(area);
-    }
-
-    /// 把 `layer` 按不透明度 `alpha` 和混合模式 `mode` 叠加到本层上。
-    fn blend(&mut self, layer: &Layer, alpha: f32, mode: super::filter::Blend) {
-        let area = layer.touched.intersect(self.full());
-        if area.is_empty() {
-            return;
-        }
-        let a = alpha.clamp(0.0, 1.0);
-        for y in area.y0..area.y1 {
-            let row = y * self.width;
-            for x in area.x0..area.x1 {
-                let src = layer.px[row + x];
-                if src[3] == 0 {
-                    continue;
-                }
-                let t = src.map(|c| f32::from(c) / 255.0 * a);
-                let b = self.px[row + x].map(|c| f32::from(c) / 255.0);
-                let out = super::filter::blend_pixel(t, b, mode);
-                self.px[row + x] = out.map(|c| (c * 255.0).round().clamp(0.0, 255.0) as u8);
-            }
-        }
-        self.touched = self.touched.union(area);
-    }
-
-    /// 把每个像素乘以 `coverage` 中对应的覆盖度（0 到 255，尺寸与画布相同）。
-    fn multiply(&mut self, coverage: &[u8]) {
-        let area = self.touched;
-        if area.is_empty() {
-            return;
-        }
-        for y in area.y0..area.y1 {
-            let row = y * self.width;
-            for x in area.x0..area.x1 {
-                let k = u32::from(coverage[row + x]);
-                if k < 255 {
-                    let p = &mut self.px[row + x];
-                    *p = p.map(|c| ((u32::from(c) * k + 127) / 255) as u8);
-                }
-            }
+            let src = sampler.at(x as i32, y as i32);
+            let dst = &mut layer.px[y * layer.width + x];
+            *dst = over(*dst, src, u32::from(coverage));
         }
     }
-}
-
-/// 返回 `src` 按 source-over 叠加到 `dst` 上的结果。
-/// `src` 为预乘颜色，且先按 `coverage`/255 缩放；结果是预乘颜色。
-fn over(dst: [u8; 4], src: [u8; 4], coverage: u32) -> [u8; 4] {
-    if coverage == 255 && src[3] == 255 {
-        return src;
-    }
-    let s = |c: u8| (u32::from(c) * coverage + 127) / 255;
-    let sa = s(src[3]);
-    let keep = 255 - sa;
-    std::array::from_fn(|i| (s(src[i]) + (u32::from(dst[i]) * keep + 127) / 255).min(255) as u8)
+    layer.touched = layer.touched.union(area);
 }
 
 enum Sampler<'a> {
@@ -522,7 +353,7 @@ fn draw_group(group: &Group, layer: &mut Layer, viewport: Affine) {
         let coverage = mask_coverage(mask, viewport, layer.width, layer.height);
         inner.multiply(&coverage);
     }
-    if group.blend == super::filter::Blend::Normal {
+    if group.blend == Blend::Normal {
         layer.merge(&inner, group.opacity);
     } else {
         layer.blend(&inner, group.opacity, group.blend);
@@ -691,7 +522,7 @@ fn draw_shape(shape: &Shape, layer: &mut Layer, viewport: Affine) {
         if let Some((paint, rule)) = &shape.fill {
             let (mask, placement) =
                 render_mask(Mask::new(&device).style(*rule), layer.width, layer.height);
-            layer.paint(&mask, placement, paint, to_pixels);
+            paint_layer(layer, &mask, placement, paint, to_pixels);
         }
     };
     let stroke = |layer: &mut Layer| {
@@ -715,7 +546,7 @@ fn draw_shape(shape: &Shape, layer: &mut Layer, viewport: Affine) {
             }
             let (mask, placement) =
                 render_mask(Mask::new(&device).style(stroke), layer.width, layer.height);
-            layer.paint(&mask, placement, paint, to_pixels);
+            paint_layer(layer, &mask, placement, paint, to_pixels);
         }
     };
     if shape.stroke_first {
@@ -745,7 +576,7 @@ fn draw_image(image: &ImageItem, layer: &mut Layer, viewport: Affine) {
             (iw * sx).ceil().max(1.0) as u32,
             (ih * sy).ceil().max(1.0) as u32,
         );
-        let small = crate::image::resize(&image.pixels, tw, th);
+        let small = crate::raster::resize(&image.pixels, tw, th);
         let (kx, ky) = (iw / tw as f32, ih / th as f32);
         to_pixels = Affine::scale(kx, ky).then(to_pixels);
         source = std::borrow::Cow::Owned(small);

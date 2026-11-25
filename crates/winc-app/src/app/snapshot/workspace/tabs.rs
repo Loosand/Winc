@@ -748,7 +748,7 @@ fn switching_between_split_and_preview_reuses_the_parsed_svg() {
     assert!(matches!(&doc.picture, Some(PictureState::Ready(p)) if Arc::ptr_eq(p, &parsed)));
 
     // 换一张已解析好的预览图再切回分栏：右侧直接复用它，不在后台重新解析。
-    let fresh = Arc::new(winc_preview::svg::load(svg, None, None).unwrap());
+    let fresh = Arc::new(winc_preview::image::load_svg(svg, None, None).unwrap());
     app.editor.active_mut().unwrap().picture = Some(PictureState::Ready(Arc::clone(&fresh)));
     app.preview.split = crate::app::preview::images::SplitPreview::default();
     app.set_preview_mode(PreviewMode::Split);

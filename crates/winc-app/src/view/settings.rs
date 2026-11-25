@@ -218,7 +218,7 @@ fn draw_nav_row(
     // 当前分类使用与顶栏视图切换相同的选中样式：凸起底色（深色配色亮一档）加一圈细边；
     // 悬停只铺浅色。两者仅靠底色深浅区分时难以辨认当前页，因此选中项额外加细边。
     if current {
-        let (raised, edge) = super::workspace::panel::segment_colors(p, p.sidebar_bg);
+        let (raised, edge) = super::controls::segment_colors(p, p.sidebar_bg);
         frame.rect_clipped(row, edge, RADIUS_ROW, layout.nav);
         frame.rect_clipped(row.inset(0.5, 0.5), raised, RADIUS_ROW - 0.5, layout.nav);
     } else if hovered {
@@ -431,7 +431,7 @@ fn draw_row(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
                 }
                 // 更新：说明换成当前的状态，找到新版本时用强调色。
                 Setting::Updates => {
-                    let (text, color) = update_status(app);
+                    let (text, color) = super::status::update_status(app);
                     let text = ellipsize(frame, &text, app.fonts.ui_small, room);
                     ui_text_small(frame, app, x, bottom, &text, color, clip);
                 }
@@ -662,62 +662,6 @@ fn draw_product(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Re
     }
     let x = (area.x + (area.w - w) / 2.0).round();
     ui_text(frame, app, x, area, &text, p.text_muted, clip);
-}
-
-/// 找到新版本 `version` 时的说明：不由应用自己更新的安装写明从哪里取得。
-fn found_text(version: &str) -> String {
-    #[cfg(not(target_os = "macos"))]
-    {
-        use crate::updates::Delivery;
-        match crate::updates::delivery() {
-            Some(Delivery::Download) => {
-                return t!("settings-updates-found-download", version = version);
-            }
-            Some(Delivery::Pacman) => {
-                return t!("settings-updates-found-pacman", version = version);
-            }
-            _ => {}
-        }
-    }
-    t!("settings-updates-found", version = version)
-}
-
-/// 「关于」页「更新」一行下方的状态文字和颜色；也是状态栏更新按钮的悬停提示（见
-/// `status::update_tooltip`）。
-pub(in crate::view) fn update_status(app: &App) -> (String, Color) {
-    use crate::winc::UpdateState;
-    let p = app.palette;
-    match &*app.link.shared.update_state.borrow() {
-        UpdateState::Off => (t!("settings-updates-off").to_owned(), p.text_muted),
-        UpdateState::Idle => (t!("settings-updates-idle").to_owned(), p.text_muted),
-        UpdateState::Checking => (t!("settings-updates-checking").to_owned(), p.text_muted),
-        UpdateState::Latest => (t!("settings-updates-latest").to_owned(), p.text_muted),
-        UpdateState::Found(version) => (found_text(version), p.accent),
-        UpdateState::Failed(None) => (t!("settings-updates-failed").to_owned(), p.text_muted),
-        UpdateState::Failed(Some(failure)) => (
-            t!(
-                "settings-updates-failed-because",
-                reason = failure.message()
-            ),
-            p.text_muted,
-        ),
-        UpdateState::Downloading(version, percent) => (
-            t!(
-                "settings-updates-downloading",
-                version = version.as_str(),
-                percent = *percent
-            ),
-            p.text_muted,
-        ),
-        UpdateState::Ready(version) => (
-            t!("settings-updates-ready", version = version.as_str()),
-            p.accent,
-        ),
-        UpdateState::InstallFailed(error) => (
-            t!("settings-updates-install-failed", error = error.as_str()),
-            p.error,
-        ),
-    }
 }
 
 /// 返回两行高的设置行中，名称所在的行和下方说明所在的行。

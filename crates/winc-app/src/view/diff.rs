@@ -21,7 +21,7 @@ use winc_i18n::t;
 
 use super::editor::{
     HIGHLIGHT_BUDGET, caret_bar, draw_caret, draw_glyphs, draw_modal_caret, draw_whitespace_mark,
-    trailing_whitespace, whitespace_shown,
+    hunk_shade, kind_shade, trailing_whitespace, whitespace_shown,
 };
 use super::*;
 use crate::app::diff::{DIFF_HSCROLL, DiffHScroll, DiffPane};
@@ -38,18 +38,6 @@ const LINE_CHECK_SIZE: f32 = 11.0;
 const SKIPPED_LINE_ALPHA: f32 = 0.35;
 /// 工具栏按钮的边长（逻辑像素）。
 const BUTTON: f32 = 24.0;
-/// 返回一处改动使用的颜色：仅右侧有的新增为绿，仅左侧有的删除为灰，两侧都有的修改为蓝。
-pub(super) fn hunk_shade(p: &Palette, hunk: &winc_core::diff::LineHunk) -> DiffShade {
-    kind_shade(p, HunkKind::of(hunk))
-}
-
-fn kind_shade(p: &Palette, kind: HunkKind) -> DiffShade {
-    match kind {
-        HunkKind::Added => p.diff_added,
-        HunkKind::Deleted => p.diff_deleted,
-        HunkKind::Modified => p.diff_modified,
-    }
-}
 
 /// 绘制「»」替换后的改动在原处的淡出效果：两侧对应的行铺上原来的颜色，中间以带子连接，
 /// 不透明度随进度降到 0。

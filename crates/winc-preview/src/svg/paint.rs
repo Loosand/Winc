@@ -288,9 +288,3 @@ fn gradient_table(stops: &[(f32, [u8; 4])]) -> [[u8; 4]; 256] {
         premultiply(c)
     })
 }
-
-/// 返回预乘 alpha 的颜色：RGB 各分量乘以透明度。
-pub(super) fn premultiply([r, g, b, a]: [u8; 4]) -> [u8; 4] {
-    let m = |c: u8| ((u32::from(c) * u32::from(a) + 127) / 255) as u8;
-    [m(r), m(g), m(b), a]
-}

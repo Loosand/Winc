@@ -3,13 +3,12 @@
 
 use winc_preview::markdown::paragraph::Kind;
 
-use super::suggest::Hit;
 use super::writing::line_text;
 use super::*;
 use crate::keymap::Action;
 
 /// 命令为空时排在最前的最近使用的命令个数。
-const RECENT: usize = 3;
+pub(super) const RECENT: usize = 3;
 
 /// 光标位置的标记，写入前从块中移除。
 const CARET: char = '\u{1}';
@@ -254,69 +253,65 @@ fn today() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-impl App {
-    /// 返回与 `query` 相符的命令：名字含有 `query`（不区分大小写），或名字、别名中有以 `query`
-    /// 开头的词；英文、拼音的 `query` 只按词首匹配。开头相符的排在前面；`query` 为空时最近
-    /// 使用的命令排在最前。
-    pub(super) fn command_hits(&self, query: &str) -> Vec<Hit> {
-        let query = query.to_lowercase();
-        let starts = |c: &Slash| {
-            let label = c.label().to_lowercase();
-            let words = label.split(' ').chain(c.words().split(' '));
-            label.starts_with(&query) || words.clone().any(|w| w.starts_with(&query))
-        };
-        let matches = |c: &Slash| {
-            starts(c) || (!query.is_ascii() && c.label().to_lowercase().contains(&query))
-        };
-        let mut hits: Vec<Slash> = ALL.into_iter().filter(matches).collect();
-        if query.is_empty() {
-            let recent = &self.preview.markdown.suggest.recent;
-            let rank = |c: &Slash| recent.iter().position(|r| r == c).unwrap_or(RECENT);
-            hits.sort_by_key(rank);
-        } else {
-            hits.sort_by_key(|c| !starts(c));
-        }
-        hits.into_iter().map(Hit::Command).collect()
+/// 返回与 `query` 相符的命令：名字含有 `query`（不区分大小写），或名字、别名中有以 `query`
+/// 开头的词；英文、拼音的 `query` 只按词首匹配。开头相符的排在前面；`query` 为空时 `recent`
+/// 中最近使用的命令排在最前。
+pub(super) fn command_hits(query: &str, recent: &[Slash]) -> Vec<Slash> {
+    let query = query.to_lowercase();
+    let starts = |c: &Slash| {
+        let label = c.label().to_lowercase();
+        let words = label.split(' ').chain(c.words().split(' '));
+        label.starts_with(&query) || words.clone().any(|w| w.starts_with(&query))
+    };
+    let matches =
+        |c: &Slash| starts(c) || (!query.is_ascii() && c.label().to_lowercase().contains(&query));
+    let mut hits: Vec<Slash> = ALL.into_iter().filter(matches).collect();
+    if query.is_empty() {
+        let rank = |c: &Slash| recent.iter().position(|r| r == c).unwrap_or(RECENT);
+        hits.sort_by_key(rank);
+    } else {
+        hits.sort_by_key(|c| !starts(c));
     }
+    hits
+}
 
-    /// 执行命令 `command`：先删去已输入的 `/命令名`（从字符位置 `start` 到光标）。
-    pub(super) fn run_slash(&mut self, command: Slash, start: usize) {
+impl App {
+    /// 执行命令 `command`：先删去已输入的 `/命令名`（从字符位置 `start` 到光标）；执行成功时
+    /// 返回真。
+    pub(super) fn run_slash(&mut self, command: Slash, start: usize) -> bool {
         let Some(doc) = self.editor.active_mut() else {
-            return;
+            return false;
         };
         let id = doc.id;
         doc.begin_undo_group();
-        self.apply_slash(command, start);
+        let applied = self.apply_slash(command, start);
         if let Some(doc) = self.editor.document_mut(id) {
             doc.end_undo_group();
         }
+        applied
     }
 
-    fn apply_slash(&mut self, command: Slash, start: usize) {
+    fn apply_slash(&mut self, command: Slash, start: usize) -> bool {
         let Some(doc) = self.editor.active_mut() else {
-            return;
+            return false;
         };
         let caret = doc.selection.head;
         doc.selection = winc_core::Selection::new(start, caret);
         self.run_source_edit(winc_editor::Command::Insert(String::new()));
         let Some((line, _, _)) = self.selected_lines() else {
-            return;
+            return false;
         };
         let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
-            return;
+            return false;
         };
         let content = line_text(rope, line);
-        let recent = &mut self.preview.markdown.suggest.recent;
-        recent.retain(|c| *c != command);
-        recent.insert(0, command);
-        recent.truncate(RECENT);
         if let Some((mark, kind)) = command.line() {
             // 空行写入记号；有文字的行按段落命令改写。
             match content.trim().is_empty() {
                 true => self.replace_lines(line, line, &mark, mark.len()..mark.len()),
                 false => self.markdown_paragraph(kind),
             }
-            return;
+            return true;
         }
         if let Some(text) = command.inline() {
             let at = text.find(CARET).unwrap_or(text.len());
@@ -326,7 +321,7 @@ impl App {
                 let pos = caret + text[..at].chars().count();
                 doc.selection = winc_core::Selection::point(pos);
             }
-            return;
+            return true;
         }
         if let Some(block) = command.block() {
             let at = block.find(CARET).unwrap_or(block.len());
@@ -335,7 +330,7 @@ impl App {
                 true => self.replace_lines(line, line, &block, at..at),
                 false => self.insert_below(line, &block, at),
             }
-            return;
+            return true;
         }
         match command {
             Slash::Code => self.markdown_fenced("```"),
@@ -345,5 +340,6 @@ impl App {
             Slash::Link => self.markdown_link(false),
             _ => {}
         }
+        true
     }
 }

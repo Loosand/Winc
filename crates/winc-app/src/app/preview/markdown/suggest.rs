@@ -102,7 +102,12 @@ impl App {
         // 输入变了时回到第一项：重新排过的列表里原来那一行是另一个文件。
         let refiltered = old.is_some_and(|(query, _)| *query != basis.0);
         let hits = match kind {
-            Kind::Command => self.command_hits(&basis.0),
+            Kind::Command => {
+                super::slash::command_hits(&basis.0, &self.preview.markdown.suggest.recent)
+                    .into_iter()
+                    .map(Hit::Command)
+                    .collect()
+            }
             Kind::Link(Target::Anchor) => self.heading_hits(&basis.0),
             Kind::Link(link) => self.file_hits(&basis.0, link == Target::Image),
         };
@@ -290,7 +295,12 @@ impl App {
         }
         // 命令从 `/` 起替换。
         if let Hit::Command(command) = hit {
-            self.run_slash(command, start.saturating_sub(1));
+            if self.run_slash(command, start.saturating_sub(1)) {
+                let recent = &mut self.preview.markdown.suggest.recent;
+                recent.retain(|c| *c != command);
+                recent.insert(0, command);
+                recent.truncate(super::slash::RECENT);
+            }
             if self.markdown_live() {
                 self.preview.markdown.goal = None;
                 self.start_live_editing();

@@ -91,14 +91,15 @@ impl PropertyEdit {
         }
     }
 
-    fn input<'a>(&'a self, dialog: &'a FormDialog) -> (&'a str, &'a str, &'a str) {
+    fn input<'a>(
+        &'a self,
+        first: &'a str,
+        second: &'a str,
+        third: &'a str,
+    ) -> (&'a str, &'a str, &'a str) {
         match &self.field {
-            Some(name) => (name, dialog.name.text(), dialog.second.text()),
-            None => (
-                dialog.name.text().trim(),
-                dialog.second.text(),
-                dialog.third.text(),
-            ),
+            Some(name) => (name, first, second),
+            None => (first.trim(), second, third),
         }
     }
 }
@@ -586,7 +587,11 @@ impl App {
         edit: &PropertyEdit,
         dialog: &FormDialog,
     ) -> FormPlan {
-        let (name, value, options) = edit.input(dialog);
+        let (name, value, options) = edit.input(
+            dialog.name.text(),
+            dialog.second.text(),
+            dialog.third.text(),
+        );
         let enabled = !name.is_empty()
             && properties::input_value(edit.kind, value).is_some()
             && (!edit.kind.is_choice() || option_input(options).is_some());
@@ -604,7 +609,11 @@ impl App {
         let Some(dialog) = self.overlays.form_dialog.as_ref() else {
             return;
         };
-        let (name, value, options) = edit.input(dialog);
+        let (name, value, options) = edit.input(
+            dialog.name.text(),
+            dialog.second.text(),
+            dialog.third.text(),
+        );
         let (name, value, options) = (name.to_owned(), value.to_owned(), options.to_owned());
         if self.apply_property(&edit, &name, &value, &options) {
             self.close_form_dialog();

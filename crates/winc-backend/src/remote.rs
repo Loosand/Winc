@@ -33,7 +33,8 @@ pub(crate) use wire::MAX_READ;
 use wire::{Frame, Reader, Writer, kind};
 
 use crate::Target;
-use crate::fs::{Kind, Metadata, SaveError};
+use crate::local::SaveError;
+use crate::meta::{Kind, Metadata};
 
 /// 到服务进程的一个连接。
 ///
@@ -515,7 +516,6 @@ impl Connection {
             stderr: Vec::new(),
             budget: exec.output_budget(),
             code: None,
-            deadline: None,
         })
     }
 
@@ -892,14 +892,104 @@ pub struct Running {
     budget: OutputBudget,
     /// 命令已结束时为其退出码（被信号结束时是 `None`）。
     code: Option<Option<i32>>,
-    /// 读取等待的最后期限，见 [`Running::read_until`]。
-    deadline: Option<Instant>,
 }
 
 impl Running {
-    /// 设置此后读取的最后期限：到时仍没有输出时读取返回 [`io::ErrorKind::TimedOut`]。
-    pub fn read_until(&mut self, deadline: Option<Instant>) {
-        self.deadline = deadline;
+    /// 最多等待 `timeout`，从标准输出读取数据填入 `buf`；到时仍没有输出时返回
+    /// [`io::ErrorKind::TimedOut`]。
+    ///
+    /// # Errors
+    ///
+    /// 超时、超出输出上限或连接中断时返回对应的 `io::Error`。
+    pub fn read_within(&mut self, timeout: Duration, buf: &mut [u8]) -> io::Result<usize> {
+        self.read_with_deadline(buf, Instant::now().checked_add(timeout))
+    }
+
+    /// 最多等待 `timeout`，从标准输出读取至多 `count` 条以 `separator` 结尾的记录追加到 `out`；
+    /// 返回是否已读到输出结尾。
+    ///
+    /// # Errors
+    ///
+    /// 超时、超出输出上限或连接中断时返回对应的 `io::Error`。
+    pub fn read_records(
+        &mut self,
+        separator: u8,
+        count: usize,
+        timeout: Duration,
+        out: &mut Vec<u8>,
+    ) -> io::Result<bool> {
+        let deadline = Instant::now().checked_add(timeout);
+        let mut read = 0;
+        while read < count {
+            let (data, taken) = &mut self.stdout;
+            if *taken < data.len() {
+                let slice = &data[*taken..];
+                if let Some(pos) = slice.iter().position(|&b| b == separator) {
+                    out.extend_from_slice(&slice[..=pos]);
+                    *taken += pos + 1;
+                    if *taken == data.len() {
+                        data.clear();
+                        *taken = 0;
+                    }
+                    read += 1;
+                } else {
+                    out.extend_from_slice(slice);
+                    data.clear();
+                    *taken = 0;
+                }
+                continue;
+            }
+            if self.code.is_some() {
+                return Ok(true);
+            }
+            let frame = self.recv_frame(deadline)?;
+            self.accept(frame)?;
+        }
+        Ok(false)
+    }
+
+    fn read_with_deadline(
+        &mut self,
+        buf: &mut [u8],
+        deadline: Option<Instant>,
+    ) -> io::Result<usize> {
+        loop {
+            let (data, taken) = &mut self.stdout;
+            if *taken < data.len() {
+                let count = buf.len().min(data.len() - *taken);
+                buf[..count].copy_from_slice(&data[*taken..*taken + count]);
+                *taken += count;
+                if *taken == data.len() {
+                    data.clear();
+                    *taken = 0;
+                }
+                return Ok(count);
+            }
+            if self.code.is_some() || buf.is_empty() {
+                return Ok(0);
+            }
+            let frame = self.recv_frame(deadline)?;
+            self.accept(frame)?;
+        }
+    }
+
+    fn recv_frame(&self, deadline: Option<Instant>) -> io::Result<Frame> {
+        match deadline {
+            None => self
+                .replies
+                .recv()
+                .map_err(|_| unavailable(Unavailable::Lost)),
+            Some(deadline) => {
+                let left = deadline.saturating_duration_since(Instant::now());
+                match self.replies.recv_timeout(left) {
+                    Ok(frame) => Ok(frame),
+                    Err(mpsc::RecvTimeoutError::Timeout) => Err(io::ErrorKind::TimedOut.into()),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        Err(unavailable(Unavailable::Lost))
+                    }
+                }
+            }
+        }
     }
 
     /// 命令已结束时返回其退出码（被信号结束时是 `None`）；仍在运行时返回外层的 `None`。
@@ -969,41 +1059,7 @@ impl Stopper {
 
 impl io::Read for Running {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        loop {
-            let (data, taken) = &mut self.stdout;
-            if *taken < data.len() {
-                let count = buf.len().min(data.len() - *taken);
-                buf[..count].copy_from_slice(&data[*taken..*taken + count]);
-                *taken += count;
-                if *taken == data.len() {
-                    data.clear();
-                    *taken = 0;
-                }
-                return Ok(count);
-            }
-            if self.code.is_some() || buf.is_empty() {
-                return Ok(0);
-            }
-            let frame = match self.deadline {
-                None => self
-                    .replies
-                    .recv()
-                    .map_err(|_| unavailable(Unavailable::Lost))?,
-                Some(deadline) => {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    match self.replies.recv_timeout(left) {
-                        Ok(frame) => frame,
-                        Err(mpsc::RecvTimeoutError::Timeout) => {
-                            return Err(io::ErrorKind::TimedOut.into());
-                        }
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            return Err(unavailable(Unavailable::Lost));
-                        }
-                    }
-                }
-            };
-            self.accept(frame)?;
-        }
+        self.read_with_deadline(buf, None)
     }
 }
 

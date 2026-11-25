@@ -6,7 +6,7 @@ impl<'a, 'input> Parser<'a, 'input> {
     /// 处理 `<image>`：内嵌（`data:` URL）或同目录的位图。
     ///
     /// 解码后的位图一直保留到绘图释放。一张 SVG 中各不相同的位图合计不超过单张图片解码的上限
-    /// （`crate::image::PIXELS_MAX` 像素，按 RGBA 计），超出的不绘制并记入 `missing`。
+    /// （`crate::raster::PIXELS_MAX` 像素，按 RGBA 计），超出的不绘制并记入 `missing`。
     pub(super) fn image(
         &mut self,
         node: Node<'a, 'input>,
@@ -27,7 +27,7 @@ impl<'a, 'input> Parser<'a, 'input> {
         let pixels = match self.images.get(link) {
             Some(cached) => cached.clone(),
             None => {
-                let budget = crate::image::PIXELS_MAX * 4;
+                let budget = crate::raster::PIXELS_MAX * 4;
                 let loaded = self.load_image(link).filter(|p| {
                     let bytes = self.image_bytes + p.rgba.len() as u64;
                     if bytes > budget {
@@ -74,14 +74,7 @@ impl<'a, 'input> Parser<'a, 'input> {
         });
         // `slice`（铺满）时超出的部分裁掉。
         let clip = aspect.slice.then(|| rect_clip(x, y, w, h, ctm));
-        push_group(
-            out,
-            (1.0, filter::Blend::Normal),
-            clip,
-            None,
-            None,
-            vec![item],
-        );
+        push_group(out, (1.0, Blend::Normal), clip, None, None, vec![item]);
     }
 
     /// 读取 `<image>` 引用的位图：`data:` URL、`file://` 路径，或相对 `base` 的文件路径。
@@ -109,11 +102,11 @@ impl<'a, 'input> Parser<'a, 'input> {
             } else {
                 self.base.as_ref()?.join(path)
             };
-            // 只读取普通文件，且大小不超过 `crate::image::FILE_MAX`：`href="/dev/zero"` 或管道的
+            // 只读取普通文件，且大小不超过 `crate::raster::FILE_MAX`：`href="/dev/zero"` 或管道的
             // 读取没有尽头。
             let file = winc_backend::fs::metadata(&full)
                 .ok()
-                .filter(|m| m.is_file() && m.len <= crate::image::FILE_MAX);
+                .filter(|m| m.is_file() && m.len <= crate::raster::FILE_MAX);
             match file.and_then(|_| winc_backend::fs::read(&full).ok()) {
                 Some(bytes) => bytes,
                 None => {
@@ -126,7 +119,7 @@ impl<'a, 'input> Parser<'a, 'input> {
             self.miss(winc_i18n::t!("preview-svg-missing-nested-svg"));
             return None;
         }
-        match crate::image::decode_bytes(&bytes) {
+        match crate::raster::decode_bytes(&bytes) {
             Ok(pixels) => Some(pixels),
             Err(_) => {
                 self.miss(winc_i18n::t!("preview-svg-missing-image-undecodable"));

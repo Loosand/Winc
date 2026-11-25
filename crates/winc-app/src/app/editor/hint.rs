@@ -31,6 +31,24 @@ pub struct NameHint {
 }
 
 impl App {
+    /// 返回光标所在名字的字符范围（有选区时为选区）；光标处没有名字时返回 `None`。
+    ///
+    /// 名字由当前文件的语言决定（见 [`winc_syntax::Language::name_range`]）：CSS 的 `my-class`、
+    /// PHP 的 `$total`、Ruby 的 `valid?` 都是一个名字。
+    pub(in crate::app) fn name_span(&self) -> Option<(usize, usize)> {
+        let doc = self.editor.active()?;
+        let selection = doc.selection;
+        if !selection.is_empty() {
+            return Some((selection.from(), selection.to()));
+        }
+        let text = doc.text();
+        let (line, col) = text.pos_to_line_col(selection.head);
+        let chars: Vec<char> = text.line_content(line).slice().chars().collect();
+        let range = doc.highlighter.language().name_range(&chars, col)?;
+        let start = text.line_start(line);
+        Some((start + range.start, start + range.end))
+    }
+
     /// 在光标所在的名字上方弹出提示 `text`；没有打开文档时改为写在状态栏。
     pub(super) fn hint_at_name(&mut self, text: impl Into<String>) {
         let text = text.into();

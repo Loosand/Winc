@@ -34,7 +34,7 @@ const COLS_CACHE: usize = 128;
 #[derive(Debug, Default)]
 pub(crate) struct WholeLines {
     /// 是否所有的行都显示整行。
-    all: bool,
+    pub(crate) all: bool,
     /// 逐行展开的行，随文本的修改移动。
     pub lines: Bookmarks,
     /// 超长行的列索引，最近使用的排在最后。
@@ -236,33 +236,6 @@ impl Document {
         } else {
             MAX_LINE_CHARS
         }
-    }
-
-    /// 展开第 `line` 行：此后显示整行。换行时重新断开该行。
-    pub fn show_whole_line(&mut self, line: usize) {
-        if self.whole.has(line) {
-            return;
-        }
-        self.whole.lines.toggle(line);
-        self.folds.rewrap(&self.text, line, &self.whole);
-    }
-
-    /// 设置是否所有的行都显示整行，返回是否有变化。换行时整体重新断行。
-    pub fn show_whole_lines(&mut self, all: bool) -> bool {
-        if self.whole.all == all {
-            return false;
-        }
-        self.whole.all = all;
-        // 大文件换行时本来就按整行断开。
-        if let (Some(wrap), false) = (self.wrap_width(), self.is_large()) {
-            let limits = Limits {
-                base: self.wrap_limit(),
-                whole: Some(&self.whole),
-            };
-            self.folds
-                .set_wrap(&self.text, Some(wrap), limits, self.revision);
-        }
-        true
     }
 
     /// 列索引每次延伸或丢弃后变化的计数。

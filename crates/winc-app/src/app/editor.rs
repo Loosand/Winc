@@ -66,3 +66,43 @@ pub(crate) struct Jumps {
     /// 正在后台进行的项目内定义查找。
     pub(in crate::app) definitions: Option<editor::definition::DefinitionSearch>,
 }
+
+impl App {
+    /// 返回文本区可容纳的行数，至少为 1。
+    pub(in crate::app) fn visible_lines(&self) -> usize {
+        (self.layout.text.h / self.fonts.line_height)
+            .floor()
+            .max(1.0) as usize
+    }
+
+    /// 忘掉文件树里复制的远端文件：剪贴板里的文字是 Winc 刚写入的别的内容（即使碰巧与复制时
+    /// 写入的路径相同，例如「复制路径」），不再当作那些文件。
+    pub(in crate::app) fn forget_remote_copy(&mut self) {
+        *self.link.shared.remote_copy.borrow_mut() = None;
+    }
+
+    /// 把 `text` 写入剪贴板。
+    ///
+    /// `whole_line` 为 `true` 表示复制的是整行，粘贴到编辑区时插入当前行上方。
+    pub(in crate::app) fn set_clipboard(&mut self, text: String, whole_line: bool) {
+        if self.clipboard.set_text(text, whole_line) {
+            self.forget_remote_copy();
+        }
+    }
+
+    /// 返回剪贴板中的文本；没有时返回 `None`。
+    pub(in crate::app) fn clipboard_text(&mut self) -> Option<String> {
+        self.clipboard.text()
+    }
+
+    /// 打开 `kind` 的输入条，输入框为 `field`，焦点移到输入条上；文件树中正在进行的名称输入先结束。
+    pub(in crate::app) fn open_prompt(&mut self, kind: PromptKind, field: TextField) {
+        self.finish_name_input();
+        self.bars.goto_input = Some(field);
+        self.bars.prompt_kind = kind;
+        self.ime.field_preedit.clear();
+        self.focus = Focus::Prompt;
+        self.relayout();
+        self.request_redraw();
+    }
+}

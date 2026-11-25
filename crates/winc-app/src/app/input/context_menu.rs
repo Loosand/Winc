@@ -30,10 +30,9 @@ mod tests;
 
 pub use menus::*;
 pub(crate) use popup::{
-    CHECK_COLUMN, ICON_COLUMN, POPUP_PAD, POPUP_TEXT_X, PopupLevel, PopupMenu, PopupRow,
+    CHECK_COLUMN, ICON_COLUMN, MenuIcon, POPUP_PAD, POPUP_TEXT_X, PopupLevel, PopupMenu, PopupRow,
     folder_rows,
 };
-pub(crate) use present::MenuIcon;
 
 const NOTEBOOK_MENU_WIDTH: f32 = 268.0;
 

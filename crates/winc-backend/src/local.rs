@@ -3,8 +3,11 @@
 //! 参数是本机路径和已打开的本机文件，不接受虚拟路径；[`fs::save`](crate::fs::save) 的本机实现
 //! 和只访问本机的调用方（配置、备份）使用。
 
+pub(crate) mod save;
 #[cfg(test)]
 mod tests;
+
+pub(crate) use save::{SaveError, SaveOptions, save_local};
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};

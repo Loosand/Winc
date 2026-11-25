@@ -9,7 +9,7 @@ use winit::event::MouseButton;
 use winc_pty::input::{self, Button, MouseAction};
 use winc_pty::protocol::Modes;
 
-use super::tab::{Point, Selection, Unit, ViewRow};
+use super::tab::{Selection, Unit, ViewRow};
 use super::{App, Focus};
 use crate::app::Drag;
 
@@ -23,38 +23,6 @@ pub(crate) enum BlockHit {
 }
 
 impl App {
-    /// 窗口坐标落在第几个显示行（超出内容区域的夹到边上）。
-    fn terminal_display_row(&self, y: f32) -> u64 {
-        let view = self.terminal_view();
-        let (first, origin) = self.terminal_origin();
-        let y = y.clamp(view.y, (view.bottom() - 0.5).max(view.y));
-        first
-            + ((y - origin) / self.fonts.terminal_line_height)
-                .floor()
-                .max(0.0) as u64
-    }
-
-    /// 窗口坐标 `y` 是否落在吸顶行上。
-    fn terminal_on_sticky(&self, y: f32) -> bool {
-        let band = self.terminal_sticky_band();
-        let sticky = self.terminal.tab().is_some_and(|t| t.sticky().is_some());
-        sticky && y < band.bottom()
-    }
-
-    /// 窗口坐标 `y` 上显示的是不是终端里的一行字：吸顶的命令行和折起的那一行不是。
-    pub(in crate::app) fn terminal_shows_line(&self, y: f32) -> bool {
-        let Some(tab) = self.terminal.tab() else {
-            return false;
-        };
-        if self.terminal_on_sticky(y) {
-            return false;
-        }
-        matches!(
-            tab.row_at(self.terminal_display_row(y)),
-            Some(ViewRow::Line(_))
-        )
-    }
-
     /// 窗口坐标落在屏幕的哪一格：（屏幕上的行，格），超出网格的夹到边上，上报给程序用。
     ///
     /// 往上翻着、或者落在回滚缓冲的行上时没有对应的屏幕行，返回 `None`。
@@ -69,34 +37,6 @@ impl App {
         };
         let row = line.checked_sub(tab.history.1)?;
         Some((row as u16, col.min(cols - 1) as u16))
-    }
-
-    /// 窗口坐标对应的选区位置。
-    ///
-    /// `between` 为真时取两格之间的那条缝（按字选时用，鼠标过了一格的
-    /// 一半才算选上它），否则取所在的那一格。网格下面没有内容的地方算最后一行；吸顶的命令行
-    /// 盖着的那一行看不见，算它下面一行。
-    pub(super) fn terminal_point(&self, x: f32, y: f32, between: bool) -> Option<Point> {
-        let tab = self.terminal.tab()?;
-        let grid = self.terminal_grid();
-        let y = if self.terminal_on_sticky(y) {
-            self.terminal_sticky_band().bottom()
-        } else {
-            y
-        };
-        let cells = (x - grid.x) / self.metrics.terminal_cell;
-        let col = if between {
-            cells.round()
-        } else {
-            cells.floor()
-        };
-        let col = (col.max(0.0) as usize).min(usize::from(tab.size.cols));
-        let last = tab.display_len().checked_sub(1)?;
-        let row = tab.row_at(self.terminal_display_row(y).min(last))?;
-        Some(Point {
-            line: row.line(tab),
-            col,
-        })
     }
 
     /// 窗口坐标落在命令块的哪个可以点的地方：吸顶的命令行、色带（网格左边）、折起的那一行。

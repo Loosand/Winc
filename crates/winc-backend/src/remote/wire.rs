@@ -10,7 +10,7 @@ mod tests;
 
 use std::io::{self, Read, Write};
 
-use crate::fs::{Kind, Metadata, Stamp, Unix};
+use crate::meta::{Kind, Metadata, Stamp, Unix};
 
 /// 协议的版本号。连接建立时双方交换，不一致时不继续：服务进程随安装包发布，版本总是相同，
 /// 不一致说明远端的程序不是这一版安装包上传的。

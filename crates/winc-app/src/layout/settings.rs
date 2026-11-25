@@ -155,8 +155,8 @@ impl SettingsPage {
                     Setting::VimYankHighlight,
                 ]),
             ],
-            SettingsPage::Writing => writing::writing_sections(),
-            SettingsPage::Markdown => writing::markdown_sections(),
+            SettingsPage::Writing => writing_sections(writing::writing_groups()),
+            SettingsPage::Markdown => writing_sections(writing::markdown_groups()),
             SettingsPage::Terminal => {
                 let mut behavior =
                     vec![Setting::TerminalCopyOnSelect, Setting::TerminalConfirmClose];
@@ -528,7 +528,8 @@ impl Setting {
             Setting::RemoteImages | Setting::TextWidth | Setting::MarkdownLineNumbers => {
                 SettingsPage::Markdown
             }
-            Setting::Beta(option) => option.page(),
+            Setting::Beta(option) if option.is_markdown() => SettingsPage::Markdown,
+            Setting::Beta(_) => SettingsPage::Writing,
             Setting::Version
             | Setting::Updates
             | Setting::CheckUpdates
@@ -1063,26 +1064,6 @@ pub struct SettingsView<'a> {
     pub offset: (f32, f32),
 }
 
-/// 返回设置卡片在窗口 `window` 中的位置：从中央移动 `offset`，四周至少留出 `SETTINGS_MARGIN`。
-pub fn settings_card(window: Rect, (dx, dy): (f32, f32)) -> Rect {
-    let w = SETTINGS_W.min(window.w - SETTINGS_MARGIN * 2.0).max(0.0);
-    let h = SETTINGS_H.min(window.h - SETTINGS_MARGIN * 2.0).max(0.0);
-    // 窗口过小时上下限颠倒，以下限为准，不用 `clamp`。
-    let place = |start: f32, span: f32, size: f32, d: f32| {
-        let centered = start + (span - size) / 2.0 + d;
-        centered
-            .min(start + span - SETTINGS_MARGIN - size)
-            .max(start + SETTINGS_MARGIN)
-            .round()
-    };
-    Rect::new(
-        place(window.x, window.w, w, dx),
-        place(window.y, window.h, h, dy),
-        w,
-        h,
-    )
-}
-
 /// 返回搜索 `query` 时正文列出的各组：各页中名称或说明含有 `query` 的设置项
 /// （[`Setting::matches`]），按页和页内的顺序排列。
 ///
@@ -1481,4 +1462,25 @@ pub fn description_lines<'a>(
         lines.push(&text[start..]);
     }
     lines
+}
+
+fn writing_sections(groups: Vec<(&'static str, Vec<writing::WritingItem>)>) -> Vec<Section> {
+    use writing::WritingItem as W;
+    let map = |item| match item {
+        W::Beta(option) => Setting::Beta(option),
+        W::Shortcuts => Setting::MarkdownShortcuts,
+        W::SelectionToolbar => Setting::MarkdownSelectionToolbar,
+        W::Typewriter => Setting::MarkdownTypewriter,
+        W::Focus => Setting::MarkdownFocus,
+        W::RemoteImages => Setting::RemoteImages,
+        W::TextWidth => Setting::TextWidth,
+        W::LineNumbers => Setting::MarkdownLineNumbers,
+    };
+    groups
+        .into_iter()
+        .map(|(title, items)| Section {
+            title: Some(title),
+            items: items.into_iter().map(map).collect(),
+        })
+        .collect()
 }

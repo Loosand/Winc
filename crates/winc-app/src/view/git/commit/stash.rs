@@ -176,7 +176,7 @@ pub(super) fn draw_stash_file(
     let letter = file.change.letter().to_string();
     let letter_w = frame.measure(FontKind::Ui, size, &letter);
     let right = row.right() - END_PAD;
-    let ink = git_color(p, file.change);
+    let ink = p.git_change(file.change);
     ui_text_small(frame, app, right - letter_w, row, &letter, ink, clip);
     let text_x = x + icons::FILE_WIDTH + 6.0;
     let room = (right - letter_w - 8.0 - text_x).max(0.0);

@@ -9,9 +9,10 @@ use roxmltree::Node;
 
 use zeno::{Command, Fill, Point};
 
+use super::super::style::{Anchor, Font, apply_font};
 use super::super::syntax::{color, length};
 use super::super::{Item, MAX_DEPTH, Own, PaintSpec, Parser, Props, Shape};
-use super::{Anchor, Char, Font, apply_font};
+use super::Char;
 use crate::svg::syntax::Affine;
 
 /// 未写 `line-height` 时的行高与字号之比：CSS 的 `normal` 约为 1.2。

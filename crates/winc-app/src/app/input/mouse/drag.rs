@@ -5,6 +5,27 @@ use super::*;
 use crate::app::scroll::set_scroll_line;
 
 impl App {
+    /// 按下滚动条 `bar`，抓住滑块 `grab` 处开始拖；点在轨道上时滑块立即跳到鼠标处，
+    /// 无需等待鼠标移动。
+    pub(super) fn grab_scrollbar(&mut self, bar: Scrollbar, grab: f32) {
+        self.settle_glides();
+        self.pointer.drag = Drag::Scrollbar { bar, grab };
+        let (x, y) = self.pointer.mouse;
+        self.on_mouse_move(x, y);
+    }
+
+    /// 拖动设置页滚动条的滑块到纵坐标 `y`；`grab` 为按下点相对滑块上沿的距离。
+    fn drag_settings_scrollbar(&mut self, y: f32, grab: f32) {
+        let (area, max) = self.settings_scroll_area();
+        let Some(thumb) = settings_thumb(area, 0.0, max) else {
+            return;
+        };
+        let track = settings_track(area);
+        self.settings.scroll = scroll_for_thumb(track.y, track.h, thumb.h, y, grab, max);
+        self.settings.scrolled_at = Some(Instant::now());
+        self.request_redraw();
+    }
+
     /// 记录鼠标所在的 Markdown 预览代码块和图片。
     pub(in crate::app) fn track_code_hover(&mut self, x: f32, y: f32) {
         let code = (self.hits.markdown_codes.iter()).position(|r| r.contains(x, y));

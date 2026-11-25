@@ -1068,8 +1068,9 @@ fn a_command_that_leaves_a_child_holding_its_output_still_finishes() {
     );
     // 没有输出时在期限到达后返回；丢弃时结束仍在运行的命令。
     let mut slow = remote::spawn(&far, &sh("sleep 30474")).unwrap();
-    slow.read_until(Some(Instant::now() + Duration::from_millis(100)));
-    let error = slow.read(&mut [0; 8]).unwrap_err();
+    let error = slow
+        .read_within(Duration::from_millis(100), &mut [0; 8])
+        .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     drop(slow);
     assert!(gone("sleep 30474"));

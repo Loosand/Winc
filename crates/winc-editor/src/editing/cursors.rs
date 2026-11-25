@@ -15,7 +15,7 @@ use std::ops::Range;
 use memchr::memmem::Finder;
 use winc_core::edit::{Change, EditKind, Transaction, selected_lines, shift_selection};
 use winc_core::selection::merge;
-use winc_core::{Lines, Selection, movement};
+use winc_core::{Lines, Restored, Selection, movement};
 use winc_i18n::t;
 
 use crate::Document;
@@ -706,6 +706,60 @@ impl Document {
         self.history.push(transaction);
         self.after_change(first);
         self.set_selections(merged, primary);
+    }
+
+    /// 编辑器核心 · 文档命令：把 `Command` 分派到移动选区、生成编辑事务或撤销／重做。
+    /// 这里不需要知道 Markdown 是以源码还是排版视图呈现的。
+    ///
+    /// `page_lines` 是翻页命令一次移动的行数（行），`tab_width` 是制表符宽度（列）。
+    /// 只读文档拒绝编辑类命令，此时不做任何事。有多个选区时，除撤销、重做外的命令在每个
+    /// 选区上各执行一次。
+    pub fn execute(&mut self, command: Command, page_lines: usize, tab_width: usize) {
+        if self.edit_blocked(&command).is_some() {
+            return;
+        }
+
+        // 移动选区的命令记下移动前的选区，供光标撤销（`⌘U`）退回。
+        if !command.is_edit() {
+            self.record_cursors();
+        }
+
+        if matches!(command, Command::Undo | Command::Redo) {
+            self.goal_cell = None;
+            let mut text = Tracked {
+                text: &mut self.text,
+                folds: &mut self.folds,
+                bookmarks: &mut self.bookmarks,
+                whole: &mut self.whole,
+                marks: &mut self.marks,
+                parked: &mut self.parked,
+            };
+            let result = if command == Command::Undo {
+                self.history.undo(&mut text)
+            } else {
+                self.history.redo(&mut text)
+            };
+            self.restore(result);
+        } else if self.has_cursors() {
+            self.execute_each(command, page_lines, tab_width);
+        } else {
+            self.execute_one(command, page_lines, tab_width);
+        }
+    }
+
+    /// 应用撤销或重做的结果：刷新受影响的缓存，把选区夹取到文档范围内，并恢复多光标。
+    fn restore(&mut self, result: Option<Restored>) {
+        if let Some(Restored {
+            selection,
+            extra,
+            first,
+        }) = result
+        {
+            self.after_change(first);
+            self.redetect_line_ending();
+            self.selection = selection.clamped(self.text.end_pos());
+            self.restore_extra(extra);
+        }
     }
 
     /// 撤销、重做或应用事务之后，按事务记录的其余选区恢复多光标。

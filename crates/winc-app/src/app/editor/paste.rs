@@ -34,10 +34,44 @@ impl App {
         self.clipboard.files()
     }
 
-    /// 忘掉文件树里复制的远端文件：剪贴板里的文字是 Winc 刚写入的别的内容（即使碰巧与复制时
-    /// 写入的路径相同，例如「复制路径」），不再当作那些文件。
-    pub(in crate::app) fn forget_remote_copy(&mut self) {
-        *self.link.shared.remote_copy.borrow_mut() = None;
+    /// 粘贴剪贴板内容。
+    ///
+    /// 焦点在输入框时插入文本；在编辑区时粘贴文件、文本或图片，在文件树中粘贴文件或图片。
+    pub(in crate::app) fn paste(&mut self) {
+        match self.focus {
+            focus if focus.is_field() => {
+                if let Some(content) = self.clipboard_text() {
+                    self.edit_field(|field| field.insert(&content));
+                }
+            }
+            Focus::Editor => self.paste_into_editor(),
+            Focus::Tree => self.paste_into_tree(),
+            Focus::Terminal => self.terminal_paste(),
+            _ => {}
+        }
+
+        self.request_redraw();
+    }
+
+    /// 在编辑区粘贴文本 `content`。
+    ///
+    /// 没有选区且 `content` 等于最近一次整行复制的内容时，插入到当前行上方；否则在光标处插入。
+    /// Markdown 中网址、图片网址和表格单元格按 [`App::markdown_paste`] 改写。
+    fn paste_text(&mut self, content: String) {
+        if let Some(text) = self.markdown_paste(&content) {
+            self.run(Command::Insert(text));
+            return;
+        }
+        let empty_selection = self
+            .editor
+            .active()
+            .is_some_and(|d| d.selections().0.iter().all(|s| s.is_empty()));
+        let whole_line = empty_selection && self.clipboard.holds_line(&content);
+        self.run(if whole_line {
+            Command::InsertLinesAbove(content)
+        } else {
+            Command::Paste(content)
+        });
     }
 
     /// 返回剪贴板中的图片，编码为 PNG；没有时返回 `None`。

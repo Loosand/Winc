@@ -346,7 +346,7 @@ fn markdown_images_render_one_size_at_a_time() {
 
     let mut app = blank_app(false);
     let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>"#;
-    let picture = winc_preview::svg::load(svg, None, None).unwrap();
+    let picture = winc_preview::image::load_svg(svg, None, None).unwrap();
     let path = PathBuf::from("/tmp/winc-shot.svg");
     let slot = ImageSlot::Ready {
         width: picture.width,

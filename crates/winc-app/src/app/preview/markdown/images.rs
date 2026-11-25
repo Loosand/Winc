@@ -48,12 +48,12 @@ impl App {
         move || match (&remote, embedded) {
             (_, Some(bytes)) if image::is_svg(&path) => std::str::from_utf8(&bytes)
                 .map_err(|e| e.to_string())
-                .and_then(|text| svg::load(text, None, Some(system_glyphs()))),
+                .and_then(|text| image::load_svg(text, None, Some(system_glyphs()))),
             (_, Some(bytes)) => image::load_bytes(&bytes),
             (Some(url), None) => download(url, &path).and_then(|()| load_downloaded(&path)),
             (None, None) if image::is_svg(&path) => winc_backend::fs::read_to_string(&path)
                 .map_err(|e| e.to_string())
-                .and_then(|text| svg::load(&text, path.parent(), Some(system_glyphs()))),
+                .and_then(|text| image::load_svg(&text, path.parent(), Some(system_glyphs()))),
             (None, None) => image::load(&path),
         }
     }

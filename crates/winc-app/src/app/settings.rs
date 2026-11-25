@@ -360,7 +360,7 @@ impl App {
     pub(crate) fn product_logo(&mut self, size: u32) -> &[u8] {
         const LOGO: &str = include_str!("../../assets/icon.svg");
         if self.settings.logo.as_ref().is_none_or(|&(s, _)| s != size) {
-            let rgba = winc_preview::svg::load(LOGO, None, None)
+            let rgba = winc_preview::image::load_svg(LOGO, None, None)
                 .map(|picture| picture.render(size, size).rgba)
                 .unwrap_or_default();
             self.settings.logo = Some((size, rgba));

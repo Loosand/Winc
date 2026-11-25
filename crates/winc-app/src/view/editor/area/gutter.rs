@@ -54,7 +54,7 @@ impl Screen<'_> {
             .skip(skip)
             .take_while(|(_, h)| h.new.start <= line)
         {
-            let shade = diff::hunk_shade(p, h);
+            let shade = super::super::hunk_shade(p, h);
             let lit = app.pointer.hover == Hover::ChangeMark(i) || self.open == Some(i);
             if h.new.is_empty() {
                 if h.new.start == line {
@@ -77,7 +77,7 @@ impl Screen<'_> {
             && h.new.start > line
         {
             let lit = app.pointer.hover == Hover::ChangeMark(i) || self.open == Some(i);
-            let mark = diff::hunk_shade(p, h).mark;
+            let mark = super::super::hunk_shade(p, h).mark;
             draw_deleted_mark(frame, (mark_x, y + lh), mark, lit, gutter);
         }
     }

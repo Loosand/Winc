@@ -205,8 +205,11 @@ fn a_connection_that_stops_answering_is_marked_until_it_answers_again() {
     let waiter = {
         let target = target.clone();
         thread::spawn(move || {
-            let path = crate::virtual_path(&target, b"/");
-            crate::fs::metadata(path).unwrap_err().kind()
+            super::connection(&target)
+                .unwrap()
+                .metadata(b"/", true)
+                .unwrap_err()
+                .kind()
         })
     };
     thread::sleep(STALL * 2);

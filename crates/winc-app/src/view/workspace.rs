@@ -10,3 +10,6 @@ pub(super) mod panel;
 pub(super) mod sidebar;
 pub(super) mod start;
 pub(super) mod top_bar;
+
+pub(in crate::view) use super::controls::list::retracting_color;
+pub(in crate::view) use super::controls::{over, segment_colors};

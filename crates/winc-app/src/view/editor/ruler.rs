@@ -36,7 +36,7 @@ pub(super) fn draw_editor_scrollbar(app: &mut App, frame: &mut Frame<'_>, index:
         app.git.changes.hunks(doc.id)
     };
     for (i, h) in hunks.iter().enumerate() {
-        let color = crate::view::diff::hunk_shade(p, h).mark;
+        let color = super::hunk_shade(p, h).mark;
         let lane = if app.pointer.hover == Hover::RulerChange(i) {
             (GIT_LANE.0 + 1.0, GIT_LANE.1 + 1.0)
         } else {

@@ -16,7 +16,7 @@ pub fn write(out: &Path) -> Result<(), String> {
     let io = |e: std::io::Error| e.to_string();
     let text =
         std::fs::read_to_string(root().join("crates/winc-app/assets/icon.svg")).map_err(io)?;
-    let picture = winc_preview::svg::load(&text, None, None)?;
+    let picture = winc_preview::image::load_svg(&text, None, None)?;
     std::fs::create_dir_all(out).map_err(io)?;
     let mut images = Vec::new();
     for size in [16u32, 32, 48, 256] {

@@ -7,7 +7,7 @@ use winc_render::Color;
 
 use super::*;
 use crate::app::{LabelCause, LabelView, ResultOverflow};
-use crate::view::workspace::sidebar::retracting_color;
+use crate::view::workspace::retracting_color;
 
 /// 文件行的文字：文件名，其后淡色的所在目录（非 UTF-8 的文件改为说明）及其颜色。
 pub(super) struct FileText<'a> {

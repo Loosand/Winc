@@ -3,7 +3,6 @@
 //! 模态编辑层自己计算修改的范围与修改之后的光标，不经 [`Command`]；这里把修改组成事务交给
 //! [`Document::apply`]，并提供按文本行之外的单位（已折叠的区域、显示行）查询位置的方法。
 
-use std::collections::VecDeque;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -29,60 +28,6 @@ const FIND_BUDGET: Duration = Duration::from_millis(150);
 ///
 /// 取自调参：匹配可以延伸到之后的行，更长的匹配不识别。
 const FIND_LINES: usize = 32;
-
-/// 模态编辑层的标记与修改列表：位置随文本的修改移动。
-#[derive(Debug, Default)]
-pub(crate) struct Marks {
-    /// 各标记的名字与位置。
-    marks: Vec<(char, usize)>,
-    /// 修改列表中的位置，从旧到新。
-    changes: Vec<usize>,
-    /// 逐行执行命令期间被跟踪的位置，从小到大。
-    tracked: VecDeque<usize>,
-}
-
-impl Marks {
-    /// 是否没有任何标记与修改记录。
-    pub(crate) fn is_empty(&self) -> bool {
-        self.marks.is_empty() && self.changes.is_empty() && self.tracked.is_empty()
-    }
-
-    /// 文本 `text` 即将被修改：从 `start` 起的 `removed` 个字符换成 `inserted` 个字符。
-    ///
-    /// 所在的行被整行删除的标记一并删除，其余位置随修改移动。
-    pub(crate) fn edit(&mut self, text: &Content, start: usize, removed: usize, inserted: usize) {
-        let end = start + removed;
-        let moved = |pos: usize| {
-            if pos < start {
-                pos
-            } else if pos < end {
-                start
-            } else {
-                pos - removed + inserted
-            }
-        };
-        // 位置所在的行是否被整行删除。
-        let deleted = |pos: usize| {
-            if pos < start || pos >= end {
-                return false;
-            }
-            let line = text.line_of(pos);
-            let (from, to) = (text.line_start(line), text.line_end(line));
-            start <= from && to <= end && (start < from || to < end)
-        };
-        self.marks.retain(|(_, pos)| !deleted(*pos));
-        self.tracked.retain(|pos| !deleted(*pos));
-        for (_, pos) in &mut self.marks {
-            *pos = moved(*pos);
-        }
-        for pos in &mut self.changes {
-            *pos = moved(*pos);
-        }
-        for pos in &mut self.tracked {
-            *pos = moved(*pos);
-        }
-    }
-}
 
 /// 模态编辑层的查找模式：已编译的正则，`^`、`$` 按行匹配。
 #[derive(Debug, Clone)]
@@ -188,11 +133,6 @@ impl Document {
     /// 返回下一次重做的撤销单元执行之前光标所在的位置；没有可重做的内容时返回 `None`。
     pub fn redo_origin(&self) -> Option<usize> {
         self.history.redo_origin().map(|selection| selection.head)
-    }
-
-    /// 是否可以读取并修改位置区间 `from..to` 内的文本：区间的字节数不超过 [`EDIT_LIMIT`]。
-    pub fn fits_edit(&self, from: usize, to: usize) -> bool {
-        self.text.byte_len(from.min(to), to) <= EDIT_LIMIT
     }
 
     /// 依次应用 `changes`，光标设在 `after`，撤销之后光标位于 `before`；返回是否已应用。

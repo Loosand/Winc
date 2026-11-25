@@ -3,7 +3,6 @@
 use winc_i18n::t;
 use winc_render::{Faux, Stroke};
 
-use super::panel::over;
 use super::*;
 use crate::app::workspace::library::{
     AttachmentPreview, CardContent, FolderPose, FolderPreview, Grid, JsonExcerpt, Library,

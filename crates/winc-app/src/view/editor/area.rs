@@ -520,8 +520,8 @@ impl Screen<'_> {
         for segment in segments {
             let shade = match segment.conflict {
                 Some(_) if !self.doc.folds().is_collapsed(segment.file.start) => continue,
-                Some(_) => git::merge::conflict_shade(p),
-                None => git::merge::merged_shade(p, segment),
+                Some(_) => super::conflict_shade(p),
+                None => super::merged_shade(p, segment),
             };
             let (color, edge) = (shade.line, shade.edge);
             if segment.file.is_empty() {
@@ -551,7 +551,7 @@ impl Screen<'_> {
             let lines = conflict.lines();
             for line in lines.start.max(self.visible.start)..lines.end.min(self.visible.end) {
                 if let Some(color) =
-                    git::merge::tint(p, conflict, line).filter(|_| self.shown(line))
+                    super::conflict_tint(p, conflict, line).filter(|_| self.shown(line))
                 {
                     let h = self.doc.rows_of(line) as f32 * self.lh;
                     let band = Rect::new(text_rect.x, self.row_y(line), text_rect.w, h);
@@ -568,7 +568,7 @@ impl Screen<'_> {
             return;
         };
         let (text, text_rect) = (self.doc.text(), self.text_rect);
-        let shade = diff::hunk_shade(self.app.palette, h);
+        let shade = super::hunk_shade(self.app.palette, h);
         if h.new.is_empty() {
             let line = h.new.start.min(text.line_count() - 1);
             if self.shown(line) {
@@ -673,7 +673,7 @@ impl Screen<'_> {
             for line in markers.into_iter().flatten().chain([conflict.end]) {
                 if self.visible.contains(&line) && self.shown(line) {
                     let band = Rect::new(text_rect.x, self.row_y(line), text_rect.w, self.lh);
-                    git::merge::draw_marker(
+                    super::draw_conflict_marker(
                         self.app,
                         frame,
                         i,

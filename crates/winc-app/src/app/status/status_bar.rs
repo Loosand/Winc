@@ -294,6 +294,17 @@ impl App {
         }
     }
 
+    /// 已保存的 Markdown 文件和未命名的笔记都不通过语言菜单切换到源码编辑器。
+    pub(in crate::app) fn can_change_language(&self) -> bool {
+        self.editor.active().is_some_and(|doc| {
+            doc.title.is_none()
+                && !doc.path.as_deref().map_or_else(
+                    || doc.preview_kind() == Some(winc_editor::PreviewKind::Markdown),
+                    winc_preview::markdown::is_markdown,
+                )
+        })
+    }
+
     /// 把当前文档改用 `language`：高亮、折叠、格式化都跟着变。
     ///
     /// 文件之后改名、另存为时按新的文件名重新识别。

@@ -4,13 +4,13 @@
 //! 因此恢复上次打开的多个图片标签时不会同时解码全部图片。
 
 use std::collections::HashSet;
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, mpsc};
 
 use winc_config::State;
 use winc_editor::{DocumentId, Editor, PictureState, PreviewKind, PreviewMode};
 use winc_preview::image::{self, Picture, Pixels, Source};
-use winc_preview::svg;
 
+pub(crate) use super::system_glyphs;
 use crate::app::{App, UserEvent};
 
 mod viewport;
@@ -63,6 +63,33 @@ pub(crate) struct SplitPreview {
     pending: Option<u64>,
 }
 
+impl SplitPreview {
+    /// 分栏预览已有对应版本的成功解析结果时返回该图。
+    pub(super) fn ready_picture(&self, doc: DocumentId, revision: u64) -> Option<Arc<Picture>> {
+        self.picture
+            .clone()
+            .filter(|_| self.doc == Some(doc) && self.checked == Some(revision))
+            .filter(|_| self.error.is_none())
+    }
+
+    /// 从整页预览切到分栏时复用已解码的图片，避免对同一版本重复解析。
+    pub(super) fn seed_from_preview(
+        &mut self,
+        doc: DocumentId,
+        revision: u64,
+        picture: Arc<Picture>,
+    ) {
+        if !(self.doc == Some(doc) && self.checked == Some(revision)) {
+            *self = SplitPreview {
+                doc: Some(doc),
+                picture: Some(picture),
+                checked: Some(revision),
+                ..SplitPreview::default()
+            };
+        }
+    }
+}
+
 impl Default for ImageJobs {
     fn default() -> Self {
         let (sender, receiver) = mpsc::channel();
@@ -80,39 +107,6 @@ impl Default for ImageJobs {
             shown: [None; 2],
         }
     }
-}
-
-/// 使用系统字体绘制 SVG 中的文字。
-///
-/// 字体文件在第一次用到时才映射，之后常驻内存，所有 SVG 共用。
-struct SystemGlyphs(winc_render::OutlineFonts);
-
-impl svg::Glyphs for SystemGlyphs {
-    fn glyph(&self, families: &[String], weight: u16, italic: bool, c: char) -> Option<svg::Glyph> {
-        self.0
-            .glyph(families, weight, italic, c)
-            .map(|g| svg::Glyph {
-                outline: g.outline,
-                advance: g.advance,
-            })
-    }
-
-    fn metrics(&self, families: &[String], weight: u16, italic: bool) -> svg::FontMetrics {
-        let m = self.0.metrics(families, weight, italic);
-        svg::FontMetrics {
-            ascent: m.ascent,
-            descent: m.descent,
-            x_height: m.x_height,
-        }
-    }
-}
-
-/// 返回所有 SVG 共用的系统字体字形来源，首次调用时创建。
-pub(crate) fn system_glyphs() -> Arc<dyn svg::Glyphs> {
-    static GLYPHS: OnceLock<Arc<SystemGlyphs>> = OnceLock::new();
-    GLYPHS
-        .get_or_init(|| Arc::new(SystemGlyphs(winc_render::OutlineFonts::new())))
-        .clone()
 }
 
 impl App {
@@ -175,7 +169,7 @@ impl App {
                 .as_deref()
                 .and_then(|p| p.parent())
                 .map(|p| p.to_path_buf());
-            Box::new(move || svg::load(&text, base.as_deref(), Some(system_glyphs())))
+            Box::new(move || image::load_svg(&text, base.as_deref(), Some(system_glyphs())))
         } else {
             let Some(path) = doc.path.clone() else {
                 return;
@@ -226,7 +220,7 @@ impl App {
         );
         winc_editor::background::spawn(move || {
             let base: Option<std::path::PathBuf> = base;
-            let result = svg::load(&text, base.as_deref(), Some(system_glyphs()));
+            let result = image::load_svg(&text, base.as_deref(), Some(system_glyphs()));
             if sender.send((id, revision, result)).is_ok()
                 && let Some(proxy) = proxy
             {
@@ -449,57 +443,6 @@ impl App {
                 _ => PreviewMode::Source,
             };
         }
-    }
-
-    /// 当前标签换成 `mode` 显示（标签栏右端的三段切换）。
-    pub(in crate::app) fn set_preview_mode(&mut self, mode: PreviewMode) {
-        // 换了显示方式，键盘先回到文字（只看预览时本来就对着预览）。
-        self.preview.markdown.focused = false;
-        let top = self.leave_markdown_mode(mode);
-        let Some(doc) = self.editor.active_mut() else {
-            return;
-        };
-        // 分栏和预览解析的是同一段文字：版本没变时把已经解析好的图交过去，不再解析一遍，
-        // 只按新的大小重画。
-        let (id, revision) = (doc.id, doc.revision);
-        let split = &self.preview.split;
-        let from_split = split
-            .picture
-            .clone()
-            .filter(|_| split.doc == Some(id) && split.checked == Some(revision))
-            .filter(|_| split.error.is_none());
-        let from_preview = doc.picture().cloned();
-        if !doc.set_preview_mode(mode) {
-            self.flash(winc_i18n::t!("preview-mode-unsupported"));
-            return;
-        }
-        match mode {
-            PreviewMode::Preview => {
-                if let Some(picture) = from_split {
-                    doc.picture = Some(PictureState::Ready(picture));
-                }
-            }
-            PreviewMode::Split => {
-                if let Some(picture) = from_preview
-                    && !(self.preview.split.doc == Some(id)
-                        && self.preview.split.checked == Some(revision))
-                {
-                    self.preview.split = SplitPreview {
-                        doc: Some(id),
-                        picture: Some(picture),
-                        checked: Some(revision),
-                        ..SplitPreview::default()
-                    };
-                }
-            }
-            PreviewMode::Source => {}
-        }
-        self.relayout();
-        // 从只看预览换回来：文字滚到预览顶上的那一处，不回到换走之前的位置。
-        if let Some(line) = top {
-            self.scroll_text_to(line);
-        }
-        self.request_redraw();
     }
 }
 

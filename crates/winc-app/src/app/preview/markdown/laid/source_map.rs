@@ -94,13 +94,50 @@ impl Laid {
         {
             return cached.point;
         }
-        let point = point_of_with_affinity(self, source, upstream);
+        let point = self.point_of_with_affinity(source, upstream);
         self.caret.set(Some(CachedCaret {
             source,
             upstream,
             point,
         }));
         point
+    }
+
+    fn point_of_with_affinity(&self, source: usize, upstream: bool) -> Option<Point> {
+        if let Some(point) = self.blank_point(source) {
+            return Some(point);
+        }
+        // 脚注排在最后，原文范围不按先后，从后往前找第一个包含它的块。
+        let block = self.block_at_source(source)?;
+        let source = source - self.ranges[block].start;
+        // 光标应画在上一显示行的末尾：取原文位置在它之前的最后一段，该段正好在此结束时用其末尾。
+        if upstream
+            && let Some((top, x, baseline, size, span, text)) = self
+                .spans(block..block + 1)
+                .filter(|(.., span, _, _)| span.source.is_some_and(|s| (s as usize) < source))
+                .max_by_key(|(.., span, _, _)| span.source)
+                .map(|(top, _, x, baseline, size, span, _, text)| {
+                    (top, x, baseline, size, span, text)
+                })
+            && span.char_at_source(text, source) == Some(span.advances.len())
+        {
+            let x = x + span.advances.iter().sum::<f32>();
+            let (y, h) = line_box(top + baseline, size);
+            return Some((x, self.pad + y, h));
+        }
+        // 先按每段第一个字找（每段只看一次），再在找到的那段里逐字找：长列表、长代码块是一个
+        // 顶层块，每帧都要找，不逐字看整块。
+        let (top, x, baseline, size, span, text) = self
+            .spans(block..block + 1)
+            .filter(|(.., span, _, _)| span.source.is_some_and(|s| s as usize <= source))
+            .max_by_key(|(.., span, _, _)| span.source)
+            .map(|(top, _, x, baseline, size, span, _, text)| {
+                (top, x, baseline, size, span, text)
+            })?;
+        let k = span.char_at_source(text, source)?;
+        let x = x + span.advances[..k].iter().sum::<f32>();
+        let (y, h) = line_box(top + baseline, size);
+        Some((x, self.pad + y, h))
     }
 }
 
@@ -159,40 +196,7 @@ fn is_markup(c: char) -> bool {
 /// 取原文位置不超过 `source` 的最后一个字之前；落在标记里（`**`、链接地址）时就是标记前面
 /// 那个字之后。
 pub(crate) fn point_of(laid: &Laid, source: usize) -> Option<Point> {
-    point_of_with_affinity(laid, source, laid.drawn_upstream == Some(source))
-}
-
-fn point_of_with_affinity(laid: &Laid, source: usize, upstream: bool) -> Option<Point> {
-    if let Some(point) = laid.blank_point(source) {
-        return Some(point);
-    }
-    // 脚注排在最后，原文范围不按先后，从后往前找第一个包含它的块。
-    let block = laid.block_at_source(source)?;
-    let source = source - laid.ranges[block].start;
-    // 光标应画在上一显示行的末尾：取原文位置在它之前的最后一段，该段正好在此结束时用其末尾。
-    if upstream
-        && let Some((top, x, baseline, size, span, text)) = laid
-            .spans(block..block + 1)
-            .filter(|(.., span, _, _)| span.source.is_some_and(|s| (s as usize) < source))
-            .max_by_key(|(.., span, _, _)| span.source)
-            .map(|(top, _, x, baseline, size, span, _, text)| (top, x, baseline, size, span, text))
-        && span.char_at_source(text, source) == Some(span.advances.len())
-    {
-        let x = x + span.advances.iter().sum::<f32>();
-        let (y, h) = line_box(top + baseline, size);
-        return Some((x, laid.pad + y, h));
-    }
-    // 先按每段第一个字找（每段只看一次），再在找到的那段里逐字找：长列表、长代码块是一个
-    // 顶层块，每帧都要找，不逐字看整块。
-    let (top, x, baseline, size, span, text) = laid
-        .spans(block..block + 1)
-        .filter(|(.., span, _, _)| span.source.is_some_and(|s| s as usize <= source))
-        .max_by_key(|(.., span, _, _)| span.source)
-        .map(|(top, _, x, baseline, size, span, _, text)| (top, x, baseline, size, span, text))?;
-    let k = span.char_at_source(text, source)?;
-    let x = x + span.advances[..k].iter().sum::<f32>();
-    let (y, h) = line_box(top + baseline, size);
-    Some((x, laid.pad + y, h))
+    laid.point_of_with_affinity(source, laid.drawn_upstream == Some(source))
 }
 
 /// 返回原文位置 `source` 处（取法同 [`point_of`]）文字的字体、模拟粗斜体和字号。

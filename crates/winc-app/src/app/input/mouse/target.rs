@@ -1051,6 +1051,163 @@ impl App {
             }
         }
     }
+
+    /// (`x`, `y`) 是否在分隔条上、且不在提交视图里写全名的那一行上：该行覆盖在分隔条之上，与文件
+    /// 树的处理相同（见 [`App::target_at`]）。
+    pub(super) fn on_splitter_outside_commit_overflow(&self, x: f32, y: f32) -> bool {
+        self.panels.sidebar.visible
+            && self.layout.splitter.contains(x, y)
+            && !self.over_commit_overflow_row(y)
+    }
+
+    /// 返回侧栏顶部切换按钮和搜索面板中的悬停目标；不在这些位置时返回 `None`。
+    pub(super) fn panel_hover_at(&self, x: f32, y: f32) -> Option<Hover> {
+        let sidebar = self.layout.sidebar;
+
+        let spilled = self.in_commit_overflow(x, y) || self.in_result_overflow(x, y);
+        if sidebar.right() <= 0.0 || !(sidebar.contains(x, y) || spilled) {
+            return None;
+        }
+
+        if let Some(view) = hit(&self.sidebar_tabs(), x, y) {
+            return Some(Hover::ViewTab(view));
+        }
+        if let Some(target) = self.notebook_sidebar_at(x, y) {
+            return Some(Hover::NotebookNav(target));
+        }
+        // 第二行的项目和分支，三个视图都一样。
+        if self.hits.project.contains(x, y) {
+            return Some(Hover::ProjectName);
+        }
+
+        // 历史提交的文件列表借用提交视图的列表，按绘制时记下的位置找。
+        if self.log_diff_tree().is_some() && y >= self.panel_rect().y {
+            if self.log_diff_layout_button().contains(x, y) {
+                return Some(Hover::LogDiffLayout);
+            }
+            if self.on_splitter_outside_commit_overflow(x, y) {
+                return None;
+            }
+            return Some(hit(&self.hits.commit, x, y).map_or(Hover::None, Hover::Commit));
+        }
+
+        // 文件视图底部的大纲：按绘制时记下的位置找；分隔条由 `Target::Splitter` 处理。
+        if self.layout.outline.contains(x, y) {
+            if self.panels.sidebar.visible && self.layout.splitter.contains(x, y) {
+                return None;
+            }
+            return Some(hit(&self.hits.outline, x, y).map_or(Hover::None, Hover::Outline));
+        }
+
+        // 提交视图：输入框之外按绘制时记下的位置找。
+        if self.commit_shown() && y >= self.panel_rect().y {
+            // 分隔条由 `Target::Splitter` 处理，写全名的那一行除外：该行覆盖在分隔条之上。
+            if self.on_splitter_outside_commit_overflow(x, y) {
+                return None;
+            }
+            return Some(hit(&self.hits.commit, x, y).map_or(Hover::None, Hover::Commit));
+        }
+
+        // 面板只负责顶栏以下、分隔条以左的区域；侧栏开关和分隔条由后面的判断处理。写全名的结果行
+        // 覆盖在分隔条和滚动条之上，伸出侧栏的那一段同样属于这一行。
+        let panel = self.panel_rect();
+        let over_overflow = self.over_result_overflow_row(y);
+        let on_splitter =
+            self.panels.sidebar.visible && self.layout.splitter.contains(x, y) && !over_overflow;
+        let in_panel = panel.contains(x, y) || self.in_result_overflow(x, y);
+
+        if !self.panel_shown() || !in_panel || on_splitter {
+            return None;
+        }
+
+        let parts = self.panel_parts();
+        let g = &self.panels.global;
+
+        if let Some(button) = parts.button_at(x, y, g.replace_open) {
+            return Some(Hover::Panel(button));
+        }
+
+        if parts.results.contains(x, y) || (over_overflow && self.in_result_overflow(x, y)) {
+            let index = self.result_row_at(y)?;
+            let (replace, dismiss) = self.result_actions(index);
+
+            return Some(if dismiss.contains(x, y) {
+                Hover::RowAction(index, RowAction::Dismiss)
+            } else if replace.is_some_and(|r| r.contains(x, y)) {
+                Hover::RowAction(index, RowAction::Replace)
+            } else {
+                Hover::Result(index)
+            });
+        }
+
+        Some(Hover::None)
+    }
+
+    /// 返回在设置页滚动条上 (`x`, `y`) 处按下时抓住滑块的位置（相对滑块上沿）；点在轨道上滑块
+    /// 以外时为滑块长度的一半，使滑块跳到鼠标处。不在滚动条上或内容放得下时返回 `None`。
+    ///
+    /// 可点击的范围与唤出滚动条的范围相同：滚动区域右边 [`SCROLLBAR_HIT`] 以内。
+    pub(super) fn settings_scrollbar_at(&self, x: f32, y: f32) -> Option<f32> {
+        let (area, max) = self.settings_scroll_area();
+        let thumb = settings_thumb(area, self.settings.scroll, max)?;
+        if !area.contains(x, y) || x < area.right() - SCROLLBAR_HIT {
+            return None;
+        }
+        Some(if (thumb.y..thumb.bottom()).contains(&y) {
+            y - thumb.y
+        } else {
+            thumb.h / 2.0
+        })
+    }
+
+    /// 返回鼠标所在输入框对应的焦点；只考虑正在显示的输入框。
+    pub(in crate::app) fn field_at(&self, x: f32, y: f32) -> Option<Focus> {
+        let visible = [
+            (Focus::Search, self.bars.find.open, &self.bars.find.input),
+            (
+                Focus::Replace,
+                self.bars.find.open && self.bars.find.replace_open,
+                &self.bars.find.replace_input,
+            ),
+        ];
+        let prompt = self
+            .bars
+            .goto_input
+            .as_ref()
+            .map(|f| (Focus::Prompt, true, f));
+        let rename = self.terminal.rename.as_ref().map(|(id, field)| {
+            let shown = self.hits.terminal.iter().any(|(rect, hit)| {
+                matches!(hit, crate::app::terminal::HeaderHit::Tab(index)
+                    if rect.contains(x, y)
+                        && self.terminal.tabs.get(*index).is_some_and(|tab| tab.id == *id))
+            });
+            (Focus::TerminalRename, shown, field)
+        });
+        let terminal_find =
+            (self.terminal.find.as_ref()).map(|f| (Focus::TerminalFind, true, &f.field));
+        let shown = self.panel_shown();
+        let g = &self.panels.global;
+        let panel = [
+            (Focus::GlobalQuery, shown, &g.query),
+            (Focus::GlobalReplace, shown && g.replace_open, &g.replace),
+            (Focus::GlobalInclude, shown && g.details_open, &g.include),
+            (Focus::GlobalExclude, shown && g.details_open, &g.exclude),
+            (
+                Focus::CommitMessage,
+                self.commit_shown() && self.commit_compose_shown(),
+                &self.git.commit.message,
+            ),
+        ];
+
+        visible
+            .into_iter()
+            .chain(prompt)
+            .chain(rename)
+            .chain(terminal_find)
+            .chain(panel)
+            .find(|(_, shown, f)| *shown && f.view.area.contains(x, y))
+            .map(|(focus, ..)| focus)
+    }
 }
 
 /// 窗口中某一点上最上层的可交互目标，见 [`App::target_at`]。

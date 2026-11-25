@@ -1,15 +1,18 @@
 //! 用户配置和项目配置：读入、校验、写回，以及配置文件的位置。
 //!
-//! 每一项设置的键名和读写规则由 `fields` 模块给出。
+//! 每一项设置的键名和读写规则由 [`Config::SECTIONS`] 和 [`Config::TOP_LEVEL`] 表给出。
 
-mod fields;
+mod parse;
+mod types;
+
+pub use types::*;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::files::{config_dir, write_atomic};
 use crate::json::{self, Json};
-use fields::*;
+use parse::*;
 use winc_i18n::{LocaleChoice, t};
 
 /// 用户配置。
@@ -272,217 +275,6 @@ pub struct Config {
     pub fix_commands: BTreeMap<String, String>,
 }
 
-/// 终端里哪一边的 ⌥ 当 Meta 用；另一边仍然输入 `å`、`∑` 这类字符。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OptionAsMeta {
-    /// 左边的 ⌥。
-    Left,
-    /// 右边的 ⌥。
-    Right,
-    /// 两边都是。
-    Both,
-    /// 两边都不当 Meta 用。
-    None,
-}
-
-impl OptionAsMeta {
-    /// 全部选项，顺序与设置中菜单的顺序一致。
-    pub const ALL: [OptionAsMeta; 4] = [
-        OptionAsMeta::Left,
-        OptionAsMeta::Right,
-        OptionAsMeta::Both,
-        OptionAsMeta::None,
-    ];
-
-    /// 返回该变体在配置文件里的写法。
-    pub fn name(self) -> &'static str {
-        match self {
-            OptionAsMeta::Left => "left",
-            OptionAsMeta::Right => "right",
-            OptionAsMeta::Both => "both",
-            OptionAsMeta::None => "none",
-        }
-    }
-}
-
-/// Vim 模式下无名寄存器与系统剪贴板的同步方式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum VimClipboard {
-    /// 只有 `"+`、`"*` 使用系统剪贴板。
-    #[default]
-    Register,
-    /// 复制时同时写入系统剪贴板。
-    Yank,
-    /// 无名寄存器与系统剪贴板同步。
-    Always,
-}
-
-impl VimClipboard {
-    /// 全部取值，按设置菜单中的顺序排列。
-    pub const ALL: [Self; 3] = [Self::Register, Self::Yank, Self::Always];
-}
-
-/// 什么时候自动保存有修改的文档。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AutoSave {
-    /// 不自动保存。
-    #[default]
-    Off,
-    /// 切换标签、编辑区失去焦点（例如切到终端）或窗口失去焦点时保存。
-    OnFocusChange,
-    /// 停止输入一段时间后保存，切换焦点时也保存。
-    AfterDelay,
-}
-
-impl AutoSave {
-    /// 全部取值，按设置菜单中的顺序排列。
-    pub const ALL: [Self; 3] = [Self::Off, Self::OnFocusChange, Self::AfterDelay];
-}
-
-/// 把目录拖进已打开目录的窗口时怎样处理。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FolderDrop {
-    /// 每次询问。
-    #[default]
-    Ask,
-    /// 加为窗口的附加目录。
-    Add,
-    /// 不添加，按落点处理：落在编辑区时打开该目录，落在文件树上时复制进目标目录。
-    Open,
-}
-
-impl FolderDrop {
-    /// 全部取值，按设置菜单中的顺序排列。
-    pub const ALL: [Self; 3] = [Self::Ask, Self::Add, Self::Open];
-}
-
-/// 点击工作树时在哪个窗口打开它。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WorktreeOpen {
-    /// 每次询问。
-    #[default]
-    Ask,
-    /// 在新窗口中打开，当前窗口不变。
-    NewWindow,
-    /// 在当前窗口中打开，替换当前打开的目录。
-    CurrentWindow,
-}
-
-impl WorktreeOpen {
-    /// 全部取值，按设置菜单中的顺序排列。
-    pub const ALL: [Self; 3] = [Self::Ask, Self::NewWindow, Self::CurrentWindow];
-}
-
-/// Vim 模式下映射生效的模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VimMapMode {
-    /// 普通模式。
-    Normal,
-    /// 可视模式。
-    Visual,
-    /// 插入模式。
-    Insert,
-    /// 已输入操作符、等待动作时。
-    Operator,
-}
-
-impl VimMapMode {
-    /// 各模式及其在配置文件中的写法。
-    pub const NAMES: [(Self, &'static str); 4] = [
-        (Self::Normal, "normal"),
-        (Self::Visual, "visual"),
-        (Self::Insert, "insert"),
-        (Self::Operator, "operator"),
-    ];
-}
-
-/// Vim 模式下的一条映射。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VimMapping {
-    /// 生效的模式。
-    pub mode: VimMapMode,
-    /// 左侧的按键，按键记法。
-    pub keys: String,
-    /// 右侧：按键记法，或命令的英文名。
-    pub to: String,
-}
-
-/// 何时显示空格和制表符。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RenderWhitespace {
-    /// 不显示。
-    None,
-    /// 只显示选中文字里的。
-    #[default]
-    Selection,
-    /// 只显示行尾的。
-    Trailing,
-    /// 全部显示。
-    All,
-}
-
-impl RenderWhitespace {
-    /// 全部选项，顺序与设置中菜单的顺序一致。
-    pub const ALL: [RenderWhitespace; 4] = [
-        RenderWhitespace::None,
-        RenderWhitespace::Selection,
-        RenderWhitespace::Trailing,
-        RenderWhitespace::All,
-    ];
-}
-
-/// Markdown 预览正文的最大宽度：更宽的预览中正文居中、两侧留白。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextWidth {
-    /// 适合连续阅读的宽度。
-    #[default]
-    Standard,
-    /// 比标准宽，适合宽表格和代码较多的文档。
-    Wide,
-    /// 铺满预览区域。
-    Full,
-}
-
-impl TextWidth {
-    /// 全部选项，顺序与设置中菜单的顺序一致。
-    pub const ALL: [TextWidth; 3] = [TextWidth::Standard, TextWidth::Wide, TextWidth::Full];
-}
-
-/// 背景图在窗口中的显示方式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BackgroundFit {
-    /// 等比缩放并裁剪，铺满窗口。
-    #[default]
-    Fill,
-    /// 等比缩放到整张可见。
-    Fit,
-    /// 拉伸到窗口的大小。
-    Stretch,
-    /// 按原始大小平铺。
-    Tile,
-}
-
-impl BackgroundFit {
-    /// 全部选项，顺序与设置中菜单的顺序一致。
-    pub const ALL: [BackgroundFit; 4] = [
-        BackgroundFit::Fill,
-        BackgroundFit::Fit,
-        BackgroundFit::Stretch,
-        BackgroundFit::Tile,
-    ];
-}
-
-/// 配色方案的选择。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThemeChoice {
-    /// 跟随系统的浅色或深色外观。
-    Auto,
-    /// 强制使用深色配色。
-    Dark,
-    /// 强制使用浅色配色。
-    Light,
-}
-
 impl Config {
     /// 编辑区字号的合法范围（点）。
     ///
@@ -581,17 +373,17 @@ impl Config {
             return (config, problems);
         };
 
-        for &(name, fields) in SECTIONS {
+        for &(name, fields) in Self::SECTIONS {
             if let Some(section) = object.get(name) {
-                read_section(&mut config, name, fields, section, &mut problems);
+                Self::read_section(&mut config, name, fields, section, &mut problems);
             }
         }
-        for field in TOP_LEVEL {
+        for field in Self::TOP_LEVEL {
             if let Some(value) = object.get(field.key) {
                 (field.read)(&mut config, value, field.key, &mut problems);
             }
         }
-        for key in object.keys().filter(|key| !is_known(key)) {
+        for key in object.keys().filter(|key| !Self::is_known(key)) {
             problems.push(t!("config-unknown-key", key = key.as_str()));
         }
 
@@ -605,8 +397,8 @@ impl Config {
         self.render(None)
     }
 
-    /// 序列化为缩进 2 个空格的 JSON：各节和各项按 [`SECTIONS`]、[`TOP_LEVEL`] 的顺序写出，只写出
-    /// 有值的项。
+    /// 序列化为缩进 2 个空格的 JSON：各节和各项按 [`Config::SECTIONS`]、[`Config::TOP_LEVEL`] 的顺序写出，
+    /// 只写出有值的项。
     ///
     /// `original` 是磁盘上原有配置的顶层对象和上次读入或写出该文件时的 `base`。给出时：
     ///
@@ -620,11 +412,11 @@ impl Config {
             Value(Json),
         }
 
-        let changed = |field: &Field| {
+        let changed = |field: &Field<Self>| {
             original.is_none_or(|(_, base)| (field.write)(self) != (field.write)(base))
         };
         // 一项要写出的值：修改过的项取 `self` 中的值，没有修改的项取原文件同一对象（`old`）中的值。
-        let value = |field: &Field, old: Option<&BTreeMap<String, Json>>| {
+        let value = |field: &Field<Self>, old: Option<&BTreeMap<String, Json>>| {
             if changed(field) {
                 (field.write)(self)
             } else {
@@ -633,7 +425,7 @@ impl Config {
         };
         let root = original.map(|(root, _)| root);
         let mut entries = Vec::new();
-        for &(name, fields) in SECTIONS {
+        for &(name, fields) in Self::SECTIONS {
             let old = root.and_then(|root| root.get(name));
             if let Some(old) = old.filter(|old| old.as_object().is_none())
                 && !fields.iter().any(changed)
@@ -644,31 +436,31 @@ impl Config {
             }
             let old = old.and_then(Json::as_object);
             // 没有修改、新位置上也没有的项沿用旧位置上的值。
-            let moved = |field: &Field| {
+            let moved = |field: &Field<Self>| {
                 let root = root.filter(|_| !changed(field))?;
-                moved_from(root, name, field.key).cloned()
+                Self::moved_from(root, name, field.key).cloned()
             };
             let mut items: Vec<(&str, Json)> = fields
                 .iter()
                 .filter_map(|field| Some((field.key, value(field, old).or_else(|| moved(field))?)))
                 .collect();
             if let Some(old) = old {
-                let unknown = old
-                    .iter()
-                    .filter(|(key, _)| find(fields, key).is_none() && !is_moved(name, key));
+                let unknown = old.iter().filter(|(key, _)| {
+                    Self::find(fields, key).is_none() && !Self::is_moved(name, key)
+                });
                 items.extend(unknown.map(|(key, value)| (key.as_str(), value.clone())));
             }
             if !items.is_empty() {
                 entries.push((name, Entry::Section(items)));
             }
         }
-        for field in TOP_LEVEL {
+        for field in Self::TOP_LEVEL {
             if let Some(value) = value(field, root) {
                 entries.push((field.key, Entry::Value(value)));
             }
         }
         if let Some(original) = root {
-            let unknown = original.iter().filter(|(key, _)| !is_known(key));
+            let unknown = original.iter().filter(|(key, _)| !Self::is_known(key));
             entries.extend(unknown.map(|(key, value)| (key.as_str(), Entry::Value(value.clone()))));
         }
 
@@ -716,7 +508,7 @@ impl Config {
         };
         for (key, value) in object {
             if key == "format" {
-                read_section(&mut config, "format", FORMAT, value, &mut problems);
+                Self::read_section(&mut config, "format", Self::FORMAT, value, &mut problems);
             } else {
                 problems.push(t!("config-project-unsupported-key", key = key.as_str()));
             }
@@ -772,15 +564,6 @@ pub struct Saved {
     pub backup: Option<Backup>,
 }
 
-/// 写回之前另存的原文件（同目录下的 `config.json.bak`）。
-#[derive(Debug, PartialEq)]
-pub struct Backup {
-    /// 另存的位置。
-    pub path: PathBuf,
-    /// 原文件可以解析但含有注释（写出的文件不保留注释）时为真；原文件无法解析时为假。
-    pub comments: bool,
-}
-
 /// 返回用户级配置文件的路径；无法确定用户目录时返回 `None`。
 ///
 /// - macOS：`~/Library/Application Support/winc/config.json`
@@ -797,6 +580,872 @@ pub fn config_path() -> Option<PathBuf> {
 /// 返回项目配置文件的路径：`root`（打开的目录）下的 `.winc/config.json`。
 pub(crate) fn project_config_path(root: &Path) -> PathBuf {
     root.join(".winc").join("config.json")
+}
+
+/// 一项设置在配置文件里的写法：键名、读入和写回。
+///
+/// 解析、序列化以及写回时保留不认识的键，都以 [`Config::SECTIONS`] 和 [`Config::TOP_LEVEL`] 两张表
+/// 为准；新增一项设置在对应的表里加一行即可。
+struct Field<T> {
+    /// 键名：节内的键（如 `size`），或顶层的键（如 `theme`）。
+    key: &'static str,
+    /// 把 `value` 读入 `target`；类型不符、超出范围等问题记入 `problems`，文案中用 `name`（如
+    /// `editor.size`）指代这一项。
+    read: fn(target: &mut T, value: &Json, name: &str, problems: &mut Vec<String>),
+    /// 返回要写出的值；`None` 表示用户没写过，不写出。
+    write: fn(target: &T) -> Option<Json>,
+}
+
+/// 布尔设置的 [`Field`]：键名和 [`Config`] 中对应的字段。
+macro_rules! bool_field {
+    ($key:literal, $field:ident) => {
+        Field {
+            key: $key,
+            read: |config, value, name, problems| config.$field = read_bool(value, name, problems),
+            write: |config| config.$field.map(Json::Bool),
+        }
+    };
+}
+
+/// 字符串设置的 [`Field`]：键名和 [`Config`] 中对应的字段，读入规则见 [`read_string`]。
+macro_rules! string_field {
+    ($key:literal, $field:ident) => {
+        Field {
+            key: $key,
+            read: |config, value, name, problems| {
+                config.$field = read_string(value, name, problems)
+            },
+            write: |config| config.$field.clone().map(Json::String),
+        }
+    };
+}
+
+impl Config {
+    /// 配置文件中的各节（顶层值为对象的键）和其中的设置，按写出的顺序排列。
+    const SECTIONS: &[(&str, &[Field<Self>])] = &[
+        ("editor", Self::EDITOR),
+        ("ui", Self::UI),
+        ("tree", Self::TREE),
+        ("markdown", Self::MARKDOWN),
+        ("update", Self::UPDATE),
+        ("terminal", Self::TERMINAL),
+        ("vim", Self::VIM),
+        ("git", Self::GIT),
+        ("network", Self::NETWORK),
+        ("remote", Self::REMOTE),
+        ("keyboard", Self::KEYBOARD),
+        ("format", Self::FORMAT),
+    ];
+
+    /// 顶层的单值设置，写在各节之后。
+    const TOP_LEVEL: &[Field<Self>] = &[
+        Field {
+            key: "theme",
+            read: |config, value, name, problems| {
+                config.theme = match value.as_str() {
+                    Some("auto") => Some(ThemeChoice::Auto),
+                    Some("dark") => Some(ThemeChoice::Dark),
+                    Some("light") => Some(ThemeChoice::Light),
+                    _ => {
+                        problems.push(t!("config-theme-invalid", name = name));
+                        None
+                    }
+                }
+            },
+            write: |config| {
+                let theme = match config.theme? {
+                    ThemeChoice::Auto => "auto",
+                    ThemeChoice::Dark => "dark",
+                    ThemeChoice::Light => "light",
+                };
+                Some(Json::String(theme.to_owned()))
+            },
+        },
+        string_field!("lightTheme", light_theme),
+        string_field!("darkTheme", dark_theme),
+        Field {
+            key: "language",
+            read: |config, value, name, problems| {
+                config.language = value.as_str().and_then(LocaleChoice::from_key);
+                if config.language.is_none() {
+                    problems.push(t!("config-language-invalid", name = name));
+                }
+            },
+            write: |config| Some(Json::String(config.language?.key().to_owned())),
+        },
+    ];
+
+    /// `editor` 一节。
+    const EDITOR: &[Field<Self>] = &[
+        string_field!("font", editor_font),
+        Field {
+            key: "size",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-font-size");
+                config.editor_size =
+                    read_number(value, name, Config::EDITOR_SIZE_RANGE, label, problems)
+            },
+            write: |config| config.editor_size.map(number),
+        },
+        Field {
+            key: "tabWidth",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-tab-width");
+                config.tab_width =
+                    read_number(value, name, Config::TAB_WIDTH_RANGE, label, problems)
+                        .filter(|v| {
+                            let whole = v.fract() == 0.0;
+                            if !whole {
+                                let value = v.to_string();
+                                problems.push(t!("config-not-integer", name = name, value = value));
+                            }
+                            whole
+                        })
+                        .map(|v| v as usize)
+            },
+            write: |config| config.tab_width.map(|width| Json::Number(width as f64)),
+        },
+        Field {
+            key: "autoSave",
+            // 早先的版本是开关：`true` 即切换焦点时保存。
+            read: |config, value, name, problems| {
+                config.auto_save = match (value, value.as_str()) {
+                    (Json::Bool(false), _) | (_, Some("off")) => Some(AutoSave::Off),
+                    (Json::Bool(true), _) | (_, Some("onFocusChange")) => {
+                        Some(AutoSave::OnFocusChange)
+                    }
+                    (_, Some("afterDelay")) => Some(AutoSave::AfterDelay),
+                    _ => {
+                        problems.push(t!("config-auto-save-invalid", name = name));
+                        None
+                    }
+                };
+            },
+            write: |config| {
+                let value = match config.auto_save? {
+                    AutoSave::Off => "off",
+                    AutoSave::OnFocusChange => "onFocusChange",
+                    AutoSave::AfterDelay => "afterDelay",
+                };
+                Some(Json::String(value.into()))
+            },
+        },
+        bool_field!("hotExit", hot_exit),
+        bool_field!("confirmClose", confirm_close),
+        bool_field!("restoreFolder", restore_folder),
+        bool_field!("openFolderInNewWindow", open_folder_in_new_window),
+        Field {
+            key: "dropFolder",
+            read: |config, value, name, problems| {
+                config.drop_folder = match value.as_str() {
+                    Some("ask") => Some(FolderDrop::Ask),
+                    Some("add") => Some(FolderDrop::Add),
+                    Some("open") => Some(FolderDrop::Open),
+                    _ => {
+                        problems.push(t!("config-drop-folder-invalid", name = name));
+                        None
+                    }
+                };
+            },
+            write: |config| {
+                let value = match config.drop_folder? {
+                    FolderDrop::Ask => "ask",
+                    FolderDrop::Add => "add",
+                    FolderDrop::Open => "open",
+                };
+                Some(Json::String(value.into()))
+            },
+        },
+        bool_field!("stickyScroll", sticky_scroll),
+        bool_field!("wordWrap", word_wrap),
+        bool_field!("wholeLines", whole_lines),
+        bool_field!("minimap", minimap),
+        bool_field!("smoothScrolling", smooth_scrolling),
+        bool_field!("outline", outline),
+        Field {
+            key: "renderWhitespace",
+            read: |config, value, name, problems| {
+                config.render_whitespace = match value.as_str() {
+                    Some("none") => Some(RenderWhitespace::None),
+                    Some("selection") => Some(RenderWhitespace::Selection),
+                    Some("trailing") => Some(RenderWhitespace::Trailing),
+                    Some("all") => Some(RenderWhitespace::All),
+                    _ => {
+                        problems.push(t!("config-render-whitespace-invalid", name = name));
+                        None
+                    }
+                }
+            },
+            write: |config| {
+                let value = match config.render_whitespace? {
+                    RenderWhitespace::None => "none",
+                    RenderWhitespace::Selection => "selection",
+                    RenderWhitespace::Trailing => "trailing",
+                    RenderWhitespace::All => "all",
+                };
+                Some(Json::String(value.to_owned()))
+            },
+        },
+        bool_field!("diffInline", diff_inline),
+        bool_field!("lineNumbers", line_numbers),
+        bool_field!("statusBar", status_bar),
+        bool_field!("restoreWindow", restore_window),
+    ];
+
+    /// `ui` 一节。
+    const UI: &[Field<Self>] = &[
+        string_field!("font", ui_font),
+        bool_field!("animations", ui_animations),
+        Field {
+            key: "size",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-font-size");
+                config.ui_size = read_number(value, name, Config::UI_SIZE_RANGE, label, problems)
+            },
+            write: |config| config.ui_size.map(number),
+        },
+        Field {
+            key: "zoom",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-zoom");
+                config.ui_zoom = read_number(value, name, Config::ZOOM_RANGE, label, problems)
+                    .map(|zoom| zoom.round() as u16);
+            },
+            write: |config| config.ui_zoom.map(|zoom| number(f32::from(zoom))),
+        },
+        Field {
+            key: "fontWeight",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-font-weight");
+                let range = Config::FONT_WEIGHT_RANGE;
+                config.ui_font_weight =
+                    read_number(value, name, range, label, problems).map(|w| w.round() as u16);
+            },
+            write: |config| {
+                config
+                    .ui_font_weight
+                    .map(|weight| number(f32::from(weight)))
+            },
+        },
+        string_field!("backgroundImage", ui_background_image),
+        Field {
+            key: "backgroundOpacity",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-background-opacity");
+                let range = Config::BACKGROUND_OPACITY_RANGE;
+                config.ui_background_opacity = read_number(value, name, range, label, problems);
+            },
+            write: |config| config.ui_background_opacity.map(number),
+        },
+        Field {
+            key: "backgroundFit",
+            read: |config, value, name, problems| {
+                config.ui_background_fit = match value.as_str() {
+                    Some("fill") => Some(BackgroundFit::Fill),
+                    Some("fit") => Some(BackgroundFit::Fit),
+                    Some("stretch") => Some(BackgroundFit::Stretch),
+                    Some("tile") => Some(BackgroundFit::Tile),
+                    _ => {
+                        problems.push(t!("config-background-fit-invalid", name = name));
+                        None
+                    }
+                };
+            },
+            write: |config| {
+                let value = match config.ui_background_fit? {
+                    BackgroundFit::Fill => "fill",
+                    BackgroundFit::Fit => "fit",
+                    BackgroundFit::Stretch => "stretch",
+                    BackgroundFit::Tile => "tile",
+                };
+                Some(Json::String(value.into()))
+            },
+        },
+        Field {
+            // `titleBarStyle` 在配置中是字符串，读入后只保留是否用系统的标题栏。
+            key: "titleBarStyle",
+            read: |config, value, name, problems| match value.as_str() {
+                Some("custom") => config.ui_native_title_bar = Some(false),
+                Some("native") => config.ui_native_title_bar = Some(true),
+                _ => problems.push(t!("config-title-bar-style-invalid", name = name)),
+            },
+            write: |config| {
+                let native = config.ui_native_title_bar?;
+                Some(Json::String(
+                    if native { "native" } else { "custom" }.into(),
+                ))
+            },
+        },
+    ];
+
+    /// `tree` 一节。
+    const TREE: &[Field<Self>] = &[
+        bool_field!("confirmDragAndDrop", confirm_drag_and_drop),
+        bool_field!("compactFolders", compact_folders),
+        bool_field!("previewOnClick", preview_on_click),
+    ];
+
+    /// `markdown` 一节。
+    const MARKDOWN: &[Field<Self>] = &[
+        bool_field!("remoteImages", markdown_remote_images),
+        bool_field!("lineNumbers", markdown_line_numbers),
+        bool_field!("shortcuts", markdown_shortcuts),
+        bool_field!("focusMode", markdown_focus),
+        bool_field!("typewriterMode", markdown_typewriter),
+        bool_field!("selectionToolbar", markdown_selection_toolbar),
+        string_field!("imageFolder", markdown_image_folder),
+        string_field!("imageName", markdown_image_name),
+        Field {
+            key: "textWidth",
+            read: |config, value, name, problems| {
+                config.markdown_text_width = match value.as_str() {
+                    Some("standard") => Some(TextWidth::Standard),
+                    Some("wide") => Some(TextWidth::Wide),
+                    Some("full") => Some(TextWidth::Full),
+                    _ => {
+                        problems.push(t!("config-text-width-invalid", name = name));
+                        None
+                    }
+                };
+            },
+            write: |config| {
+                let value = match config.markdown_text_width? {
+                    TextWidth::Standard => "standard",
+                    TextWidth::Wide => "wide",
+                    TextWidth::Full => "full",
+                };
+                Some(Json::String(value.into()))
+            },
+        },
+    ];
+
+    /// `update` 一节。
+    const UPDATE: &[Field<Self>] = &[bool_field!("autoCheck", update_auto_check)];
+
+    /// `vim` 一节。
+    const VIM: &[Field<Self>] = &[
+        bool_field!("enabled", vim_enabled),
+        Field {
+            key: "clipboard",
+            read: |config, value, name, problems| {
+                config.vim_clipboard = match value.as_str() {
+                    Some("register") => Some(VimClipboard::Register),
+                    Some("yank") => Some(VimClipboard::Yank),
+                    Some("always") => Some(VimClipboard::Always),
+                    _ => {
+                        problems.push(t!("config-vim-clipboard-invalid", name = name));
+                        None
+                    }
+                }
+            },
+            write: |config| {
+                let value = match config.vim_clipboard? {
+                    VimClipboard::Register => "register",
+                    VimClipboard::Yank => "yank",
+                    VimClipboard::Always => "always",
+                };
+                Some(Json::String(value.to_owned()))
+            },
+        },
+        bool_field!("ignoreCase", vim_ignore_case),
+        bool_field!("smartCase", vim_smart_case),
+        Field {
+            key: "scrollOff",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-vim-scroll-off");
+                let range = Config::VIM_SCROLL_OFF_RANGE;
+                config.vim_scroll_off = read_number(value, name, range, label, problems)
+                    .filter(|v| {
+                        let whole = v.fract() == 0.0;
+                        if !whole {
+                            let value = v.to_string();
+                            problems.push(t!("config-not-integer", name = name, value = value));
+                        }
+                        whole
+                    })
+                    .map(|v| v as usize)
+            },
+            write: |config| {
+                config
+                    .vim_scroll_off
+                    .map(|lines| Json::Number(lines as f64))
+            },
+        },
+        Field {
+            // 对象的每一项是按键的名字与 `vim` 或 `app`；写法有误的项逐个报告并忽略。
+            key: "handleKeys",
+            read: |config, value, name, problems| {
+                let Some(keys) = value.as_object() else {
+                    problems.push(t!("config-vim-handle-keys-invalid", name = name));
+                    return;
+                };
+                config.vim_handle_keys.clear();
+                for (key, owner) in keys {
+                    let key = key.trim().to_lowercase();
+                    let vim = match owner.as_str() {
+                        Some("vim") => true,
+                        Some("app") => false,
+                        _ => {
+                            let name = format!("{name}.{key}");
+                            problems.push(t!("config-vim-handle-keys-invalid", name = name));
+                            continue;
+                        }
+                    };
+                    config.vim_handle_keys.push((key, vim));
+                }
+                config.vim_handle_keys.sort();
+            },
+            write: |config| {
+                if config.vim_handle_keys.is_empty() {
+                    return None;
+                }
+                let owner = |vim: &bool| Json::String(if *vim { "vim" } else { "app" }.to_owned());
+                let keys = config.vim_handle_keys.iter();
+                Some(Json::object(
+                    keys.map(|(key, vim)| (key.clone(), owner(vim))),
+                ))
+            },
+        },
+        bool_field!("relativeNumber", vim_relative_number),
+        Field {
+            key: "yankHighlight",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-vim-yank-highlight");
+                let range = Config::VIM_YANK_HIGHLIGHT_RANGE;
+                config.vim_yank_highlight = read_number(value, name, range, label, problems)
+                    .filter(|v| {
+                        let whole = v.fract() == 0.0;
+                        if !whole {
+                            let value = v.to_string();
+                            problems.push(t!("config-not-integer", name = name, value = value));
+                        }
+                        whole
+                    })
+                    .map(|v| v as u32)
+            },
+            write: |config| {
+                config
+                    .vim_yank_highlight
+                    .map(|ms| Json::Number(f64::from(ms)))
+            },
+        },
+        Field {
+            key: "timeoutLen",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-vim-timeout-len");
+                let range = Config::VIM_TIMEOUT_LEN_RANGE;
+                config.vim_timeout_len = read_number(value, name, range, label, problems)
+                    .filter(|v| {
+                        let whole = v.fract() == 0.0;
+                        if !whole {
+                            let value = v.to_string();
+                            problems.push(t!("config-not-integer", name = name, value = value));
+                        }
+                        whole
+                    })
+                    .map(|v| v as u32)
+            },
+            write: |config| config.vim_timeout_len.map(|ms| Json::Number(f64::from(ms))),
+        },
+        Field {
+            key: "leader",
+            read: |config, value, name, problems| {
+                config.vim_leader = match value.as_str() {
+                    Some(key) if !key.is_empty() => Some(key.to_owned()),
+                    _ => {
+                        problems.push(t!("config-vim-leader-invalid", name = name));
+                        None
+                    }
+                }
+            },
+            write: |config| config.vim_leader.clone().map(Json::String),
+        },
+        Field {
+            // 数组的每一项是一条映射；写法有误的项逐个报告并忽略。
+            key: "keys",
+            read: |config, value, name, problems| {
+                config.vim_keys.clear();
+                let Some(items) = value.as_array() else {
+                    problems.push(t!("config-vim-keys-invalid", name = name));
+                    return;
+                };
+                for (index, item) in items.iter().enumerate() {
+                    let text = |key: &str| {
+                        let value = item.as_object()?.iter().find(|(name, _)| *name == key)?.1;
+                        value.as_str().filter(|text| !text.is_empty())
+                    };
+                    let mode = text("mode").and_then(|mode| {
+                        let mut names = VimMapMode::NAMES.iter();
+                        names.find(|(_, name)| *name == mode).map(|(mode, _)| *mode)
+                    });
+                    match (mode, text("keys"), text("to")) {
+                        (Some(mode), Some(keys), Some(to)) => config.vim_keys.push(VimMapping {
+                            mode,
+                            keys: keys.to_owned(),
+                            to: to.to_owned(),
+                        }),
+                        _ => {
+                            let name = format!("{name}[{index}]");
+                            problems.push(t!("config-vim-keys-invalid", name = name));
+                        }
+                    }
+                }
+            },
+            write: |config| {
+                if config.vim_keys.is_empty() {
+                    return None;
+                }
+                let item = |mapping: &VimMapping| {
+                    let mut names = VimMapMode::NAMES.iter();
+                    let mode = names
+                        .find(|(mode, _)| *mode == mapping.mode)
+                        .map_or("normal", |(_, name)| *name);
+                    Json::object([
+                        ("mode".to_owned(), Json::String(mode.to_owned())),
+                        ("keys".to_owned(), Json::String(mapping.keys.clone())),
+                        ("to".to_owned(), Json::String(mapping.to.clone())),
+                    ])
+                };
+                Some(Json::Array(config.vim_keys.iter().map(item).collect()))
+            },
+        },
+    ];
+
+    /// `terminal` 一节。
+    const TERMINAL: &[Field<Self>] = &[
+        Field {
+            key: "external",
+            // 只有空白视为没写，使用系统默认的终端程序，不报告。
+            read: |config, value, name, problems| match value.as_str() {
+                Some(app) => {
+                    let app = app.trim();
+                    config.external_terminal = (!app.is_empty()).then(|| app.to_owned());
+                }
+                None => problems.push(t!("config-not-string", name = name)),
+            },
+            write: |config| config.external_terminal.clone().map(Json::String),
+        },
+        bool_field!("enabled", terminal_enabled),
+        string_field!("font", terminal_font),
+        Field {
+            key: "size",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-font-size");
+                config.terminal_size =
+                    read_number(value, name, Config::EDITOR_SIZE_RANGE, label, problems)
+            },
+            write: |config| config.terminal_size.map(number),
+        },
+        string_field!("shell", terminal_shell),
+        bool_field!("shellIntegration", terminal_shell_integration),
+        bool_field!("confirmClose", terminal_confirm_close),
+        bool_field!("prompt", terminal_prompt),
+        bool_field!("copyOnSelect", terminal_copy_on_select),
+        bool_field!("boldIsBright", terminal_bold_is_bright),
+        bool_field!("verticalTabs", terminal_vertical_tabs),
+        bool_field!("applicationPriority", terminal_application_priority),
+        Field {
+            // `position` 在配置里是字符串，读入后只保留是否在右边。
+            key: "position",
+            read: |config, value, name, problems| match value.as_str() {
+                Some("bottom") => config.terminal_right = Some(false),
+                Some("right") => config.terminal_right = Some(true),
+                _ => problems.push(t!("config-terminal-position-invalid", name = name)),
+            },
+            write: |config| {
+                let right = config.terminal_right?;
+                Some(Json::String(if right { "right" } else { "bottom" }.into()))
+            },
+        },
+        Field {
+            key: "scrollback",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-lines");
+                config.terminal_scrollback =
+                    read_number(value, name, Config::SCROLLBACK_RANGE, label, problems)
+                        .map(|n| n.round() as u32);
+            },
+            write: |config| config.terminal_scrollback.map(|n| number(n as f32)),
+        },
+        Field {
+            key: "minimumContrast",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-contrast");
+                config.terminal_minimum_contrast =
+                    read_number(value, name, Config::CONTRAST_RANGE, label, problems);
+            },
+            write: |config| config.terminal_minimum_contrast.map(number),
+        },
+        Field {
+            key: "optionAsMeta",
+            read: |config, value, name, problems| {
+                config.option_as_meta = match value.as_str() {
+                    Some("left") => Some(OptionAsMeta::Left),
+                    Some("right") => Some(OptionAsMeta::Right),
+                    Some("both") => Some(OptionAsMeta::Both),
+                    Some("none") => Some(OptionAsMeta::None),
+                    _ => {
+                        problems.push(t!("config-option-as-meta-invalid", name = name));
+                        None
+                    }
+                }
+            },
+            write: |config| {
+                config
+                    .option_as_meta
+                    .map(|o| Json::String(o.name().to_owned()))
+            },
+        },
+    ];
+
+    /// `git` 一节。
+    const GIT: &[Field<Self>] = &[
+        bool_field!("enabled", git_enabled),
+        bool_field!("confirmPush", git_confirm_push),
+        bool_field!("rememberCredentials", git_remember_credentials),
+        bool_field!("inlineBlame", git_inline_blame),
+        bool_field!("autoFetch", git_auto_fetch),
+        bool_field!("stagingArea", git_staging_area),
+        Field {
+            key: "repositoryScanDepth",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-repository-scan-depth");
+                let range = Config::REPOSITORY_SCAN_DEPTH_RANGE;
+                config.repository_scan_depth = read_number(value, name, range, label, problems)
+                    .filter(|v| {
+                        let whole = v.fract() == 0.0;
+                        if !whole {
+                            let value = v.to_string();
+                            problems.push(t!("config-not-integer", name = name, value = value));
+                        }
+                        whole
+                    })
+                    .map(|v| v as usize)
+            },
+            write: |config| {
+                config
+                    .repository_scan_depth
+                    .map(|depth| Json::Number(depth as f64))
+            },
+        },
+        string_field!("path", git_path),
+        string_field!("worktreeRoot", git_worktree_root),
+        Field {
+            key: "openWorktree",
+            read: |config, value, name, problems| {
+                config.git_open_worktree = match value.as_str() {
+                    Some("ask") => Some(WorktreeOpen::Ask),
+                    Some("newWindow") => Some(WorktreeOpen::NewWindow),
+                    Some("currentWindow") => Some(WorktreeOpen::CurrentWindow),
+                    _ => {
+                        problems.push(t!("config-open-worktree-invalid", name = name));
+                        None
+                    }
+                };
+            },
+            write: |config| {
+                let value = match config.git_open_worktree? {
+                    WorktreeOpen::Ask => "ask",
+                    WorktreeOpen::NewWindow => "newWindow",
+                    WorktreeOpen::CurrentWindow => "currentWindow",
+                };
+                Some(Json::String(value.into()))
+            },
+        },
+        Field {
+            key: "worktreeCopy",
+            read: |config, value, name, problems| {
+                let Some(items) = value.as_array() else {
+                    problems.push(t!("config-not-array", name = name));
+                    return;
+                };
+                for item in items {
+                    match item.as_str() {
+                        Some(glob) if !glob.trim().is_empty() => {
+                            config.git_worktree_copy.push(glob.to_owned());
+                        }
+                        _ => problems.push(t!("config-item-not-non-empty-string", name = name)),
+                    }
+                }
+            },
+            write: |config| {
+                let globs = &config.git_worktree_copy;
+                (!globs.is_empty())
+                    .then(|| Json::Array(globs.iter().cloned().map(Json::String).collect()))
+            },
+        },
+    ];
+
+    /// `network` 一节。
+    const NETWORK: &[Field<Self>] = &[bool_field!("systemProxy", system_proxy)];
+
+    /// 挪过位置的设置：（旧的节，旧的键，新的节，新的键）。旧的位置照样读入，写回时只写新的位置。
+    const MOVED: &[(&str, &str, &str, &str)] = &[("git", "systemProxy", "network", "systemProxy")];
+
+    /// 节 `name` 中的 `key` 挪去的位置的那一项。
+    fn moved_to(name: &str, key: &str) -> Option<&'static Field<Self>> {
+        let &(_, _, section, key) = Self::MOVED.iter().find(|m| (m.0, m.1) == (name, key))?;
+        let &(_, fields) = Self::SECTIONS.iter().find(|&&(n, _)| n == section)?;
+        Self::find(fields, key)
+    }
+
+    /// 原文件 `root` 中，挪到节 `name` 的 `key` 那一项在旧位置上的值。
+    fn moved_from<'a>(root: &'a BTreeMap<String, Json>, name: &str, key: &str) -> Option<&'a Json> {
+        let &(section, old, ..) = Self::MOVED.iter().find(|m| (m.2, m.3) == (name, key))?;
+        root.get(section)?.as_object()?.get(old)
+    }
+
+    /// 节 `name` 中的 `key` 是否已经挪走（见 [`Config::MOVED`]）。
+    fn is_moved(name: &str, key: &str) -> bool {
+        Self::MOVED.iter().any(|m| (m.0, m.1) == (name, key))
+    }
+
+    /// `remote` 一节。
+    const REMOTE: &[Field<Self>] = &[
+        bool_field!("enabled", remote_enabled),
+        Field {
+            key: "localFolders",
+            read: |config, value, name, problems| {
+                read_local_folders(value, name, &mut config.remote_local_folders, problems)
+            },
+            write: |config| {
+                let folders = &config.remote_local_folders;
+                let pairs = (folders.iter())
+                    .map(|(remote, local)| (remote.as_str(), Json::String(local.clone())));
+                (!folders.is_empty()).then(|| Json::object(pairs))
+            },
+        },
+    ];
+
+    /// `keyboard` 一节：键位方案和改过的快捷键；命令名和按键写法由应用检查。
+    const KEYBOARD: &[Field<Self>] = &[
+        Field {
+            key: "keymap",
+            read: |config, value, name, problems| {
+                config.keymap = match value.as_str() {
+                    Some(key @ ("idea" | "vscode")) => Some(key.to_owned()),
+                    _ => {
+                        problems.push(t!("config-keymap-invalid", name = name));
+                        None
+                    }
+                }
+            },
+            write: |config| config.keymap.clone().map(Json::String),
+        },
+        Field {
+            key: "shortcuts",
+            read: |config, value, name, problems| {
+                let entries = value.as_object().and_then(|object| {
+                    (object.iter())
+                        .map(|(command, keys)| {
+                            let keys = keys.as_array()?.iter().map(|key| key.as_str());
+                            let keys: Option<Vec<&str>> = keys.collect();
+                            Some((
+                                command.clone(),
+                                keys?.into_iter().map(str::to_owned).collect(),
+                            ))
+                        })
+                        .collect::<Option<BTreeMap<String, Vec<String>>>>()
+                });
+                match entries {
+                    Some(entries) => config.shortcuts = entries,
+                    None => problems.push(t!("config-shortcuts-invalid", name = name)),
+                }
+            },
+            write: |config| {
+                (!config.shortcuts.is_empty()).then(|| {
+                    let keys = |keys: &Vec<String>| {
+                        Json::Array(keys.iter().cloned().map(Json::String).collect())
+                    };
+                    let object = config.shortcuts.iter().map(|(k, v)| (k.clone(), keys(v)));
+                    Json::Object(object.collect())
+                })
+            },
+        },
+    ];
+
+    /// `format` 一节，用户配置和项目配置共用。
+    ///
+    /// 语言可以写 id 或状态栏上显示的名字（如 `json`、`JSON`），统一存成 id。
+    const FORMAT: &[Field<Self>] = &[
+        bool_field!("onSave", format_on_save),
+        Field {
+            key: "onSaveExclude",
+            read: |config, value, name, problems| {
+                let Some(items) = value.as_array() else {
+                    problems.push(t!("config-not-array", name = name));
+                    return;
+                };
+                for item in items {
+                    let Some(language) = item.as_str() else {
+                        problems.push(t!("config-item-not-string", name = name));
+                        continue;
+                    };
+                    if let Some(id) = language_id(language, name, problems)
+                        && !config.format_on_save_exclude.contains(&id)
+                    {
+                        config.format_on_save_exclude.push(id);
+                    }
+                }
+            },
+            write: |config| {
+                let ids = &config.format_on_save_exclude;
+                (!ids.is_empty())
+                    .then(|| Json::Array(ids.iter().cloned().map(Json::String).collect()))
+            },
+        },
+        Field {
+            key: "commands",
+            read: |config, value, name, problems| {
+                read_commands(value, name, &mut config.format_commands, problems)
+            },
+            write: |config| commands_json(&config.format_commands),
+        },
+        bool_field!("fixOnSave", fix_on_save),
+        Field {
+            key: "fixCommands",
+            read: |config, value, name, problems| {
+                read_commands(value, name, &mut config.fix_commands, problems)
+            },
+            write: |config| commands_json(&config.fix_commands),
+        },
+    ];
+
+    /// 在 `fields` 中找键名为 `key` 的一项。
+    fn find<'a>(fields: &'a [Field<Self>], key: &str) -> Option<&'a Field<Self>> {
+        fields.iter().find(|field| field.key == key)
+    }
+
+    /// 顶层的 `key` 是否是认识的设置：[`Config::SECTIONS`] 中某一节的名字，或 [`Config::TOP_LEVEL`] 中的一项。
+    fn is_known(key: &str) -> bool {
+        Self::SECTIONS.iter().any(|&(name, _)| name == key)
+            || Self::find(Self::TOP_LEVEL, key).is_some()
+    }
+
+    /// 把名为 `name` 的一节读入 `config`：不是对象，或其中有 `fields` 以外的键时，记入 `problems`。
+    fn read_section(
+        config: &mut Self,
+        name: &str,
+        fields: &[Field<Self>],
+        section: &Json,
+        problems: &mut Vec<String>,
+    ) {
+        let Some(values) = section.as_object() else {
+            problems.push(t!("config-not-object", name = name));
+            return;
+        };
+        for (key, value) in values {
+            match Self::find(fields, key).or_else(|| Self::moved_to(name, key)) {
+                Some(field) => (field.read)(config, value, &format!("{name}.{key}"), problems),
+                None => problems.push(t!("config-unknown-key", key = format!("{name}.{key}"))),
+            }
+        }
+    }
+}
+
+/// 把 `f32` 转成 JSON 数字，按 `f32` 的最短十进制写法输出：`12.3` 不写成 `12.300000190734863`。
+fn number(value: f32) -> Json {
+    Json::Number(value.to_string().parse().unwrap_or(f64::from(value)))
 }
 
 #[cfg(test)]

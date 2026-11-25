@@ -574,17 +574,6 @@ impl App {
         self.open_prompt(PromptKind::RenameBranch { old }, field);
     }
 
-    /// 打开 `kind` 的输入条，输入框为 `field`，焦点移到输入条上；文件树中正在进行的名称输入先结束。
-    pub(in crate::app) fn open_prompt(&mut self, kind: PromptKind, field: TextField) {
-        self.finish_name_input();
-        self.bars.goto_input = Some(field);
-        self.bars.prompt_kind = kind;
-        self.ime.field_preedit.clear();
-        self.focus = Focus::Prompt;
-        self.relayout();
-        self.request_redraw();
-    }
-
     /// 关闭跳转条以及文件树中的名称输入行。
     pub(in crate::app) fn close_prompt(&mut self) {
         self.bars.goto_input = None;

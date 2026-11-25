@@ -7,7 +7,7 @@
 //! 正在运行的 winc，由当前进程新建实例。
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use winc_i18n::t;
 
@@ -309,7 +309,7 @@ pub fn argument(target: &Target) -> OsString {
             let host = at.target.as_str();
             OsString::from(format!("ssh://{host}{}", percent_encode(&at.path)))
         }
-        None => OsString::from(crate::instance::absolute(&target.path)),
+        None => OsString::from(absolute(&target.path)),
     };
     if let Some(line) = target.line {
         arg.push(format!(":{}", line + 1));
@@ -318,6 +318,31 @@ pub fn argument(target: &Target) -> OsString {
         }
     }
     arg
+}
+
+/// 返回 `path` 的规范绝对路径。
+///
+/// 交给另一个进程前需要先解析相对路径、`.` 与符号链接，才能与对方已打开目录的规范路径对应。
+/// 路径不存在时（例如 `winc 新目录/新文件.txt`）解析最近一个存在的上级目录，再拼上其余部分；
+/// 只解析文件所在的那一层不够：该层也可能不存在，而当前目录本身可能经由符号链接进入。
+pub fn absolute(path: &Path) -> PathBuf {
+    // 远端的路径（虚拟路径）本身就是绝对路径，不在本机上解析。
+    if winc_backend::is_remote(path) {
+        return path.to_path_buf();
+    }
+    if let Ok(path) = winc_config::files::canonicalize(path) {
+        return path;
+    }
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    for ancestor in path.ancestors().skip(1) {
+        if let (Ok(real), Ok(rest)) = (
+            winc_config::files::canonicalize(ancestor),
+            path.strip_prefix(ancestor),
+        ) {
+            return real.join(rest);
+        }
+    }
+    path
 }
 
 /// 把路径编码为 URL 的路径部分：保留字母、数字、`/` 和 `-._~`，其余字节写作 `%XX`。

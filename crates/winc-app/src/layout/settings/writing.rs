@@ -1,7 +1,6 @@
 //! Settings shown for parity review. A Beta row is descriptive only: it has no
 //! persisted value or control until its editing behavior is wired up.
 
-use super::{Section, Setting, SettingsPage};
 use winc_i18n::t;
 
 macro_rules! beta_settings {
@@ -11,8 +10,8 @@ macro_rules! beta_settings {
         pub enum BetaSetting { $($($setting,)*)* }
 
         impl BetaSetting {
-            pub(super) fn page(self) -> SettingsPage {
-                match self { $($(Self::$setting => SettingsPage::$page,)*)* }
+            pub(super) fn is_markdown(self) -> bool {
+                match self { $($(Self::$setting => beta_settings!(@markdown $page),)*)* }
             }
 
             pub(super) fn label(self) -> &'static str {
@@ -24,6 +23,8 @@ macro_rules! beta_settings {
             }
         }
     };
+    (@markdown Writing) => { false };
+    (@markdown Markdown) => { true };
     (@desc $desc:literal) => { Some(t!($desc)) };
     (@desc) => { None };
 }
@@ -90,20 +91,33 @@ beta_settings! {
     }
 }
 
-fn group(title: &'static str, items: impl IntoIterator<Item = Setting>) -> Section {
-    Section {
-        title: Some(title),
-        items: items.into_iter().collect(),
-    }
+/// 写作页与 Markdown 页分组表中的单项，由父模块映射为 `Setting`。
+#[derive(Debug, Clone, Copy)]
+pub(super) enum WritingItem {
+    Beta(BetaSetting),
+    Shortcuts,
+    SelectionToolbar,
+    Typewriter,
+    Focus,
+    RemoteImages,
+    TextWidth,
+    LineNumbers,
 }
 
-fn beta_group(title: &'static str, items: &[BetaSetting]) -> Section {
-    group(title, items.iter().copied().map(Setting::Beta))
+fn group(
+    title: &'static str,
+    items: impl IntoIterator<Item = WritingItem>,
+) -> (&'static str, Vec<WritingItem>) {
+    (title, items.into_iter().collect())
 }
 
-pub(super) fn writing_sections() -> Vec<Section> {
+fn beta_group(title: &'static str, items: &[BetaSetting]) -> (&'static str, Vec<WritingItem>) {
+    group(title, items.iter().copied().map(WritingItem::Beta))
+}
+
+pub(super) fn writing_groups() -> Vec<(&'static str, Vec<WritingItem>)> {
     use BetaSetting::*;
-    use Setting::Beta;
+    use WritingItem::Beta;
     vec![
         beta_group(
             t!("settings-section-spelling"),
@@ -114,8 +128,8 @@ pub(super) fn writing_sections() -> Vec<Section> {
             [
                 Beta(PairBrackets),
                 Beta(PairMarkdown),
-                Setting::MarkdownShortcuts,
-                Setting::MarkdownSelectionToolbar,
+                WritingItem::Shortcuts,
+                WritingItem::SelectionToolbar,
             ],
         ),
         beta_group(t!("settings-section-writing-direction"), &[Direction]),
@@ -150,11 +164,11 @@ pub(super) fn writing_sections() -> Vec<Section> {
         ),
         group(
             t!("settings-markdown-typewriter"),
-            [Setting::MarkdownTypewriter, Beta(TypewriterWithFocus)],
+            [WritingItem::Typewriter, Beta(TypewriterWithFocus)],
         ),
         group(
             t!("settings-markdown-focus"),
-            [Setting::MarkdownFocus, Beta(FocusWithTypewriter)],
+            [WritingItem::Focus, Beta(FocusWithTypewriter)],
         ),
         beta_group(
             t!("settings-section-flow-mode"),
@@ -163,7 +177,7 @@ pub(super) fn writing_sections() -> Vec<Section> {
     ]
 }
 
-pub(super) fn markdown_sections() -> Vec<Section> {
+pub(super) fn markdown_groups() -> Vec<(&'static str, Vec<WritingItem>)> {
     use BetaSetting::*;
     vec![
         beta_group(
@@ -207,9 +221,9 @@ pub(super) fn markdown_sections() -> Vec<Section> {
         group(
             t!("settings-section-markdown-display"),
             [
-                Setting::RemoteImages,
-                Setting::TextWidth,
-                Setting::MarkdownLineNumbers,
+                WritingItem::RemoteImages,
+                WritingItem::TextWidth,
+                WritingItem::LineNumbers,
             ],
         ),
     ]

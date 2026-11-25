@@ -277,13 +277,6 @@ impl App {
         self.editor.active().map_or(0, |d| d.row_count())
     }
 
-    /// 返回文本区可容纳的行数，至少为 1。
-    pub(in crate::app) fn visible_lines(&self) -> usize {
-        (self.layout.text.h / self.fonts.line_height)
-            .floor()
-            .max(1.0) as usize
-    }
-
     /// 返回翻页时移动的行数：可见行数减 1，至少为 1。
     fn page_lines(&self) -> usize {
         self.visible_lines().saturating_sub(1).max(1)
@@ -461,20 +454,6 @@ impl App {
         max_x
     }
 
-    /// 把 `text` 写入剪贴板。
-    ///
-    /// `whole_line` 为 `true` 表示复制的是整行，粘贴到编辑区时插入当前行上方。
-    pub(in crate::app) fn set_clipboard(&mut self, text: String, whole_line: bool) {
-        if self.clipboard.set_text(text, whole_line) {
-            self.forget_remote_copy();
-        }
-    }
-
-    /// 返回剪贴板中的文本；没有时返回 `None`。
-    pub(in crate::app) fn clipboard_text(&mut self) -> Option<String> {
-        self.clipboard.text()
-    }
-
     /// 复制选区（`cut` 为 `true` 时剪切）；没有选区时操作光标所在的整行。
     pub(in crate::app) fn copy(&mut self, cut: bool) {
         // 十六进制视图：复制选中的字节，写成十六进制；只读，不能剪切。
@@ -615,47 +594,6 @@ impl App {
                 Command::Insert(String::new())
             });
         }
-    }
-
-    /// 粘贴剪贴板内容。
-    ///
-    /// 焦点在输入框时插入文本；在编辑区时粘贴文件、文本或图片，在文件树中粘贴文件或图片
-    /// （见 `paste` 模块）。
-    pub(in crate::app) fn paste(&mut self) {
-        match self.focus {
-            focus if focus.is_field() => {
-                if let Some(content) = self.clipboard_text() {
-                    self.edit_field(|field| field.insert(&content));
-                }
-            }
-            Focus::Editor => self.paste_into_editor(),
-            Focus::Tree => self.paste_into_tree(),
-            Focus::Terminal => self.terminal_paste(),
-            _ => {}
-        }
-
-        self.request_redraw();
-    }
-
-    /// 在编辑区粘贴文本 `content`。
-    ///
-    /// 没有选区且 `content` 等于最近一次整行复制的内容时，插入到当前行上方；否则在光标处插入。
-    /// Markdown 中网址、图片网址和表格单元格按 [`App::markdown_paste`] 改写。
-    pub(super) fn paste_text(&mut self, content: String) {
-        if let Some(text) = self.markdown_paste(&content) {
-            self.run(Command::Insert(text));
-            return;
-        }
-        let empty_selection = self
-            .editor
-            .active()
-            .is_some_and(|d| d.selections().0.iter().all(|s| s.is_empty()));
-        let whole_line = empty_selection && self.clipboard.holds_line(&content);
-        self.run(if whole_line {
-            Command::InsertLinesAbove(content)
-        } else {
-            Command::Paste(content)
-        });
     }
 
     /// 编辑器核心 · 界面到文档：执行 `command`，再更新布局、滚动和光标闪烁。

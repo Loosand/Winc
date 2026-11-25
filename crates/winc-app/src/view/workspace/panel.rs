@@ -103,20 +103,6 @@ pub(super) fn draw_view_tabs(app: &App, frame: &mut Frame<'_>) {
     }
 }
 
-/// 分段控件里凸起那一段的底色和细边：浅色配色是白底、淡黑边；深色配色是比底槽 `track` 亮一档的
-/// 灰、淡白边。
-///
-/// 都是不透明色，叠在底槽上不会透出下面。
-pub(in crate::view) fn segment_colors(p: &Palette, track: Color) -> (Color, Color) {
-    let white = Color::hex(0xFFFFFF);
-    if p.dark {
-        let raised = over(track, white.alpha(0.09));
-        (raised, over(track, white.alpha(0.14)))
-    } else {
-        (white, over(track, Color::hex(0x000000).alpha(0.08)))
-    }
-}
-
 /// 在图标按钮 `button` 的右上角、图标外面绘制一个强调色的小圆点，表示有未提交的改动；外面
 /// 一圈按钮底色 `ring`，与按钮底色隔开。
 ///
@@ -893,19 +879,6 @@ fn draw_match_row(
     }
 
     ui_text(frame, app, x, row, after, p.text_muted, clip);
-}
-
-/// 返回 `fg` 叠在不透明的 `bg` 上得到的颜色，结果不透明。
-///
-/// 用于绘制与下层完全相同的底色，以遮盖其上的文本。
-pub(in crate::view) fn over(bg: Color, fg: Color) -> Color {
-    let mix = |b: f32, f: f32| b + (f - b) * fg.a;
-    Color {
-        r: mix(bg.r, fg.r),
-        g: mix(bg.g, fg.g),
-        b: mix(bg.b, fg.b),
-        a: 1.0,
-    }
 }
 
 /// 返回面板内按钮的悬停提示（按钮矩形和提示文本）；没有提示时返回 `None`。

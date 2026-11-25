@@ -22,10 +22,10 @@ use winc_syntax::{Highlighter, LineState};
 
 use crate::Command;
 use crate::diff_view::DiffView;
+use crate::editing::Marks;
 use crate::editing::cursors::others;
 use crate::editing::folding::{Folds, LineWindow, Tracked, WindowKey, WrapKey};
 use crate::editing::long_lines::WholeLines;
-use crate::editing::modal::Marks;
 use crate::editing::scopes::{self, FoldRange, Scope, ScopeMemo};
 use crate::navigation::bookmarks::Bookmarks;
 use content::Content;

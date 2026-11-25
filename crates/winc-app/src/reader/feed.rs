@@ -100,6 +100,32 @@ impl Entry {
         )
     }
 
+    /// Archive this feed entry or retrieve its original article.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid URL or a storage failure.
+    pub fn save(
+        &self,
+        root: &Path,
+        missing: &str,
+        fetch: store::Fetch,
+    ) -> io::Result<store::Article> {
+        let draft = store::EntryDraft {
+            url: &self.url,
+            title: &self.title,
+            full: self.full,
+            base: self.base(),
+        };
+        store::save_rendered_entry(
+            root,
+            &draft,
+            |download| self.markdown(download, missing),
+            missing,
+            fetch,
+        )
+    }
+
     pub(super) fn base(&self) -> &str {
         &self.base
     }

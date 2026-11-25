@@ -47,7 +47,7 @@ enum Source {
         stderr: Option<thread::JoinHandle<Vec<u8>>>,
     },
     /// 远端主机上的命令。
-    Remote(BufReader<winc_backend::remote::Running>),
+    Remote(winc_backend::remote::Running),
 }
 
 /// 从 `reader` 读取以 `separator` 结尾的记录追加到 `out`，直到读够 `count` 条或输出结束
@@ -91,7 +91,7 @@ impl Stream {
             let exec = remote_exec(command, Vec::new()).limit(MAX_OUTPUT);
             let running = winc_backend::remote::spawn(dir, &exec).map_err(RunError::Spawn)?;
             return Ok(Self {
-                source: Source::Remote(BufReader::new(running)),
+                source: Source::Remote(running),
                 eof: false,
             });
         }
@@ -150,21 +150,27 @@ impl Stream {
             } => (child, stdout, stderr),
             Source::Remote(running) => {
                 // 远端的命令没有本机的进程可以终止：到时读取返回超时，释放时通知远端结束它。
-                let deadline = std::time::Instant::now() + timeout;
-                running.get_mut().read_until(Some(deadline));
-                let failed = read_some(running, separator, count, &mut out, &mut self.eof);
-                return match failed {
-                    Some(e) if e.kind() == io::ErrorKind::TimedOut => {
+                return match running.read_records(separator, count, timeout, &mut out) {
+                    Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                        self.eof = true;
                         Err(StreamError::Run(RunError::Timeout))
                     }
-                    Some(e) if e.kind() == io::ErrorKind::FileTooLarge => {
+                    Err(e) if e.kind() == io::ErrorKind::FileTooLarge => {
+                        self.eof = true;
                         Err(StreamError::Run(RunError::TooLarge))
                     }
-                    Some(e) => Err(StreamError::Run(RunError::Spawn(e))),
-                    None if self.eof && running.get_ref().code() != Some(Some(0)) => {
-                        Err(StreamError::Exited(running.get_ref().stderr().to_vec()))
+                    Err(e) => {
+                        self.eof = true;
+                        Err(StreamError::Run(RunError::Spawn(e)))
                     }
-                    None => Ok((out, self.eof)),
+                    Ok(eof) => {
+                        self.eof = eof;
+                        if self.eof && running.code() != Some(Some(0)) {
+                            Err(StreamError::Exited(running.stderr().to_vec()))
+                        } else {
+                            Ok((out, self.eof))
+                        }
+                    }
                 };
             }
         };

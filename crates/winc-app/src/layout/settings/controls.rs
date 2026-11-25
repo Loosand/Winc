@@ -2,6 +2,26 @@
 
 use super::*;
 
+/// 返回设置卡片在窗口 `window` 中的位置：从中央移动 `offset`，四周至少留出 `SETTINGS_MARGIN`。
+pub fn settings_card(window: Rect, (dx, dy): (f32, f32)) -> Rect {
+    let w = SETTINGS_W.min(window.w - SETTINGS_MARGIN * 2.0).max(0.0);
+    let h = SETTINGS_H.min(window.h - SETTINGS_MARGIN * 2.0).max(0.0);
+    // 窗口过小时上下限颠倒，以下限为准，不用 `clamp`。
+    let place = |start: f32, span: f32, size: f32, d: f32| {
+        let centered = start + (span - size) / 2.0 + d;
+        centered
+            .min(start + span - SETTINGS_MARGIN - size)
+            .max(start + SETTINGS_MARGIN)
+            .round()
+    };
+    Rect::new(
+        place(window.x, window.w, w, dx),
+        place(window.y, window.h, h, dy),
+        w,
+        h,
+    )
+}
+
 /// 返回字体输入框 `control` 右端下拉按钮的位置。
 pub(crate) fn font_menu_button(control: Rect) -> Rect {
     const WIDTH: f32 = 26.0;

@@ -8,11 +8,11 @@ use std::borrow::Cow;
 use winc_core::edit::{self, EditKind, EditOptions, Transaction};
 use winc_core::text::Aligned;
 use winc_core::transform::{self, Case};
-use winc_core::{Lines, Restored, Selection, movement};
+use winc_core::{Lines, Selection, movement};
 use winc_syntax::Language;
 
 use crate::Document;
-use crate::editing::folding::Tracked;
+use crate::EDIT_LIMIT;
 
 /// 编辑命令。
 ///
@@ -164,29 +164,6 @@ impl Command {
 }
 
 impl Document {
-    /// 编辑器核心 · 文档命令：把 `Command` 分派到移动选区、生成编辑事务或撤销／重做。
-    /// 这里不需要知道 Markdown 是以源码还是排版视图呈现的。
-    ///
-    /// `page_lines` 是翻页命令一次移动的行数（行），`tab_width` 是制表符宽度（列）。
-    /// 只读文档拒绝编辑类命令，此时不做任何事。有多个选区时，除撤销、重做外的命令在每个
-    /// 选区上各执行一次。
-    pub fn execute(&mut self, command: Command, page_lines: usize, tab_width: usize) {
-        if self.edit_blocked(&command).is_some() {
-            return;
-        }
-
-        // 移动选区的命令记下移动前的选区，供光标撤销（`⌘U`）退回。
-        if !command.is_edit() {
-            self.record_cursors();
-        }
-
-        if self.has_cursors() && !matches!(command, Command::Undo | Command::Redo) {
-            self.execute_each(command, page_lines, tab_width);
-        } else {
-            self.execute_one(command, page_lines, tab_width);
-        }
-    }
-
     /// 只按主选区执行 `command`；参数含义同 [`Self::execute`]，调用方已检查过能否执行。
     pub(crate) fn execute_one(&mut self, command: Command, page_lines: usize, tab_width: usize) {
         let page = page_lines.max(1) as isize;
@@ -229,22 +206,7 @@ impl Document {
         }
 
         match command {
-            Command::Undo | Command::Redo => {
-                let mut text = Tracked {
-                    text: &mut self.text,
-                    folds: &mut self.folds,
-                    bookmarks: &mut self.bookmarks,
-                    whole: &mut self.whole,
-                    marks: &mut self.marks,
-                    parked: &mut self.parked,
-                };
-                let result = if command == Command::Undo {
-                    self.history.undo(&mut text)
-                } else {
-                    self.history.redo(&mut text)
-                };
-                self.restore(result);
-            }
+            Command::Undo | Command::Redo => {}
             command if command.is_edit() => {
                 if let Some(transaction) = self.transaction(&command, tab_width) {
                     self.apply(transaction);
@@ -305,21 +267,6 @@ impl Document {
         self.skip_hidden(before);
     }
 
-    /// 应用撤销或重做的结果：刷新受影响的缓存，把选区夹取到文档范围内，并恢复多光标。
-    fn restore(&mut self, result: Option<Restored>) {
-        if let Some(Restored {
-            selection,
-            extra,
-            first,
-        }) = result
-        {
-            self.after_change(first);
-            self.redetect_line_ending();
-            self.selection = selection.clamped(self.text.end_pos());
-            self.restore_extra(extra);
-        }
-    }
-
     /// 返回移动类命令 `command` 执行后的选区；其他命令返回当前选区。
     fn moved(&self, command: Command) -> Selection {
         let text = &self.text;
@@ -371,6 +318,11 @@ impl Document {
             }
             _ => sel,
         }
+    }
+
+    /// 是否可以读取并修改位置区间 `from..to` 内的文本：区间的字节数不超过 [`EDIT_LIMIT`]。
+    pub fn fits_edit(&self, from: usize, to: usize) -> bool {
+        self.text.byte_len(from.min(to), to) <= EDIT_LIMIT
     }
 
     /// 把编辑类命令转换为事务；命令没有产生修改时返回 `None`。

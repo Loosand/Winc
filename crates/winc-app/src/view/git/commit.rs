@@ -22,9 +22,9 @@ use crate::app::{
     StashLine, StashView, SyncState, WorktreeLine,
 };
 use crate::icons::Direction;
-use crate::view::workspace::sidebar::{
+use crate::view::controls::list::{
     BADGE_CENTER, BADGE_ROOM, CHAIN_FOLD, CHAIN_GAP, CHAIN_SEPARATOR, FADE_FROM, NAME_FADE,
-    fold_chain, git_color, retracting_color,
+    fold_chain, retracting_color,
 };
 use crate::view::*;
 
@@ -698,7 +698,7 @@ fn draw_sticky(
 ///
 /// 渐隐的高度与标签栏两端的渐隐（`TAB_FADE`）相同，强度随 `rest` 在该高度内线性变化。
 fn draw_list_fade(app: &App, frame: &mut Frame<'_>, list: Rect, rest: f32) {
-    use crate::view::workspace::top_bar::TAB_FADE;
+    use crate::view::controls::list::TAB_FADE;
     let strength = (rest / TAB_FADE).min(1.0);
     if strength <= 0.0 || list.h < 2.0 * TAB_FADE {
         return;

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use roxmltree::{Node, NodeId};
 use zeno::{Cap, Command, Fill, Join};
 
-use crate::image::{Picture, Pixels, Source};
+use crate::raster::Pixels;
 
 mod bitmap;
 mod css;
@@ -28,9 +28,9 @@ mod style;
 mod syntax;
 mod text;
 
+use canvas::{Blend, premultiply};
 use filter::Filter;
 use masking::*;
-use paint::*;
 use syntax::*;
 
 pub use render::MAX_EDGE;
@@ -90,31 +90,6 @@ pub struct Drawing {
     pub missing: Vec<&'static str>,
 }
 
-/// 读取一张 SVG 用于预览。
-///
-/// `base` 是 SVG 文件所在的目录，`<image>` 引用同目录的位图时从这里查找；
-/// `glyphs` 提供文字所需的字形，为 `None` 时不绘制文字。
-///
-/// # Errors
-///
-/// XML 语法错误或根元素不是 `<svg>` 时返回原因。
-pub fn load(
-    text: &str,
-    base: Option<&Path>,
-    glyphs: Option<Arc<dyn Glyphs>>,
-) -> Result<Picture, String> {
-    let drawing = Drawing::parse(text, base, glyphs)?;
-    Ok(Picture {
-        width: drawing.width.round().max(1.0) as u32,
-        height: drawing.height.round().max(1.0) as u32,
-        format: "SVG",
-        file_size: text.len() as u64,
-        source: Source::Vector(Arc::new(drawing)),
-        transparent: true,
-        density: 1,
-    })
-}
-
 /// Render an SVG thumbnail using only the drawing and assets embedded in it.
 ///
 /// # Errors
@@ -154,7 +129,7 @@ enum Item {
 struct Group {
     opacity: f32,
     /// `mix-blend-mode`：与下层已画好的内容混合。
-    blend: filter::Blend,
+    blend: Blend,
     clip: Option<Arc<Clip>>,
     mask: Option<Arc<MaskRef>>,
     filter: Option<Arc<Filter>>,
@@ -276,7 +251,7 @@ struct Props {
     cap: Cap,
     join: Join,
     miter: f32,
-    /// 与 `text::Font` 的字族列表一样用 `Arc` 共享：每个元素都要复制一次父元素的样式。
+    /// 与 `style::Font` 的字族列表一样用 `Arc` 共享：每个元素都要复制一次父元素的样式。
     dashes: Arc<[f32]>,
     dash_offset: f32,
     color: [u8; 4],
@@ -285,7 +260,7 @@ struct Props {
     /// `color-interpolation-filters`：滤镜是否在线性 RGB 中计算（默认），否则在 sRGB 中计算。
     filters_linear: bool,
     pixelated: bool,
-    font: text::Font,
+    font: style::Font,
 }
 
 impl Default for Props {
@@ -308,7 +283,7 @@ impl Default for Props {
             stroke_first: false,
             filters_linear: true,
             pixelated: false,
-            font: text::Font::default(),
+            font: style::Font::default(),
         }
     }
 }
@@ -342,7 +317,7 @@ struct Own {
     overflow_visible: bool,
     non_scaling: bool,
     mask_alpha: bool,
-    blend: filter::Blend,
+    blend: Blend,
 }
 
 /// 元素上的一条样式声明（属性名、值），见 [`Parser::declared`]。
@@ -700,11 +675,11 @@ impl<'a, 'input> Parser<'a, 'input> {
         let parsed = match &own.filter {
             Some(FilterRef::Url(id)) => match self.ids.get(id.as_str()).copied() {
                 Some(target) if target.tag_name().name() == "filter" => {
-                    Some(filter::parse(self, target, ctm, bbox))
+                    Some(self.parse_filter(target, ctm, bbox))
                 }
                 _ => None,
             },
-            Some(FilterRef::Functions(text)) => Some(filter::functions(self, text, ctm, bbox)),
+            Some(FilterRef::Functions(text)) => Some(self.parse_filter_functions(text, ctm, bbox)),
             None => None,
         };
         let filter = match parsed {
@@ -744,14 +719,7 @@ impl<'a, 'input> Parser<'a, 'input> {
         self.children(node, props, inner.then(ctm), &mut inside, depth + 1);
         self.viewport = saved;
         let clip = (!own.overflow_visible).then(|| rect_clip(x, y, w, h, ctm));
-        push_group(
-            items,
-            (1.0, filter::Blend::Normal),
-            clip,
-            None,
-            None,
-            inside,
-        );
+        push_group(items, (1.0, Blend::Normal), clip, None, None, inside);
     }
 
     fn use_element(
@@ -906,7 +874,7 @@ fn bbox_of(items: &[Item], inverse: Affine) -> Option<[f32; 4]> {
 /// 把透明度直接乘进颜色（见 [`fade_solid`]），不再包成组。
 fn push_group(
     out: &mut Vec<Item>,
-    (opacity, blend): (f32, filter::Blend),
+    (opacity, blend): (f32, Blend),
     clip: Option<Arc<Clip>>,
     mask: Option<Arc<MaskRef>>,
     filter: Option<Arc<Filter>>,
@@ -916,8 +884,7 @@ fn push_group(
     if items.is_empty() && filter.is_none() {
         return;
     }
-    let simple =
-        blend == filter::Blend::Normal && clip.is_none() && mask.is_none() && filter.is_none();
+    let simple = blend == Blend::Normal && clip.is_none() && mask.is_none() && filter.is_none();
     let inline = simple
         && (opacity >= 1.0
             || match items.as_mut_slice() {
@@ -1021,3 +988,294 @@ fn nesting_exceeds(text: &str, limit: usize) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+/// 画布图层、像素预乘与混合模式。
+///
+/// 画布以预乘 alpha 的 RGBA8 存储像素并跟踪已绘制区域（[`Area`]），供渲染与滤镜共用。
+mod canvas {
+    /// 画布上的一块矩形区域（像素，右边界和下边界不含）。
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub(super) struct Area {
+        /// 左边界（像素列号，含）。
+        pub x0: usize,
+        /// 上边界（像素行号，含）。
+        pub y0: usize,
+        /// 右边界（像素列号，不含）。
+        pub x1: usize,
+        /// 下边界（像素行号，不含）。
+        pub y1: usize,
+    }
+
+    impl Area {
+        /// 空区域，`x0`、`y0` 取最大值，`x1`、`y1` 为 0；与任何区域求并集时结果等于对方。
+        pub(super) const EMPTY: Area = Area {
+            x0: usize::MAX,
+            y0: usize::MAX,
+            x1: 0,
+            y1: 0,
+        };
+
+        /// 是否为空区域（宽或高为 0）。
+        pub(super) fn is_empty(&self) -> bool {
+            self.x0 >= self.x1 || self.y0 >= self.y1
+        }
+
+        /// 返回同时包含 `self` 和 `o` 的最小矩形；`o` 为空时返回 `self`。
+        pub(super) fn union(self, o: Area) -> Area {
+            if o.is_empty() {
+                return self;
+            }
+            Area {
+                x0: self.x0.min(o.x0),
+                y0: self.y0.min(o.y0),
+                x1: self.x1.max(o.x1),
+                y1: self.y1.max(o.y1),
+            }
+        }
+
+        /// 返回 `self` 与 `o` 的交集；二者不相交时返回空区域。
+        pub(super) fn intersect(self, o: Area) -> Area {
+            Area {
+                x0: self.x0.max(o.x0),
+                y0: self.y0.max(o.y0),
+                x1: self.x1.min(o.x1),
+                y1: self.y1.min(o.y1),
+            }
+        }
+    }
+
+    /// 混合模式，由 CSS 的 `mix-blend-mode` 与 `feBlend` 的 `mode` 属性指定。
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub(super) enum Blend {
+        Normal,
+        Multiply,
+        Screen,
+        Overlay,
+        Darken,
+        Lighten,
+        ColorDodge,
+        ColorBurn,
+        HardLight,
+        SoftLight,
+        Difference,
+        Exclusion,
+    }
+
+    /// 返回 `mix-blend-mode` 的值或 `feBlend` 的 `mode` 属性对应的混合模式。
+    ///
+    /// 无法识别的值返回 `Blend::Normal`。
+    pub(super) fn blend_mode(value: &str) -> Blend {
+        match value.trim() {
+            "multiply" => Blend::Multiply,
+            "screen" => Blend::Screen,
+            "overlay" => Blend::Overlay,
+            "darken" => Blend::Darken,
+            "lighten" => Blend::Lighten,
+            "color-dodge" => Blend::ColorDodge,
+            "color-burn" => Blend::ColorBurn,
+            "hard-light" => Blend::HardLight,
+            "soft-light" => Blend::SoftLight,
+            "difference" => Blend::Difference,
+            "exclusion" => Blend::Exclusion,
+            _ => Blend::Normal,
+        }
+    }
+
+    /// 返回预乘的 `t`（上层）按 `mode` 混合到预乘的 `b`（下层）上的结果，结果同样是预乘的。
+    ///
+    /// 公式取自 W3C Compositing and Blending 规范。
+    pub(super) fn blend_pixel(t: [f32; 4], b: [f32; 4], mode: Blend) -> [f32; 4] {
+        let (at, ab) = (t[3], b[3]);
+        let un = |p: &[f32; 4], c: usize| if p[3] > 0.0 { p[c] / p[3] } else { 0.0 };
+        let mut result = [0.0; 4];
+        for c in 0..3 {
+            let (cs, cb) = (un(&t, c), un(&b, c));
+            let mixed = match mode {
+                Blend::Normal => cs,
+                Blend::Multiply => cs * cb,
+                Blend::Screen => cs + cb - cs * cb,
+                Blend::Overlay => hard_light(cb, cs),
+                Blend::Darken => cs.min(cb),
+                Blend::Lighten => cs.max(cb),
+                Blend::ColorDodge => {
+                    if cb == 0.0 {
+                        0.0
+                    } else if cs >= 1.0 {
+                        1.0
+                    } else {
+                        (cb / (1.0 - cs)).min(1.0)
+                    }
+                }
+                Blend::ColorBurn => {
+                    if cb >= 1.0 {
+                        1.0
+                    } else if cs <= 0.0 {
+                        0.0
+                    } else {
+                        1.0 - ((1.0 - cb) / cs).min(1.0)
+                    }
+                }
+                Blend::HardLight => hard_light(cs, cb),
+                Blend::SoftLight => {
+                    if cs <= 0.5 {
+                        cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb)
+                    } else {
+                        let d = if cb <= 0.25 {
+                            ((16.0 * cb - 12.0) * cb + 4.0) * cb
+                        } else {
+                            cb.sqrt()
+                        };
+                        cb + (2.0 * cs - 1.0) * (d - cb)
+                    }
+                }
+                Blend::Difference => (cs - cb).abs(),
+                Blend::Exclusion => cs + cb - 2.0 * cs * cb,
+            };
+            result[c] = (1.0 - ab) * t[c] + (1.0 - at) * b[c] + at * ab * mixed;
+        }
+        result[3] = at + ab - at * ab;
+        result
+    }
+
+    fn hard_light(cs: f32, cb: f32) -> f32 {
+        if cs <= 0.5 {
+            cb * 2.0 * cs
+        } else {
+            let s = 2.0 * cs - 1.0;
+            cb + s - cb * s
+        }
+    }
+
+    /// 返回预乘 alpha 的颜色：RGB 各分量乘以透明度。
+    pub(super) fn premultiply([r, g, b, a]: [u8; 4]) -> [u8; 4] {
+        let m = |c: u8| ((u32::from(c) * u32::from(a) + 127) / 255) as u8;
+        [m(r), m(g), m(b), a]
+    }
+
+    /// 返回 `src` 按 source-over 叠加到 `dst` 上的结果。
+    ///
+    /// `src` 为预乘颜色，且先按 `coverage`/255 缩放；结果是预乘颜色。
+    pub(super) fn over(dst: [u8; 4], src: [u8; 4], coverage: u32) -> [u8; 4] {
+        if coverage == 255 && src[3] == 255 {
+            return src;
+        }
+        let s = |c: u8| (u32::from(c) * coverage + 127) / 255;
+        let sa = s(src[3]);
+        let keep = 255 - sa;
+        std::array::from_fn(|i| (s(src[i]) + (u32::from(dst[i]) * keep + 127) / 255).min(255) as u8)
+    }
+
+    /// 预乘 alpha 的 RGBA 画布。
+    pub(super) struct Layer {
+        /// 宽度（像素）。
+        pub width: usize,
+        /// 高度（像素）。
+        pub height: usize,
+        /// 按行排列的像素，每个像素是预乘的 `[R, G, B, A]`，长度为 `width * height`。
+        pub px: Vec<[u8; 4]>,
+        /// 已绘制过的区域；叠加、裁剪、蒙版只处理这一块。
+        pub touched: Area,
+    }
+
+    impl Layer {
+        /// 创建 `width` × `height` 像素的全透明画布。
+        pub(super) fn new(width: usize, height: usize) -> Layer {
+            Layer {
+                width,
+                height,
+                // 全零内存通过 `alloc_zeroed` 申请，操作系统按需提交物理页；大画布上只绘制一小块时，
+                // 不会立即占满内存。
+                px: vec![[0; 4]; width * height],
+                touched: Area::EMPTY,
+            }
+        }
+
+        /// 返回覆盖整个画布的区域。
+        pub(super) fn full(&self) -> Area {
+            Area {
+                x0: 0,
+                y0: 0,
+                x1: self.width,
+                y1: self.height,
+            }
+        }
+
+        /// 返回覆盖度缓冲与画布相交的区域，以及 `placement` 的左、上偏移和缓冲每行的宽度
+        /// （像素）；二者不相交时返回 `None`。
+        pub(super) fn clip_placement(
+            &self,
+            placement: zeno::Placement,
+        ) -> Option<(Area, i32, i32, usize)> {
+            let (left, top) = (placement.left, placement.top);
+            let (mw, mh) = (placement.width as i32, placement.height as i32);
+            let area = Area {
+                x0: left.max(0) as usize,
+                y0: top.max(0) as usize,
+                x1: (left + mw).clamp(0, self.width as i32) as usize,
+                y1: (top + mh).clamp(0, self.height as i32) as usize,
+            };
+            (!area.is_empty()).then_some((area, left, top, mw as usize))
+        }
+
+        /// 把 `layer` 按不透明度 `alpha`（0 到 1）叠加到本层上。
+        pub(super) fn merge(&mut self, layer: &Layer, alpha: f32) {
+            let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
+            let area = layer.touched.intersect(self.full());
+            if area.is_empty() || a == 0 {
+                return;
+            }
+            for y in area.y0..area.y1 {
+                let row = y * self.width;
+                for x in area.x0..area.x1 {
+                    let src = layer.px[row + x];
+                    if src[3] > 0 {
+                        let dst = &mut self.px[row + x];
+                        *dst = over(*dst, src, a);
+                    }
+                }
+            }
+            self.touched = self.touched.union(area);
+        }
+
+        /// 把 `layer` 按不透明度 `alpha` 和混合模式 `mode` 叠加到本层上。
+        pub(super) fn blend(&mut self, layer: &Layer, alpha: f32, mode: Blend) {
+            let area = layer.touched.intersect(self.full());
+            if area.is_empty() {
+                return;
+            }
+            let a = alpha.clamp(0.0, 1.0);
+            for y in area.y0..area.y1 {
+                let row = y * self.width;
+                for x in area.x0..area.x1 {
+                    let src = layer.px[row + x];
+                    if src[3] == 0 {
+                        continue;
+                    }
+                    let t = src.map(|c| f32::from(c) / 255.0 * a);
+                    let b = self.px[row + x].map(|c| f32::from(c) / 255.0);
+                    let out = blend_pixel(t, b, mode);
+                    self.px[row + x] = out.map(|c| (c * 255.0).round().clamp(0.0, 255.0) as u8);
+                }
+            }
+            self.touched = self.touched.union(area);
+        }
+
+        /// 把每个像素乘以 `coverage` 中对应的覆盖度（0 到 255，尺寸与画布相同）。
+        pub(super) fn multiply(&mut self, coverage: &[u8]) {
+            let area = self.touched;
+            if area.is_empty() {
+                return;
+            }
+            for y in area.y0..area.y1 {
+                let row = y * self.width;
+                for x in area.x0..area.x1 {
+                    let k = u32::from(coverage[row + x]);
+                    if k < 255 {
+                        let p = &mut self.px[row + x];
+                        *p = p.map(|c| ((u32::from(c) * k + 127) / 255) as u8);
+                    }
+                }
+            }
+        }
+    }
+}

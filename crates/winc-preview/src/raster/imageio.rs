@@ -40,7 +40,7 @@ unsafe extern "C" {
 
 /// 把 JPEG `bytes` 解成长边不超过 `max` 的图；`ImageIO` 解不出来时返回 `None`，由调用方改用
 /// zune-jpeg。
-pub(super) fn decode_scaled(bytes: &[u8], max: u32) -> Option<Pixels> {
+pub(crate) fn decode_scaled(bytes: &[u8], max: u32) -> Option<Pixels> {
     let data = CFData::from_bytes(bytes);
     // SAFETY: `data` 是有效的 CFData；返回值按 Create 规则持有，交给 `CFRetained` 释放。
     let source = unsafe { CFRetained::from_raw(CGImageSourceCreateWithData(&data, None)?) };

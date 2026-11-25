@@ -450,7 +450,7 @@ fn draw_file_row(
         }
     } else if full.is_none() {
         // 收回途中名字还盖着状态字母那一块：字母随过渡淡入，不和名字叠在一起。
-        let ink = git_color(p, change);
+        let ink = p.git_change(change);
         let ink = if retracting {
             ink.alpha(ink.a * view.progress)
         } else {
@@ -480,7 +480,7 @@ fn draw_file_row(
     let reach = NAME_FADE * stage(view.progress, FADE_FROM, 1.0);
     if !wanted && text_x + content > name_end + 0.5 && reach > 0.0 {
         let solid = shade_color.map_or(p.sidebar_bg, |c| {
-            crate::view::workspace::panel::over(p.sidebar_bg, c)
+            crate::view::controls::over(p.sidebar_bg, c)
         });
         let edge = Rect::new(name_end - reach, y, reach, COMMIT_ROW);
         frame.within(name_clip, |frame| fade(frame, edge, solid, false));

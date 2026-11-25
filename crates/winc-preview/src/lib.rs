@@ -18,6 +18,7 @@ pub mod markdown;
 pub mod note_links;
 mod ooxml;
 pub mod pdf;
+mod raster;
 pub mod svg;
 pub mod table;
 pub mod xml;

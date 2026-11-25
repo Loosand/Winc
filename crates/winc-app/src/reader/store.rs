@@ -250,30 +250,40 @@ pub fn import(root: &Path, url: &Url, missing: &str, fetch: Fetch) -> io::Result
     grab_page(root, &url, url.as_str(), missing, fetch)
 }
 
-/// Archive a feed entry or retrieve its original article.
+/// Entry metadata needed to archive a rendered feed item.
+pub(super) struct EntryDraft<'a> {
+    pub(super) url: &'a str,
+    pub(super) title: &'a str,
+    pub(super) full: bool,
+    pub(super) base: &'a str,
+}
+
+/// Archive an entry whose body is rendered on demand, or fetch its original article.
 ///
 /// # Errors
 ///
 /// Returns an error for an invalid URL or a storage failure.
-pub fn save_entry(
+pub(super) fn save_rendered_entry(
     root: &Path,
-    entry: &super::feed::Entry,
+    entry: &EntryDraft<'_>,
+    render: impl FnOnce(&mut dyn FnMut(&str) -> Option<String>) -> String,
     missing: &str,
     fetch: Fetch,
 ) -> io::Result<Article> {
-    let url = article_url(&entry.url).ok_or(io::ErrorKind::InvalidInput)?;
+    let url = article_url(entry.url).ok_or(io::ErrorKind::InvalidInput)?;
     if !entry.full {
-        return grab_page(root, &url, &entry.title, missing, fetch);
+        return grab_page(root, &url, entry.title, missing, fetch);
     }
-    let (local, mut article) = create_link(root, &url, &entry.title)?;
+    let (local, mut article) = create_link(root, &url, entry.title)?;
     if !article.full {
-        let base = http_url(entry.base()).unwrap_or_else(|| url.clone());
+        let base = http_url(entry.base).unwrap_or_else(|| url.clone());
         let mut images = Images::new(&local, &base, &url, fetch);
-        let text = entry.markdown(|src| images.download(src), missing);
+        let mut download = |src: &str| images.download(src);
+        let text = render(&mut download);
         if text.trim().is_empty() {
-            return grab_page(root, &url, &entry.title, missing, fetch);
+            return grab_page(root, &url, entry.title, missing, fetch);
         }
-        store_body(&local, &mut article, &entry.title, &text)?;
+        store_body(&local, &mut article, entry.title, &text)?;
     }
     Ok(article)
 }

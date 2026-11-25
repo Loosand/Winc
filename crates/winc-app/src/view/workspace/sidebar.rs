@@ -7,7 +7,6 @@ use std::borrow::Cow;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::{Path, PathBuf};
 
-use winc_editor::git::Change;
 use winc_editor::{Entry, EntryKind};
 use winc_i18n::t;
 
@@ -20,6 +19,9 @@ use crate::layout::{
     tree_row_slot_at_height, tree_tools,
 };
 use crate::theme::SCROLLBAR_HIT;
+use crate::view::controls::list::{
+    BADGE_ROOM, CHAIN_FOLD, CHAIN_GAP, CHAIN_SEPARATOR, FADE_FROM, NAME_FADE, fold_chain,
+};
 
 /// 绘制侧栏：
 ///
@@ -185,13 +187,6 @@ fn draw_project_header(app: &mut App, frame: &mut Frame<'_>) {
 
 /// 文件树中目录有 Git 改动时，右端圆点的直径（逻辑像素）。
 const GIT_DOT: f32 = 6.0;
-/// 文件树中放不下的名称在侧栏边缘淡出的宽度（逻辑像素），
-/// 与结果行上按钮左侧的渐隐同宽。
-pub(in crate::view) const NAME_FADE: f32 = 20.0;
-/// 项目按钮里徽章占的宽度（逻辑像素）：左边 6、徽章 20、右边 8。
-pub(in crate::view) const BADGE_ROOM: f32 = 34.0;
-/// 徽章中心相对项目按钮左边的距离（逻辑像素）。
-pub(in crate::view) const BADGE_CENTER: f32 = 16.0;
 
 /// 侧栏第二行左边的上下文栏：现在在哪个项目。
 ///
@@ -723,7 +718,7 @@ fn draw_tree_entry(
         draw_file_icon(frame, p, (x + 1.5, cy), &entry.name, clip);
     }
     if entry.symlink {
-        let bg = background.map_or(p.sidebar_bg, |c| panel::over(p.sidebar_bg, c));
+        let bg = background.map_or(p.sidebar_bg, |c| over(p.sidebar_bg, c));
         icons::link_badge(frame, (x + 2.5, cy + 4.0), bg, p.text_muted, clip);
     }
 
@@ -806,13 +801,13 @@ fn draw_tree_entry(
     // 收回途中名字还连着编辑区上方那一段，到最后才淡出，名字不会先变暗、再缩回来。
     let reach = NAME_FADE * stage(view.progress, FADE_FROM, 1.0);
     if cut && (!hovered || folder_actions) && reach > 0.0 {
-        let solid = background.map_or(p.sidebar_bg, |c| panel::over(p.sidebar_bg, c));
+        let solid = background.map_or(p.sidebar_bg, |c| over(p.sidebar_bg, c));
         let edge = Rect::new(text_right - reach, row.y, reach, row.h);
         frame.within(clip, |frame| fade(frame, edge, solid, false));
     }
 
     if let Some(change) = change {
-        let color = git_color(p, change);
+        let color = p.git_change(change);
         match &letter {
             Some(letter) => {
                 ui_text_small(frame, app, mark_x, row, letter, color, clip);
@@ -870,16 +865,6 @@ fn draw_cloud_badge(
             ];
             frame.stroke(&warning, 1.1, p.error, clip);
         }
-    }
-}
-
-/// Git 状态在文件树、变更视图里用的颜色。
-pub(in crate::view) fn git_color(p: &Palette, change: Change) -> Color {
-    match change {
-        Change::Modified | Change::Renamed => p.git_modified,
-        Change::Added | Change::Untracked => p.git_added,
-        Change::Deleted => p.git_deleted,
-        Change::Conflicted => p.git_conflict,
     }
 }
 
@@ -947,7 +932,7 @@ fn draw_name_input(
     }
     // 用悬停的浅色而不是选中色：重命名时文件名主干是选中的，选中色底上看不出文字的选区。
     // 先和侧栏底色混合成不透明的颜色，盖住底下的红线。
-    let fill = super::panel::over(p.sidebar_bg, p.hover);
+    let fill = over(p.sidebar_bg, p.hover);
     frame.rect_corners(pill, fill, radii, row_clip);
 
     // 缩进和图标按普通行的位置放置，与上下相邻的条目对齐。
@@ -1011,16 +996,8 @@ fn draw_name_input(
     *ime = caret;
 }
 
-/// 名字收回时，末尾的淡出从过渡的这个进度开始出现（经验值）：名字已基本缩回侧栏。
-pub(in crate::view) const FADE_FROM: f32 = 0.7;
 /// 合并显示的目录中没有突出的各级的不透明度（经验值）：比突出的那一级淡，仍能看清。
 const CHAIN_DIM: f32 = 0.6;
-/// 合并显示的目录之间分隔符的不透明度（经验值）：比目录名淡，一眼能分出各级。
-pub(in crate::view) const CHAIN_SEPARATOR: f32 = 0.45;
-/// 合并显示的目录之间分隔符两侧各留的空白（逻辑像素，经验值）。
-pub(in crate::view) const CHAIN_GAP: f32 = 4.0;
-/// 合并显示的目录放不下时代替被折叠的各级的记号。
-pub(in crate::view) const CHAIN_FOLD: &str = "…";
 
 /// 返回文件树一行内名称起点的 x 坐标：位于缩进、箭头和图标之后，再加上横向滚动偏移
 /// `shift`（为负值）。
@@ -1061,7 +1038,7 @@ fn tree_entry_color(app: &App, entry: &Entry, selected: bool) -> Color {
     let active = app.editor.active().and_then(|d| d.path.as_deref());
     let is_active = !app.tree_open_pending() && active == Some(entry.path.as_path());
     let color = match app.git.change_of(&entry.path) {
-        Some(change) if !is_active || selected => git_color(p, change),
+        Some(change) if !is_active || selected => p.git_change(change),
         _ if is_active && !selected => p.accent,
         // 被 Git 忽略的条目（`target/`、`node_modules/` 及其中的项）用淡色绘制，
         // 表示其不受版本控制。
@@ -1254,18 +1231,6 @@ fn draw_overflow_band(
     }
 }
 
-/// 返回名字收回途中这一行的底色：选中的行不变，其余是悬停的底色随进度 `progress` 淡出。
-pub(in crate::view) fn retracting_color(
-    p: &Palette,
-    selected: bool,
-    focused: bool,
-    progress: f32,
-) -> Option<Color> {
-    row_color(p, selected, focused, false).or_else(|| {
-        row_color(p, selected, focused, true).map(|color| color.alpha(color.a * (1.0 - progress)))
-    })
-}
-
 /// 返回当前的一级在合并显示的目录中的下标：选中了其中某一级时是那一级，否则是最后一级；没有
 /// 合并时为 0。
 fn chain_current(app: &App, entry: &Entry) -> usize {
@@ -1454,63 +1419,6 @@ fn chain_folded(
         chain_current(app, entry),
         room,
     ))
-}
-
-/// 折叠放不进 `room` 的目录链，返回从左到右要显示的各部分（`Some` 是目录的下标，`None` 是一处折叠）
-/// 和总宽度。
-///
-/// `widths` 是各级名字的宽度，`step` 是相邻两部分之间分隔符和留白的宽度，`fold` 是折叠记号的宽度。
-/// 第一级和当前的一级 `current` 始终显示，最后一级放得下就显示；还有空间时从离 `current` 近的
-/// 各级依次补上，距离相同时先补靠后的。
-pub(in crate::view) fn fold_chain(
-    widths: &[f32],
-    step: f32,
-    fold: f32,
-    current: usize,
-    room: f32,
-) -> (Vec<Option<usize>>, f32) {
-    let last = widths.len() - 1;
-    let lay_out = |keep: &[bool]| {
-        let mut parts = Vec::new();
-        for (i, &kept) in keep.iter().enumerate() {
-            if kept {
-                parts.push(Some(i));
-            } else if parts.last() != Some(&None) {
-                parts.push(None);
-            }
-        }
-        let width: f32 = parts
-            .iter()
-            .map(|part| part.map_or(fold, |i| widths[i]))
-            .sum();
-        let width = width + step * parts.len().saturating_sub(1) as f32;
-        (parts, width)
-    };
-
-    let all = lay_out(&vec![true; widths.len()]);
-    if all.1 <= room {
-        return all;
-    }
-    let mut keep = vec![false; widths.len()];
-    keep[0] = true;
-    keep[current] = true;
-    keep[last] = true;
-    if lay_out(&keep).1 > room && current != last {
-        keep[last] = false;
-    }
-    let mut order: Vec<usize> = (0..widths.len()).collect();
-    order.sort_by_key(|&i| (i.abs_diff(current), std::cmp::Reverse(i)));
-    for i in order {
-        if keep[i] {
-            continue;
-        }
-        keep[i] = true;
-        if lay_out(&keep).1 > room {
-            keep[i] = false;
-            break;
-        }
-    }
-    lay_out(&keep)
 }
 
 /// 绘制侧栏开关按钮；侧栏展开时图标显示为展开状态。

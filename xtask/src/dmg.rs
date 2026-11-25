@@ -487,7 +487,7 @@ fn dmg_background(work: &Path, output: &Path) -> Result<(), String> {
         y0 = y - 12,
         y1 = y + 12,
     );
-    let picture = winc_preview::svg::load(&svg, None, None)?;
+    let picture = winc_preview::image::load_svg(&svg, None, None)?;
     let one = work.join("background.png");
     let two = work.join("background@2x.png");
     write_png(&one, &picture.render(w, h))?;
@@ -560,7 +560,7 @@ fn app_icon(work: &Path, output: &Path) -> Result<(), String> {
     let source = root().join(ICON_SOURCE);
     let text = std::fs::read_to_string(&source)
         .map_err(|e| format!("读不到 {}：{e}", source.display()))?;
-    let picture = winc_preview::svg::load(&text, None, None)?;
+    let picture = winc_preview::image::load_svg(&text, None, None)?;
 
     let iconset = work.join(format!("{ICON_NAME}.iconset"));
     let _ = std::fs::remove_dir_all(&iconset);

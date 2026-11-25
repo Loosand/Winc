@@ -123,8 +123,6 @@ pub struct Wheel {
     pub(crate) axis: Option<Axis>,
     /// 最近一次触控板或触摸滚动的时刻，见 [`SCROLL_INPUT_HOLD`]。
     pub(in crate::app) input_at: Option<Instant>,
-    /// 编辑区横向滚动中尚未体现在滚动位置上的距离（逻辑像素）。
-    pub(in crate::app) carry_x: f64,
 }
 
 impl App {

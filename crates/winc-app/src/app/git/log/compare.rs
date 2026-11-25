@@ -139,6 +139,15 @@ impl App {
         }
     }
 
+    /// 当前分支名；分离的 `HEAD` 时是「HEAD」。
+    pub(in crate::app) fn current_branch_label(&self) -> String {
+        self.git
+            .branches
+            .iter()
+            .find(|b| b.current)
+            .map_or_else(|| "HEAD".to_owned(), |b| b.name.clone())
+    }
+
     /// 把分支 `branch` 和当前分支比较（分支菜单「与当前分支比较」）：打开日志，详情一栏是从
     /// 当前分支到 `branch` 改了的文件。
     pub(in crate::app::git) fn git_compare_branch(&mut self, branch: &str) {

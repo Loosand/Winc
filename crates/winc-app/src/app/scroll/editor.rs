@@ -100,9 +100,9 @@ impl App {
         set_scroll_line(doc, doc.scroll_line - f64::from(dy / lh));
         // 展开的超长行可达数千万像素宽，`f32` 在该处的间隔大于一次滚动的距离：没有体现在滚动
         // 位置上的部分留到下一次，不丢弃。
-        let x = f64::from(doc.scroll_x) - f64::from(dx) + self.scroll.wheel.carry_x;
+        let x = f64::from(doc.scroll_x) - f64::from(dx) + self.scroll.carry_x;
         doc.scroll_x = x as f32;
-        self.scroll.wheel.carry_x = x - f64::from(doc.scroll_x);
+        self.scroll.carry_x = x - f64::from(doc.scroll_x);
         let wanted = doc.scroll_x;
 
         self.clamp_scroll();
@@ -112,7 +112,7 @@ impl App {
             .active()
             .is_some_and(|doc| doc.scroll_x != wanted)
         {
-            self.scroll.wheel.carry_x = 0.0;
+            self.scroll.carry_x = 0.0;
         }
     }
 

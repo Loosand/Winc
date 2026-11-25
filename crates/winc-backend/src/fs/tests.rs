@@ -1,6 +1,6 @@
 //! 文件操作：本机路径的结果与 `std::fs` 一致，虚拟路径被拒绝。
 
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use super::*;
 use crate::{Target, virtual_path};

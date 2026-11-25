@@ -306,6 +306,62 @@ fn update_button(app: &App) -> Option<UpdateButton> {
     Some(UpdateButton { icon, label })
 }
 
+/// 找到新版本 `version` 时的说明：不由应用自己更新的安装写明从哪里取得。
+fn found_text(version: &str) -> String {
+    #[cfg(not(target_os = "macos"))]
+    {
+        use crate::updates::Delivery;
+        match crate::updates::delivery() {
+            Some(Delivery::Download) => {
+                return t!("settings-updates-found-download", version = version);
+            }
+            Some(Delivery::Pacman) => {
+                return t!("settings-updates-found-pacman", version = version);
+            }
+            _ => {}
+        }
+    }
+    t!("settings-updates-found", version = version)
+}
+
+/// 「关于」页「更新」一行下方的状态文字和颜色；也是状态栏更新按钮的悬停提示（见
+/// [`update_tooltip`]）。
+pub(in crate::view) fn update_status(app: &App) -> (String, Color) {
+    use crate::winc::UpdateState;
+    let p = app.palette;
+    match &*app.link.shared.update_state.borrow() {
+        UpdateState::Off => (t!("settings-updates-off").to_owned(), p.text_muted),
+        UpdateState::Idle => (t!("settings-updates-idle").to_owned(), p.text_muted),
+        UpdateState::Checking => (t!("settings-updates-checking").to_owned(), p.text_muted),
+        UpdateState::Latest => (t!("settings-updates-latest").to_owned(), p.text_muted),
+        UpdateState::Found(version) => (found_text(version), p.accent),
+        UpdateState::Failed(None) => (t!("settings-updates-failed").to_owned(), p.text_muted),
+        UpdateState::Failed(Some(failure)) => (
+            t!(
+                "settings-updates-failed-because",
+                reason = failure.message()
+            ),
+            p.text_muted,
+        ),
+        UpdateState::Downloading(version, percent) => (
+            t!(
+                "settings-updates-downloading",
+                version = version.as_str(),
+                percent = *percent
+            ),
+            p.text_muted,
+        ),
+        UpdateState::Ready(version) => (
+            t!("settings-updates-ready", version = version.as_str()),
+            p.accent,
+        ),
+        UpdateState::InstallFailed(error) => (
+            t!("settings-updates-install-failed", error = error.as_str()),
+            p.error,
+        ),
+    }
+}
+
 /// 返回更新按钮的悬停提示：与「关于」页的更新状态相同，写明版本号、进度或失败的原因。
 ///
 /// 找到新版本后再次检查失败时，按钮仍是「更新」，提示仍写找到的版本。
@@ -314,7 +370,7 @@ pub(in crate::view) fn update_tooltip(app: &App) -> Option<String> {
     let version = app.link.shared.update.borrow().clone()?;
     let tip = match &*app.link.shared.update_state.borrow() {
         UpdateState::Downloading(..) | UpdateState::Ready(_) | UpdateState::InstallFailed(_) => {
-            return Some(super::settings::update_status(app).0);
+            return Some(update_status(app).0);
         }
         _ => t!("settings-updates-found", version = version.as_str()),
     };

@@ -78,7 +78,13 @@ fn draw_pane(app: &mut App, frame: &mut Frame<'_>, front: bool) {
     if front {
         app.sync_merge_panes();
     }
-    draw_editor(app, frame);
+    match draw_editor(app, frame) {
+        editor::PaneView::Drawn => {}
+        editor::PaneView::Library => workspace::library::draw(app, frame),
+        editor::PaneView::Start => workspace::start::draw(app, frame),
+        editor::PaneView::Diff(index) => diff::draw_diff(app, frame, index),
+        editor::PaneView::Log(index) => git::log::draw_log(app, frame, index),
+    }
     editor::draw_split(app, frame);
     preview::markdown::draw_diagram_view(app, frame);
     git::merge::draw_side_panes(app, frame);
@@ -913,7 +919,7 @@ fn field_box(
             frame.rounded(inner.inset(-ring, -ring), color, RADIUS_ROW + ring);
             frame.rounded(inner, p.editor_bg, RADIUS_ROW);
         }
-        None => frame.rounded(rect, workspace::panel::over(base, p.hover), RADIUS_ROW),
+        None => frame.rounded(rect, workspace::over(base, p.hover), RADIUS_ROW),
     }
 }
 

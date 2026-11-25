@@ -10,6 +10,7 @@
 mod escape;
 pub mod fs;
 pub mod local;
+mod meta;
 mod path;
 pub mod remote;
 mod target;

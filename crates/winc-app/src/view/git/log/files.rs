@@ -105,7 +105,7 @@ pub(super) fn draw_files(
         let stat_w = 96.0;
         let clip = Rect::new(row.x, row.y, row.w - stat_w, row.h).intersect(area);
         let icon_end = draw_file_icon(frame, p, (x, cy), &name, clip);
-        let color = git_color(p, file.change);
+        let color = p.git_change(file.change);
         let end = ui_text(frame, app, icon_end + 6.0, row, &name, color, clip);
         let dir = file
             .path

@@ -81,15 +81,6 @@ impl App {
         view.commits.iter().find(|c| c.oid == oid).cloned()
     }
 
-    /// 当前分支名；分离的 `HEAD` 时是「HEAD」。
-    pub(in crate::app) fn current_branch_label(&self) -> String {
-        self.git
-            .branches
-            .iter()
-            .find(|b| b.current)
-            .map_or_else(|| "HEAD".to_owned(), |b| b.name.clone())
-    }
-
     /// 签出提交 `commit` 时签出的本地分支（菜单里写「签出「dev」」用）。
     pub(in crate::app) fn log_checkout_branch(&self, oid: &str) -> Option<String> {
         local_branch(&self.log_commit(oid)?)

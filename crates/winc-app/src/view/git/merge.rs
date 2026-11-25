@@ -5,125 +5,14 @@
 //! 「两者都要」「对比」，右端是冲突序号；`|||||||` 行显示「共同祖先」，`=======` 行显示
 //! 「对方 · 分支名」，`>>>>>>>` 行只绘制一道收尾的细线。
 
-use winc_editor::git::merge::{AlignSegment, Conflict, Pick};
+use winc_editor::git::merge::{AlignSegment, Pick};
 use winc_i18n::t;
 
 use crate::app::git::merge::{MergePanes, MergeTarget, PANE_HEADER};
 use crate::theme::DiffShade;
 use crate::view::diff::draw_ribbon;
+use crate::view::editor::{conflict_shade, merge_label, merged_shade};
 use crate::view::*;
-
-/// 标记行上的按钮，从左到右排列；冲突序号以 `usize::MAX` 占位，绘制时替换为当前冲突的序号。
-const ACTIONS: [MergeTarget; 4] = [
-    MergeTarget::Pick(usize::MAX, Pick::Ours),
-    MergeTarget::Pick(usize::MAX, Pick::Theirs),
-    MergeTarget::Pick(usize::MAX, Pick::Both),
-    MergeTarget::Compare(usize::MAX),
-];
-
-/// 把 `ACTIONS` 中的占位序号替换为第 `i` 段冲突。
-fn for_conflict(target: MergeTarget, i: usize) -> MergeTarget {
-    match target {
-        MergeTarget::Pick(_, pick) => MergeTarget::Pick(i, pick),
-        MergeTarget::Compare(_) => MergeTarget::Compare(i),
-        other => other,
-    }
-}
-
-fn label(target: MergeTarget) -> &'static str {
-    match target {
-        MergeTarget::Pick(_, pick) | MergeTarget::All(pick) => pick.label(),
-        MergeTarget::Compare(_) => t!("git-merge-compare"),
-        MergeTarget::Previous => t!("git-merge-previous"),
-        MergeTarget::Next => t!("git-merge-next"),
-        MergeTarget::MarkResolved => t!("git-merge-mark-resolved"),
-        MergeTarget::ThreePane => t!("git-merge-three-pane"),
-        MergeTarget::EditConflict(_) => t!("git-merge-edit-conflict"),
-    }
-}
-
-/// 返回冲突中一行（非标记行）的底色；`line` 不在冲突的内容中时返回 `None`。
-pub(in crate::view) fn tint(p: &Palette, conflict: &Conflict, line: usize) -> Option<Color> {
-    use crate::app::git::merge::{Part, part_of};
-    match part_of(conflict, line)? {
-        Part::Ours => Some(p.diff_modified.line),
-        Part::Theirs => Some(p.diff_added.line),
-        Part::Base => Some(p.diff_deleted.line),
-        Part::Marker => None,
-    }
-}
-
-/// 在 `band`（文字区中该行的范围，逻辑像素）上绘制第 `i` 段冲突（共 `count` 段）的标记行 `line`。
-#[allow(clippy::too_many_arguments)]
-pub(in crate::view) fn draw_marker(
-    app: &App,
-    frame: &mut Frame<'_>,
-    i: usize,
-    count: usize,
-    conflict: &Conflict,
-    line: usize,
-    band: Rect,
-    hits: &mut Vec<(Rect, MergeTarget)>,
-) {
-    if app.merge_panes_placed() && line == conflict.start && conflict_folded(app, line) {
-        return draw_folded_conflict(app, frame, i, count, band, hits);
-    }
-    let p = app.palette;
-    let side = |who: &str, name: &str| {
-        if name.is_empty() {
-            who.to_owned()
-        } else {
-            format!("{who} · {name}")
-        }
-    };
-    let (color, title) = if line == conflict.start {
-        (
-            p.diff_modified.word,
-            side(t!("git-merge-side-current"), &conflict.ours_label),
-        )
-    } else if Some(line) == conflict.base {
-        (p.diff_deleted.word, t!("git-merge-side-base").to_owned())
-    } else if line == conflict.middle {
-        (
-            p.diff_added.word,
-            side(t!("git-merge-side-incoming"), &conflict.theirs_label),
-        )
-    } else {
-        // `>>>>>>>`：覆盖标记文字，只绘制一道收尾的细线。
-        frame.rect_clipped(band, p.editor_bg, 0.0, band);
-        let rule = Rect::new(band.x, (band.y + band.h / 2.0 - 1.0).round(), band.w, 2.0);
-        frame.rect_clipped(rule, p.diff_added.word, 0.0, band);
-        return;
-    };
-    frame.rect_clipped(band, color, 0.0, band);
-    let mut x = ui_text_small(frame, app, band.x + TEXT_PAD, band, &title, p.text, band) + 14.0;
-    if line != conflict.start {
-        return;
-    }
-
-    // 「采用当前」「采用对方」「两者都要」「对比」按钮只显示文字，悬停时铺底色。
-    let h = (band.h - 4.0).max(12.0);
-    for action in ACTIONS {
-        let target = for_conflict(action, i);
-        let text = label(target);
-        let w = frame.measure(FontKind::Ui, app.fonts.ui_small, text) + 12.0;
-        let rect = Rect::new(x, band.y + (band.h - h) / 2.0, w, h);
-        if app.pointer.hover == Hover::Merge(target) {
-            frame.rect_clipped(rect, p.hover, RADIUS_ROW, band);
-        }
-        ui_text_small(frame, app, rect.x + 6.0, band, text, p.accent, band);
-        hits.push((rect.intersect(band), target));
-        x = rect.right() + 2.0;
-    }
-
-    // 右端显示冲突序号。
-    let counter = format!("{} / {count}", i + 1);
-    let w = frame.measure(FontKind::Ui, app.fonts.ui_small, &counter);
-    let right = band.right() - 14.0 - w;
-    if right > x + 8.0 {
-        ui_text_small(frame, app, right, band, &counter, p.text_muted, band);
-    }
-}
 
 /// 绘制右上角的冲突卡片：剩余冲突数、上一处、下一处、全部采用一侧；冲突已全部消除但尚未标记为
 /// 已解决时，显示「冲突都已解决」和「标记为已解决」。
@@ -246,7 +135,7 @@ fn all_label(target: MergeTarget) -> &'static str {
     match target {
         MergeTarget::All(Pick::Ours) => t!("git-merge-accept-all-current"),
         MergeTarget::All(Pick::Theirs) => t!("git-merge-accept-all-incoming"),
-        other => label(other),
+        other => merge_label(other),
     }
 }
 
@@ -254,64 +143,6 @@ fn all_label(target: MergeTarget) -> &'static str {
 const PANE_PAD: f32 = 8.0;
 /// 底部操作栏按钮文字两侧的留白（逻辑像素）。
 const FOOTER_BUTTON_PAD: f32 = 12.0;
-
-/// 第 `line` 行所在的冲突是否已折叠。
-fn conflict_folded(app: &App, line: usize) -> bool {
-    (app.editor.active()).is_some_and(|doc| doc.folds().is_collapsed(line))
-}
-
-/// 返回冲突使用的颜色：红色只用于尚未解决的冲突，与差异视图的蓝、绿、灰区分。
-pub(in crate::view) fn conflict_shade(p: &Palette) -> DiffShade {
-    DiffShade {
-        line: p.error.alpha(0.12),
-        word: p.error.alpha(0.24),
-        edge: p.error.alpha(0.45),
-        mark: p.error,
-    }
-}
-
-/// 返回一段已自动合并的改动使用的颜色：仅结果中有的为绿，仅该侧有的为灰，两侧都有的为蓝。
-pub(in crate::view) fn merged_shade(p: &Palette, segment: &AlignSegment) -> DiffShade {
-    if segment.side.is_empty() {
-        p.diff_added
-    } else if segment.file.is_empty() {
-        p.diff_deleted
-    } else {
-        p.diff_modified
-    }
-}
-
-/// 绘制结果一栏中折叠为一行的第 `i` 段冲突：序号以及「保留两者」「手动编辑」。
-fn draw_folded_conflict(
-    app: &App,
-    frame: &mut Frame<'_>,
-    i: usize,
-    count: usize,
-    band: Rect,
-    hits: &mut Vec<(Rect, MergeTarget)>,
-) {
-    let p = app.palette;
-    // 覆盖折叠行原有的文字，再铺上与行号栏、连接带相同的底色。
-    frame.rect_clipped(band, p.editor_bg, 0.0, band);
-    frame.rect_clipped(band, conflict_shade(p).line, 0.0, band);
-    let title = t!("git-merge-conflict-title", index = i + 1, count = count);
-    let mut x = ui_text_small(frame, app, band.x + TEXT_PAD, band, &title, p.text, band) + 14.0;
-    let h = (band.h - 4.0).max(12.0);
-    for target in [
-        MergeTarget::Pick(i, Pick::Both),
-        MergeTarget::EditConflict(i),
-    ] {
-        let text = label(target);
-        let w = frame.measure(FontKind::Ui, app.fonts.ui_small, text) + 12.0;
-        let rect = Rect::new(x, band.y + (band.h - h) / 2.0, w, h);
-        if app.pointer.hover == Hover::Merge(target) {
-            frame.rect_clipped(rect, p.hover, RADIUS_ROW, band);
-        }
-        ui_text_small(frame, app, rect.x + 6.0, band, text, p.accent, band);
-        hits.push((rect.intersect(band), target));
-        x = rect.right() + 2.0;
-    }
-}
 
 /// 绘制三栏合并的两侧、连接带、标题行和底部操作栏。
 ///

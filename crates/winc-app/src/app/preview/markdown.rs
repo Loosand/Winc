@@ -17,9 +17,8 @@ use winc_i18n::t;
 use winc_preview::epub::TocEntry;
 use winc_preview::image::{self, Picture, Pixels};
 use winc_preview::markdown::{self, Markdown};
-use winc_preview::svg;
 
-use super::images::system_glyphs;
+use super::system_glyphs;
 use winit::keyboard::{Key, NamedKey};
 
 use crate::app::{App, Focus, UserEvent};
@@ -1365,7 +1364,7 @@ fn load_downloaded(path: &Path) -> Result<Picture, String> {
     let head = &bytes[..bytes.len().min(1024)];
     if head.windows(4).any(|w| w == b"<svg") {
         let text = String::from_utf8_lossy(&bytes);
-        return svg::load(&text, None, Some(system_glyphs()));
+        return image::load_svg(&text, None, Some(system_glyphs()));
     }
     image::load(path)
 }

@@ -529,6 +529,17 @@ impl Palette {
         }
     }
 
+    /// 返回 Git 改动状态 `change` 在文件树和变更视图里用的颜色。
+    pub fn git_change(&self, change: winc_editor::git::Change) -> Color {
+        use winc_editor::git::Change;
+        match change {
+            Change::Modified | Change::Renamed => self.git_modified,
+            Change::Added | Change::Untracked => self.git_added,
+            Change::Deleted => self.git_deleted,
+            Change::Conflicted => self.git_conflict,
+        }
+    }
+
     /// 返回语法标记 `kind` 对应的颜色。
     pub fn token(&self, kind: TokenKind) -> Color {
         match kind {
@@ -742,7 +753,7 @@ pub const SCROLLBAR_INSET: f32 = 1.0;
 /// 加载图标每秒旋转的圈数（圈）。
 ///
 /// 1.25 圈每秒即 0.8 秒一圈：同步、提交、刷新的图标都按它转，转速一致。
-pub const SPIN_SPEED: f32 = 1.25;
+pub use crate::icons::SPIN_SPEED;
 /// 鼠标悬停在按钮上多久后显示提示（毫秒）。
 ///
 /// 与 macOS 的悬停提示一致：指针停留约 0.5 s 后出现，扫过按钮时不弹出。

@@ -489,11 +489,9 @@ fn opacity_gradients_and_what_is_missing() {
             .contains("XML")
     );
     // 没写大小时用 viewBox 的；都没有时取默认的 300 × 150。
-    let picture = load(r#"<svg xmlns="http://www.w3.org/2000/svg"/>"#, None, None).unwrap();
-    assert_eq!(
-        (picture.width, picture.height, picture.format),
-        (300, 150, "SVG")
-    );
+    let drawing =
+        Drawing::parse(r#"<svg xmlns="http://www.w3.org/2000/svg"/>"#, None, None).unwrap();
+    assert_eq!((drawing.width, drawing.height), (300.0, 150.0));
 }
 
 /// 测试用的字形提供者：每个字符是一个宽 0.5 em（粗体 0.6 em）、从基线向上高 0.7 em 的方块。
@@ -711,9 +709,9 @@ fn text_lays_out_with_anchors_spans_and_positions() {
     );
     assert_eq!(b[2], 35.0);
     // `font` 简写属性的解析。
-    let mut font = text::Font::default();
-    let parent = text::Font::default();
-    text::apply_font(
+    let mut font = style::Font::default();
+    let parent = style::Font::default();
+    style::apply_font(
         &mut font,
         &parent,
         "font",

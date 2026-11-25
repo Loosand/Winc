@@ -7,8 +7,7 @@
 mod parsing;
 mod primitives;
 
-pub(super) use parsing::*;
-pub(super) use primitives::*;
+use primitives::*;
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -16,7 +15,7 @@ use std::sync::OnceLock;
 
 use roxmltree::Node;
 
-use super::render::{Area, Layer};
+use super::canvas::{Area, Blend, Layer, blend_mode, blend_pixel};
 use super::syntax::*;
 use super::{Parser, fraction};
 
@@ -99,23 +98,6 @@ enum Kind {
         /// 半径（像素），超过图像尺寸时按图像尺寸算。
         radius: (f32, f32),
     },
-}
-
-/// 混合模式，由 CSS 的 `mix-blend-mode` 与 `feBlend` 的 `mode` 属性指定。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum Blend {
-    Normal,
-    Multiply,
-    Screen,
-    Overlay,
-    Darken,
-    Lighten,
-    ColorDodge,
-    ColorBurn,
-    HardLight,
-    SoftLight,
-    Difference,
-    Exclusion,
 }
 
 /// Porter-Duff 合成算子（`feComposite` 的 `operator` 属性）；`Arithmetic` 带 `k1` 到 `k4` 四个
@@ -433,9 +415,9 @@ impl Filter {
             previous = Some(result);
             // 命名结果与滤镜区域一样大，同时保留的数量由文件决定：数百个 `result` 被同一个
             // `feMerge` 引用时合计可达数十 GB。连同源图和上一步的结果，合计像素超过单张图片的
-            // 解码上限（`crate::image::PIXELS_MAX`）时不再应用滤镜，按原样绘制。
+            // 解码上限（`crate::raster::PIXELS_MAX`）时不再应用滤镜，按原样绘制。
             let live = (results.len() as u64 + 2) * (w * h) as u64;
-            if live > crate::image::PIXELS_MAX {
+            if live > crate::raster::PIXELS_MAX {
                 return source;
             }
         }

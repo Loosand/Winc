@@ -26,7 +26,7 @@ fn images(ico: &[u8]) -> Vec<(u8, &[u8])> {
 #[test]
 fn the_committed_icon_matches_the_svg() {
     let text = std::fs::read_to_string(root().join("crates/winc-app/assets/icon.svg")).unwrap();
-    let picture = winc_preview::svg::load(&text, None, None).unwrap();
+    let picture = winc_preview::image::load_svg(&text, None, None).unwrap();
     let ico = committed_ico();
     let images = images(&ico);
     assert_eq!(images.len(), 4);
@@ -106,7 +106,7 @@ fn a_file_that_is_not_an_icon_is_rejected() {
 fn the_macos_icon_follows_the_app_icon_template() {
     let text = std::fs::read_to_string(root().join("crates/winc-app/assets/icon.svg")).unwrap();
     assert!(text.contains(&format!("width=\"{}\"", crate::dmg::ICON_TILE)));
-    let picture = winc_preview::svg::load(&text, None, None).unwrap();
+    let picture = winc_preview::image::load_svg(&text, None, None).unwrap();
     let pixels = crate::dmg::macos_icon(&picture, 1024);
     assert_eq!((pixels.width, pixels.height), (1024, 1024));
     let opaque = |x: usize, y: usize| pixels.rgba[(y * 1024 + x) * 4 + 3] > 128;

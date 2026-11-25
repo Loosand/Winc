@@ -554,7 +554,7 @@ fn draw_other_file(
     let letter_w = frame.measure(FontKind::Ui, app.fonts.ui_small, &letter);
     let letter_x = band.right() - END_CENTER - letter_w / 2.0;
     if button.is_none() {
-        let color = git_color(p, change);
+        let color = p.git_change(change);
         ui_text_small(frame, app, letter_x, band, &letter, color, list);
     }
     let text_end = button.map_or(letter_x - 8.0, |x| x - 4.0);
