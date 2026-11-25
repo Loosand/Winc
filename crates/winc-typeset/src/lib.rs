@@ -140,6 +140,31 @@ impl Item {
         }
     }
 
+    /// 按输入长度差 `delta` 平移该绘制项记录的原文位置（用于异步解析完成前，
+    /// 同一容器块内位于当前编辑叶子块之后的兄弟块不与新光标撞车）。
+    pub(crate) fn shift_source(&mut self, delta: isize) {
+        let shift = |s: u32| u32::try_from((s as isize + delta).max(0)).unwrap_or(u32::MAX);
+        match self {
+            Item::Text {
+                span: Some(span), ..
+            } => {
+                if let Some(source) = &mut span.source {
+                    *source = shift(*source);
+                }
+            }
+            Item::Image {
+                at: Some((_, s)), ..
+            }
+            | Item::Spot { at: (_, s), .. } => {
+                *s = shift(*s);
+            }
+            Item::Check { source, .. } => {
+                *source = shift(*source);
+            }
+            _ => {}
+        }
+    }
+
     /// 挪到 `(dx, dy)`，文字的位置往后挪 `dc` 个字符。
     pub(crate) fn moved(&self, dx: f32, dy: f32, dc: usize) -> Item {
         let rect = |r: &Rect| Rect::new(r.x + dx, r.y + dy, r.w, r.h);
@@ -706,9 +731,9 @@ enum RawState {
     Skip,
     /// 光标所在的段落、标题：按排版显示，只显示光标接触到的标记。
     ///
-    /// 规则见 `winc_preview::markdown::reveal`。光标位于段落之后的空行上时，
-    /// 这些空行（原文起点，相对顶层块）各排一行，供光标定位。
-    Reveal(Box<Block>, Vec<usize>),
+    /// 规则见 `winc_preview::markdown::reveal`。当编辑期间拆出多个块时逐块保持排版；
+    /// 光标位于段落之后的空行上时，这些空行（原文起点，相对顶层块）各排一行，供光标定位。
+    Reveal(Vec<Block>, Vec<usize>),
     /// 光标所在的分隔线，见 [`Cx::raw_rule`]。
     Rule,
 }
@@ -739,9 +764,20 @@ fn blanks(raw: &Raw) -> Vec<usize> {
     }
 }
 
-/// 返回光标所在的段落、标题按当前原文生成的块（见 `winc_preview::markdown::reveal`）、
+/// 返回最后一个非空白行的行尾（不含 `\r`/`\n`，保留该行末尾的空格与制表符）；
+/// 若全是水平空白则保留到第一个换行符之前，使输入行尾空格时仍可正常排版并推动光标。
+fn content_end(text: &str) -> usize {
+    let trimmed = text.trim_end().len();
+    let end = match text[trimmed..].find('\n') {
+        Some(rel) => trimmed + rel,
+        None => text.len(),
+    };
+    text[..end].trim_end_matches('\r').len()
+}
+
+/// 返回光标所在的段落、标题按当前原文生成的块列表（见 `winc_preview::markdown::reveal`）、
 /// 光标位于其后的空行上时需要排版的空行（原文起点，相对顶层块），以及组字是否已排入该块。
-fn reveal(raw: &Raw) -> (Block, Vec<usize>, bool) {
+fn reveal(raw: &Raw) -> (Vec<Block>, Vec<usize>, bool) {
     let before = &raw.block[..raw.leaf.start];
     let prefix = before
         .rsplit(['\n', '\r'])
@@ -775,16 +811,18 @@ fn reveal(raw: &Raw) -> (Block, Vec<usize>, bool) {
         && !quote_body.trim().is_empty()
         && !alert;
     let caret = raw.caret.saturating_sub(start).min(text.len());
-    let content = text.trim_end().len();
+    let content = content_end(text);
     let blanks = blanks(raw);
     let at = (caret <= content).then_some(caret);
     let preedit = raw.preedit.as_deref().filter(|_| at.is_some());
-    let mut block =
-        winc_preview::markdown::reveal::reveal(&text[..content], at, preedit, leading_quote);
-    if let Block::Paragraph(inline) | Block::Heading(_, inline) = &mut block {
-        inline.source = start;
+    let mut blocks =
+        winc_preview::markdown::reveal::reveal_blocks(&text[..content], at, preedit, leading_quote);
+    for block in &mut blocks {
+        if let Block::Paragraph(inline) | Block::Heading(_, inline) = block {
+            inline.source = start;
+        }
     }
-    (block, blanks, preedit.is_some())
+    (blocks, blanks, preedit.is_some())
 }
 
 /// 块里文字继承的样式：颜色和嵌套深度。
@@ -807,6 +845,8 @@ struct Para {
     /// 行高与字号之比。
     line: f32,
     align: Align,
+    /// 实时编辑块中保留纯空格文字段，保证空格能推动光标且可命中。
+    keep_spaces: bool,
 }
 
 /// 代码块里一行的排法。
@@ -866,6 +906,53 @@ impl Cx<'_, '_> {
         }
     }
 
+    /// 排实时编辑状态下的显露块列表：段落与标题启用 `keep_spaces`，使纯空格段也能定位光标。
+    fn revealed_blocks(
+        &mut self,
+        blocks: &[Block],
+        x: f32,
+        y: f32,
+        width: f32,
+        env: Env,
+        out: &mut Out,
+    ) -> Flow {
+        let mut top = y;
+        let mut first_baseline = None;
+        let mut below: Option<f32> = None;
+        for block in blocks {
+            let (margin_top, margin_bottom) = margins(block, self.base, env.depth > 0);
+            if let Some(below) = below {
+                top += below.max(margin_top);
+            }
+            let laid = match block {
+                Block::Paragraph(inline) => {
+                    out.anchors
+                        .extend(inline.ids.iter().map(|id| (id.clone(), top)));
+                    let para = Para {
+                        keep_spaces: true,
+                        ..self.body_para(env)
+                    };
+                    self.flow(inline, x, top, width, para, &mut out.items)
+                }
+                Block::Heading(level, inline) => {
+                    out.anchors
+                        .extend(inline.ids.iter().map(|id| (id.clone(), top)));
+                    self.heading_live(*level, inline, x, top, width, env, out)
+                }
+                other => self.block(other, x, top, width, env, out),
+            };
+            if first_baseline.is_none() {
+                first_baseline = laid.first_baseline;
+            }
+            top += laid.height;
+            below = Some(margin_bottom);
+        }
+        Flow {
+            height: top - y,
+            first_baseline,
+        }
+    }
+
     /// 排一个块，左上角在 `(x, y)`、宽 `width`（逻辑像素），要画的项追加到 `out`。
     ///
     /// 返回块的高度和第一行的基线（相对 `y`）。
@@ -884,7 +971,7 @@ impl Cx<'_, '_> {
             RawState::Show => return self.raw_with_preview(block, x, y, width, env, out),
             RawState::Reveal(revealed, blanks) => {
                 let raw = self.raw.take();
-                let mut flow = self.block(&revealed, x, y, width, env, out);
+                let mut flow = self.revealed_blocks(&revealed, x, y, width, env, out);
                 self.raw = raw;
                 let extra = self.blank_lines(&blanks, x, y + flow.height, width, out);
                 out.editing_blank_height += extra;
@@ -900,11 +987,28 @@ impl Cx<'_, '_> {
             RawState::Rule => return self.raw_rule(x, y, width, out),
         }
         let para = self.body_para(env);
+        let shift_after = (!matches!(
+            block,
+            Block::Quote(..)
+                | Block::List(..)
+                | Block::Table(..)
+                | Block::Footnote(..)
+                | Block::Details { .. }
+        ))
+        .then(|| {
+            self.raw
+                .as_ref()
+                .filter(|r| r.done)
+                .map(|r| r.leaf.end as isize - r.parsed_end as isize)
+                .filter(|&d| d != 0)
+        })
+        .flatten();
+        let first_item = out.items.len();
         if let Block::Paragraph(inline) | Block::Heading(_, inline) = block {
             out.anchors
                 .extend(inline.ids.iter().map(|id| (id.clone(), y)));
         }
-        match block {
+        let flow = match block {
             Block::Paragraph(inline) => self.flow(inline, x, y, width, para, &mut out.items),
             Block::Heading(level, inline) => self.heading(*level, inline, x, y, width, env, out),
             Block::Code { lang, text, map } => {
@@ -969,7 +1073,13 @@ impl Cx<'_, '_> {
                 let id = self.toggle_id(details_id(block));
                 self.details(id, *open, summary, blocks, x, y, width, env, out)
             }
+        };
+        if let Some(delta) = shift_after {
+            for item in &mut out.items[first_item..] {
+                item.shift_source(delta);
+            }
         }
+        flow
     }
 
     /// 块文字（[`Cx::text`]）里一段（段落、单元格、代码的一行）结束：接一个换行。
@@ -1128,28 +1238,119 @@ impl Cx<'_, '_> {
     /// 只将第一行计入正常段落间距；再按回车要给每个额外空行留下实际高度。
     fn blank_lines(&mut self, blanks: &[usize], x: f32, y: f32, width: f32, out: &mut Out) -> f32 {
         let size = self.base;
+        let line_h = (size * BODY_LINE).round();
         let m = self.frame.metrics(FontKind::Ui, size);
-        let row = Row {
-            room: width.max(size),
-            size,
-            line_h: (size * BODY_LINE).round(),
-            ascent: m.ascent,
-            descent: m.descent,
-        };
-        let language = winc_syntax::find("markdown");
-        let mut state = winc_syntax::LineState::default();
+        let room = width.max(size);
         let Some((&source, before)) = blanks.split_last() else {
             return 0.0;
         };
         let gap = if before.is_empty() {
-            0.0
+            (size * 0.25).round()
         } else {
             size + (before.len() - 1) as f32 * blank_row_height(size)
         };
+        let line_text = self
+            .raw
+            .as_ref()
+            .and_then(|raw| raw.block.get(source..))
+            .map(|rest| {
+                rest.split('\n')
+                    .next()
+                    .unwrap_or_default()
+                    .trim_end_matches('\r')
+            })
+            .unwrap_or("");
+        let chars: Vec<char> = line_text
+            .chars()
+            .map(|c| if c == '\t' { ' ' } else { c })
+            .collect();
         let source = u32::try_from(source).unwrap_or(0);
-        let piece = self.code_piece("", source, "markdown", language, &mut state, row);
-        self.paste(&piece, x, y + gap, source, &mut out.items);
-        gap + piece.height
+        let baseline = |top: f32| top + (line_h - m.ascent - m.descent) / 2.0 + m.ascent;
+        let base_top = y + gap;
+        if chars.is_empty() {
+            out.items.push(Item::Text {
+                x,
+                baseline: baseline(base_top),
+                text: "".into(),
+                font: FontKind::Ui,
+                faux: Faux::default(),
+                size,
+                color: self.colors.text,
+                span: Some(Span {
+                    start: self.chars,
+                    advances: Arc::new([]),
+                    source: Some(source),
+                    jumps: None,
+                }),
+            });
+            self.text.push('\n');
+            self.chars += 1;
+            return gap + line_h;
+        }
+        let widths = self
+            .frame
+            .advances_faux(FontKind::Ui, Faux::default(), size, &chars);
+        let mut top = base_top;
+        let mut pen = 0.0f32;
+        let mut run_text = String::new();
+        let mut run_adv = Vec::new();
+        let mut run_start = self.chars;
+        let mut run_source = source;
+        let mut byte = 0u32;
+        for (i, &c) in chars.iter().enumerate() {
+            let w = widths[i];
+            if pen + w > room && pen > 0.0 && !run_text.is_empty() {
+                out.items.push(Item::Text {
+                    x,
+                    baseline: baseline(top),
+                    text: std::mem::take(&mut run_text).into(),
+                    font: FontKind::Ui,
+                    faux: Faux::default(),
+                    size,
+                    color: self.colors.text,
+                    span: Some(Span {
+                        start: run_start,
+                        advances: std::mem::take(&mut run_adv).into(),
+                        source: Some(run_source),
+                        jumps: None,
+                    }),
+                });
+                top += line_h;
+                pen = 0.0;
+                run_start = self.chars;
+                run_source = source + byte;
+            }
+            if run_text.is_empty() {
+                run_start = self.chars;
+                run_source = source + byte;
+            }
+            byte += c.len_utf8() as u32;
+            run_text.push(c);
+            run_adv.push(w);
+            self.text.push(c);
+            self.chars += 1;
+            pen += w;
+        }
+        if !run_text.is_empty() {
+            out.items.push(Item::Text {
+                x,
+                baseline: baseline(top),
+                text: run_text.into(),
+                font: FontKind::Ui,
+                faux: Faux::default(),
+                size,
+                color: self.colors.text,
+                span: Some(Span {
+                    start: run_start,
+                    advances: run_adv.into(),
+                    source: Some(run_source),
+                    jumps: None,
+                }),
+            });
+        }
+        self.text.push('\n');
+        self.chars += 1;
+        gap + (top - base_top) + line_h
     }
 }
 

@@ -454,6 +454,9 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             .property
             .as_ref()
             .is_some_and(|p| p.input == PropertyInput::Source);
+    if let Some(range) = live_selection.filter(|_| motion.as_ref().is_none_or(|m| !m.moving())) {
+        selection::draw_gaps(frame, &laid, left, origin_y, area, range, p.selection);
+    }
     for (i, block_top, block) in laid.iter_blocks().skip(first) {
         let opacity = match focused {
             Some(b) if b != i => crate::theme::FOCUS_DIM,
@@ -848,10 +851,14 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             laid.caret_point(source)
                 .unwrap_or((0.0, pad, (key.base * 0.85 * 1.4).round()));
         let gap_row = laid.blank_point(source).is_some();
-        // 空行的命中高度由段距决定，文字光标仍按正文字号在行内居中。
+        // 空行的命中高度由段距决定：槽位高于正文光标时按正文字号居中，窄槽位保留安全高度避免撞进邻接段落。
         let (y, h) = if gap_row {
             let (_, body_height) = line_box(0.0, key.base);
-            (y + (h - body_height) / 2.0, body_height)
+            if h > body_height {
+                (y + (h - body_height) / 2.0, body_height)
+            } else {
+                (y, h)
+            }
         } else {
             (y, h)
         };

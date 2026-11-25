@@ -221,8 +221,11 @@ impl Cx<'_, '_> {
             }
             let start = range.start;
             for (i, c) in inline.text[range].char_indices() {
-                let source = source_of(inline, start + i);
+                let source = inline
+                    .char_source_of(start + i)
+                    .and_then(|s| u32::try_from(s).ok());
                 if c == IMAGE_MARK {
+                    let source = source.or_else(|| source_of(inline, start + i));
                     let Some(image) = images.next() else { continue };
                     match self.image(image, room) {
                         Some((path, w, h)) => atoms.push(Atom {
@@ -431,7 +434,16 @@ impl Cx<'_, '_> {
                 Align::Right => (width - used).max(0.0),
                 Align::None | Align::Left => 0.0,
             };
-            self.emit_line(atoms, &runs, &mut pen, baseline, (top, height), inline, out);
+            self.emit_line(
+                atoms,
+                &runs,
+                &mut pen,
+                baseline,
+                (top, height),
+                inline,
+                para.keep_spaces,
+                out,
+            );
             if let Some(source) = anchor {
                 out.push(Item::Text {
                     x: pen,
@@ -468,6 +480,7 @@ impl Cx<'_, '_> {
         baseline: f32,
         (top, height): (f32, f32),
         inline: &Inline,
+        keep_spaces: bool,
         out: &mut Vec<Item>,
     ) {
         let mut i = 0;
@@ -483,6 +496,9 @@ impl Cx<'_, '_> {
                 let atom = &atoms[j];
                 match &atom.kind {
                     AtomKind::Char(c) => {
+                        if !text.text.is_empty() && text.source.is_some() != atom.source.is_some() {
+                            flush_text(out, &mut text, at, st, keep_spaces);
+                        }
                         if text.text.is_empty() {
                             text.x = *pen;
                             text.start = self.chars;
@@ -500,7 +516,7 @@ impl Cx<'_, '_> {
                         self.chars += 1;
                     }
                     AtomKind::Image { path, h } => {
-                        flush_text(out, &mut text, at, st);
+                        flush_text(out, &mut text, at, st, keep_spaces);
                         out.push(Item::Image {
                             rect: Rect::new(*pen, baseline - h, atom.width, *h),
                             path: path.clone(),
@@ -508,7 +524,7 @@ impl Cx<'_, '_> {
                         });
                     }
                     AtomKind::Math { b, tex } => {
-                        flush_text(out, &mut text, at, st);
+                        flush_text(out, &mut text, at, st, keep_spaces);
                         let x = *pen;
                         out.extend(b.items.iter().map(|item| item.moved(x, baseline, 0)));
                         // 公式中没有可定位的字：点击公式时光标移到公式的原文处。
@@ -542,12 +558,14 @@ impl Cx<'_, '_> {
                             st.color,
                         ));
                     }
-                    AtomKind::Pad | AtomKind::Newline => flush_text(out, &mut text, at, st),
+                    AtomKind::Pad | AtomKind::Newline => {
+                        flush_text(out, &mut text, at, st, keep_spaces);
+                    }
                 }
                 *pen += atom.width;
                 j += 1;
             }
-            flush_text(out, &mut text, at, st);
+            flush_text(out, &mut text, at, st, keep_spaces);
             // 末尾的空格不算进底色、删除线和链接的范围。
             let trailing: f32 = atoms[i..j]
                 .iter()
@@ -692,10 +710,19 @@ struct Pending {
     next: u32,
 }
 
-/// 攒着的一段文字（同一样式、中间没有图片）推成一项；只有空格时不画（块文字里仍然有）。
-fn flush_text(out: &mut Vec<Item>, text: &mut Pending, baseline: f32, st: RunStyle) {
+/// 攒着的一段文字（同一样式、中间没有图片）推成一项；实时编辑块（`keep_spaces` 为真）
+/// 保留带原文位置的纯空格段，以便行尾空格和样式之后的空格能正确推动光标与命中。
+fn flush_text(
+    out: &mut Vec<Item>,
+    text: &mut Pending,
+    baseline: f32,
+    st: RunStyle,
+    keep_spaces: bool,
+) {
     let pending = std::mem::take(text);
-    if pending.text.trim_end().is_empty() {
+    if pending.text.is_empty()
+        || ((!keep_spaces || pending.source.is_none()) && pending.text.trim_end().is_empty())
+    {
         return;
     }
     out.push(Item::Text {

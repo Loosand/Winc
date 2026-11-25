@@ -579,7 +579,40 @@ pub fn plan_backspace(
         return None;
     }
     let blank = |l: usize| rope.line(l).chars().all(char::is_whitespace);
-    if before.is_empty() && blank(line) && blank(line - 1) {
+    if before.is_empty() && blank(line) {
+        if blank(line - 1) {
+            // 连续空行恰好剩 2 个（即 1 个额外空行 + 1 个常规段落分隔空行）且前后均有块时：
+            // 删除这个额外空行并直接把光标退回上一段末尾，避免光标悬停在折叠分隔行上、
+            // 再次退格时把两段误粘成同一行。
+            let prev_is_content = line >= 2 && !blank(line - 2);
+            let next_is_content = line + 1 < rope.len_lines() && !blank(line + 1);
+            if prev_is_content && next_is_content {
+                let delete_from = line_end(rope, line - 1);
+                let delete_to = rope.line_to_char(line);
+                let sep_is_collapsed = parsed.is_none_or(|md| {
+                    let prev_end = rope.char_to_byte(line_end(rope, line - 2));
+                    let block = md
+                        .ranges
+                        .partition_point(|r| r.start <= prev_end)
+                        .checked_sub(1);
+                    block
+                        .is_none_or(|b| !matches!(md.blocks.get(b), Some(Block::Heading(1 | 2, _))))
+                });
+                if sep_is_collapsed && delete_from < delete_to {
+                    return Some(BackspaceAction::Replace {
+                        range: delete_from..delete_to,
+                        insert: String::new(),
+                        caret: Some(line_end(rope, line - 2)),
+                    });
+                }
+            }
+            // 多余空行仍有 3 行以上时，普通退格逐行删除。
+            return None;
+        }
+        // 光标落在两段之间唯一的分隔空行上时，退格只将光标移回上一段末尾，不把两段强行合并为一行。
+        if line + 1 < rope.len_lines() && !blank(line + 1) {
+            return Some(BackspaceAction::MoveCaret(line_end(rope, line - 1)));
+        }
         return None;
     }
     let to = rope.byte_to_char(caret);
@@ -1144,5 +1177,44 @@ mod tests {
         let added = plan_table_tool(&table_rope, &leaf, 2, "row").expect("应能向表格下方插入一行");
         let updated = apply_plan(md, &added);
         assert_eq!(updated.lines().count(), 4);
+    }
+
+    #[test]
+    fn backspace_on_blank_line_between_paragraphs_never_fuses_blocks() {
+        // 两段之间有 1 个额外空行（共 2 个空行）：在空行上按退格应删掉多余空行并把光标退到上一段末尾。
+        let text = "适用读者\n\n\n**摘要**\n";
+        let rope = Rope::from_str(text);
+        let parsed = markdown::parse(text);
+        let blank2 = rope.line_to_char(2);
+        let leaf = SourceBridge::new(&rope, &parsed, 1, Some(1)).leaf_at(rope.char_to_byte(blank2));
+        let action = plan_backspace(&rope, Some(&parsed), leaf.as_ref(), blank2, 1, Some(1))
+            .expect("空行退格应由内核接管");
+        assert_eq!(
+            action,
+            BackspaceAction::Replace {
+                range: rope.line_to_char(1)..rope.line_to_char(2),
+                insert: String::new(),
+                caret: Some(line_end(&rope, 0)),
+            }
+        );
+
+        // 两段之间仅剩 1 个分隔空行时：退格只把光标退回上一段末尾，不能把两段粘成一行。
+        let sep_text = "适用读者\n\n**摘要**\n";
+        let sep_rope = Rope::from_str(sep_text);
+        let sep_parsed = markdown::parse(sep_text);
+        let sep_line = sep_rope.line_to_char(1);
+        let sep_leaf = SourceBridge::new(&sep_rope, &sep_parsed, 1, Some(1))
+            .leaf_at(sep_rope.char_to_byte(sep_line));
+        assert_eq!(
+            plan_backspace(
+                &sep_rope,
+                Some(&sep_parsed),
+                sep_leaf.as_ref(),
+                sep_line,
+                1,
+                Some(1),
+            ),
+            Some(BackspaceAction::MoveCaret(line_end(&sep_rope, 0)))
+        );
     }
 }

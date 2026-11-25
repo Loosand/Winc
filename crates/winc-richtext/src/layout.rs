@@ -47,6 +47,8 @@ pub struct Laid {
     /// Source-addressable line boxes in the spaces between formatted blocks.
     gaps: Vec<BlankGap>,
     blank_offsets: Arc<[usize]>,
+    /// 正文字体单个空格的宽度（逻辑像素），用于空行上键入空格时的光标定位与命中。
+    space_width: f32,
     /// 排版时光标所在的叶子块，见 [`LiveKey`]。
     ///
     /// 不能编辑时为 `None`；光标换了叶子块（表格里换了一格）、或者打了字，这一块要重排。
@@ -84,12 +86,46 @@ struct BlankGap {
     top: f32,
     row: f32,
     offsets: std::ops::Range<usize>,
+    /// 各空行在换行符之前已有的水平空白字节数（用于支持空行上键入空格）。
+    row_cols: Vec<usize>,
+    /// 位于该顶层块之前；文末空行为 `None`。
+    before_block: Option<usize>,
+    /// 是否位于文档末尾（下方没有后续块，末行光标可按正文完整高度绘制）。
+    trailing: bool,
 }
 
 impl BlankGap {
-    fn new(offsets: std::ops::Range<usize>, top: f32, height: f32) -> Self {
-        let row = height / (offsets.len() - 1) as f32;
-        Self { top, row, offsets }
+    fn new(
+        offsets: std::ops::Range<usize>,
+        all_offsets: &[usize],
+        rope: Option<&ropey::Rope>,
+        top: f32,
+        height: f32,
+        before_block: Option<usize>,
+        trailing: bool,
+    ) -> Self {
+        let count = offsets.len() - 1;
+        let row = height / count as f32;
+        let mut row_cols = Vec::with_capacity(count);
+        for i in 0..count {
+            let start = all_offsets[offsets.start + i];
+            let next = all_offsets[offsets.start + i + 1];
+            let cols = rope
+                .filter(|r| start <= next && next <= r.len_bytes())
+                .map_or(0, |r| {
+                    let s = r.byte_slice(start..next).to_string();
+                    s.trim_end_matches(['\r', '\n']).len()
+                });
+            row_cols.push(cols);
+        }
+        Self {
+            top,
+            row,
+            offsets,
+            row_cols,
+            before_block,
+            trailing,
+        }
     }
 
     fn bottom(&self) -> f32 {
@@ -340,6 +376,14 @@ impl Laid {
         }));
         let editable = input.editable;
         let properties = input.properties;
+        let space_width = frame
+            .advance_faux(
+                winc_render::FontKind::Ui,
+                winc_render::Faux::default(),
+                key.base,
+                ' ',
+            )
+            .max(1.0);
         let mut cx = Cx {
             frame,
             base: key.base,
@@ -444,18 +488,32 @@ impl Laid {
             let already = blocks.last().map_or(0.0, |(_, b)| b.editing_blank_height());
             let offsets = blank.before(i);
             let extra_rows = offsets.len().saturating_sub(1 + usize::from(i != 0));
-            let mapped_gap = blank_before(i, offsets);
+            let has_blank_gap =
+                editable && !offsets.is_empty() && parsed.collapsed_separator_before(i).is_none();
+            let mapped_gap = blank_before(i, offsets.clone());
             let gap = if editable {
                 (extra_rows as f32 * blank_row - already).max(0.0)
             } else {
                 0.0
             };
             let mut space = below.map_or(0.0, |below: f32| below.max(margin)) + gap;
+            if already == 0.0 && has_blank_gap {
+                // 无论后台解析是否追上当前版本，保持完全一致的空行高度，避免异步解析完成时
+                // 上方间距跳变导致页面持续下滚。
+                space = space.max(blank_row);
+            }
             if already == 0.0
                 && let Some(offsets) = mapped_gap
             {
-                space = space.max(blank_row);
-                gaps.push(BlankGap::new(offsets, y, space));
+                gaps.push(BlankGap::new(
+                    offsets,
+                    blank.offsets(),
+                    input.rope,
+                    y,
+                    space,
+                    Some(i),
+                    false,
+                ));
             }
             let top = y + space;
             let wanted = |laid: &LaidBlock| {
@@ -494,7 +552,15 @@ impl Laid {
             let already = blocks.last().map_or(0.0, |(_, b)| b.editing_blank_height());
             let extra = after.len().saturating_sub(2) as f32 * blank_row;
             if already == 0.0 && blank_after {
-                gaps.push(BlankGap::new(after, y, extra));
+                gaps.push(BlankGap::new(
+                    after,
+                    blank.offsets(),
+                    input.rope,
+                    y,
+                    extra,
+                    None,
+                    true,
+                ));
                 y += extra;
             } else {
                 y += (extra - already).max(0.0);
@@ -558,6 +624,7 @@ impl Laid {
             },
             gaps,
             blank_offsets: Arc::clone(blank.offsets()),
+            space_width,
             live: live.map(|l| l.key(input.preedit)),
             caret: std::cell::Cell::new(None),
             drawn_upstream: None,
@@ -1105,15 +1172,21 @@ impl Laid {
         interpolate(&self.sync_points(total), y, true)
     }
 
-    fn blank_at(&self, y: f32) -> Option<usize> {
+    fn blank_at(&self, x: f32, y: f32) -> Option<usize> {
         let i = self
             .gaps
             .partition_point(|gap| gap.top <= y)
             .checked_sub(1)?;
         let gap = &self.gaps[i];
-        self.blank_offsets[gap.offsets.start..gap.offsets.end - 1]
-            .get(((y - gap.top) / gap.row).floor() as usize)
-            .copied()
+        let row = ((y - gap.top) / gap.row).floor() as usize;
+        let start = *self.blank_offsets[gap.offsets.start..gap.offsets.end - 1].get(row)?;
+        let max_col = gap.row_cols.get(row).copied().unwrap_or(0);
+        let col = if max_col > 0 && x > 0.0 {
+            ((x / self.space_width).round() as usize).min(max_col)
+        } else {
+            0
+        };
+        Some(start + col)
     }
 
     /// 正文一栏的宽度（逻辑像素）。
@@ -1243,7 +1316,7 @@ impl Laid {
             }
         }
         if best.as_ref().is_none_or(|((dy, _), _)| *dy > 0.0)
-            && let Some(source) = self.blank_at(y)
+            && let Some(source) = self.blank_at(x, y)
         {
             return Some(Hit {
                 offset: None,
@@ -1272,8 +1345,83 @@ impl Laid {
         if source >= *end {
             return None;
         }
+        let count = starts.len();
         let row = starts.partition_point(|&s| s <= source) - 1;
-        Some((0.0, self.pad + gap.top + row as f32 * gap.row, gap.row))
+        let col = source
+            .saturating_sub(starts[row])
+            .min(gap.row_cols.get(row).copied().unwrap_or(0));
+        let x = col as f32 * self.space_width;
+        let slot_top = gap.top + row as f32 * gap.row;
+        let (_, body_height) = line_box(0.0, self.key.base);
+        // 空行光标与正文光标保持一致高度；在整段空行槽内居中并留出上下 1px 间隙，
+        // 既不会因为单行槽高偏窄而变短，也不会侵入上下相邻段落。
+        let (caret_y, caret_h) = if gap.trailing && row + 1 == count {
+            (slot_top, body_height)
+        } else {
+            let min_y = gap.top + 1.0;
+            let max_bottom = gap.bottom() - 1.0;
+            let available = (max_bottom - min_y).max(0.0);
+            let h = body_height.min(available).max(12.0);
+            let ideal = slot_top + (gap.row - h) / 2.0;
+            let y = ideal.clamp(min_y, (max_bottom - h).max(min_y));
+            (y, h)
+        };
+        Some((x, self.pad + caret_y, caret_h))
+    }
+
+    /// 若第 `block` 块与下一块之间存在可编辑空行槽，返回该空行槽的上边缘（相对内容顶部）。
+    pub fn gap_top_after(&self, block: usize) -> Option<f32> {
+        self.gaps
+            .iter()
+            .find(|gap| gap.before_block == Some(block + 1))
+            .map(|gap| gap.top)
+    }
+
+    /// 返回与原文选区 `from..to` 相交的空行高亮矩形（相对内容左上角，逻辑像素）。
+    pub fn blank_selection_rects(&self, from: usize, to: usize) -> Vec<Rect> {
+        if from >= to {
+            return Vec::new();
+        }
+        let (_, body_height) = line_box(0.0, self.key.base);
+        let mut rects = Vec::new();
+        for gap in &self.gaps {
+            let Some((&end, starts)) = self.blank_offsets[gap.offsets.clone()].split_last() else {
+                continue;
+            };
+            if end <= from || starts[0] >= to {
+                continue;
+            }
+            for (row, &row_start) in starts.iter().enumerate() {
+                let row_next = self.blank_offsets[gap.offsets.start + row + 1];
+                if to <= row_start || from >= row_next {
+                    continue;
+                }
+                let cols = gap.row_cols.get(row).copied().unwrap_or(0);
+                let text_end = row_start + cols;
+                let a = from.saturating_sub(row_start).min(cols);
+                let b = to.saturating_sub(row_start).min(cols);
+                let continues = to > text_end;
+                let x0 = a as f32 * self.space_width;
+                let x1 = if continues {
+                    self.key.width
+                } else {
+                    b as f32 * self.space_width
+                };
+                if x1 <= x0 {
+                    continue;
+                }
+                let slot_top = gap.top + row as f32 * gap.row;
+                let single_row = from >= row_start && to <= text_end;
+                let (y, h) = if single_row {
+                    let h = body_height.min(gap.row);
+                    (slot_top + (gap.row - h) / 2.0, h)
+                } else {
+                    (slot_top, gap.row)
+                };
+                rects.push(Rect::new(x0, y, x1 - x0, h));
+            }
+        }
+        rects
     }
 
     /// Whether a byte begins an actual glyph in the visible source mapping.

@@ -15,6 +15,36 @@ impl Cx<'_, '_> {
         env: Env,
         out: &mut Out,
     ) -> Flow {
+        self.heading_with_spaces(level, inline, x, y, width, env, false, out)
+    }
+
+    /// 排实时编辑中的 `level` 级标题（保留纯空格文字段以便推动光标）。
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn heading_live(
+        &mut self,
+        level: u8,
+        inline: &Inline,
+        x: f32,
+        y: f32,
+        width: f32,
+        env: Env,
+        out: &mut Out,
+    ) -> Flow {
+        self.heading_with_spaces(level, inline, x, y, width, env, true, out)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn heading_with_spaces(
+        &mut self,
+        level: u8,
+        inline: &Inline,
+        x: f32,
+        y: f32,
+        width: f32,
+        env: Env,
+        keep_spaces: bool,
+        out: &mut Out,
+    ) -> Flow {
         let base = self.base;
         let scale = [2.0, 1.5, 1.25, 1.0, 0.875, 0.85][(level as usize).clamp(1, 6) - 1];
         let size = base * scale;
@@ -29,6 +59,7 @@ impl Cx<'_, '_> {
             color,
             line: 1.25,
             align: Align::None,
+            keep_spaces,
         };
         out.anchors.push((slug(&inline.text), y));
         let mut flow = self.flow(inline, x, y, width, para, &mut out.items);
@@ -210,6 +241,7 @@ impl Cx<'_, '_> {
             color: env.color,
             line: BODY_LINE,
             align: Align::None,
+            keep_spaces: false,
         }
     }
 

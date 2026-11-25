@@ -8,6 +8,7 @@ use super::*;
 mod caret;
 mod epub;
 mod images;
+mod invariants;
 mod json;
 mod live;
 mod markdown;

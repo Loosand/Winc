@@ -93,3 +93,55 @@ fn expanding_selection_across_a_quote_continuation_uses_source_offsets() {
         selected
     );
 }
+
+#[test]
+fn trailing_and_leading_spaces_are_preserved_when_caret_touches_them() {
+    // 行尾输入多个空格时必须保留为普通文字，不能被吞掉或标成灰色标记。
+    assert_eq!(shown("你好，打了很多空格   |"), "你好，打了很多空格   ");
+    assert_eq!(shown("**摘要**   |"), "摘要   ");
+    assert_eq!(shown("   |开头空格"), "   开头空格");
+
+    // 验证行尾空格都带精确的原文位置映射。
+    let text = "你好   ";
+    let Block::Paragraph(inline) = reveal(text, Some(text.len()), None, false) else {
+        panic!();
+    };
+    assert_eq!(inline.text, text);
+    assert_eq!(inline.source_of("你好".len()), Some("你好".len()));
+    assert_eq!(inline.source_of("你好  ".len()), Some("你好  ".len()));
+}
+
+#[test]
+fn reveal_blocks_keeps_formatting_when_paragraph_splits_into_multiple_blocks() {
+    let text = "2024 年 3 月 · 第 1.2 版\\\n适用读者\n\n**摘要** 经典 *SIR* 模型 $R_0$";
+    let caret = text.find("**摘要**").unwrap();
+    let blocks = reveal_blocks(text, Some(caret), None, false);
+    assert_eq!(blocks.len(), 2);
+
+    // 第一段不在光标下：保留排版，不露硬换行反斜杠 `\`。
+    let Block::Paragraph(first) = &blocks[0] else {
+        panic!("第一块应为段落");
+    };
+    assert!(
+        !first.text.contains('\\'),
+        "第一段不应显露反斜杠: {}",
+        first.text
+    );
+
+    // 第二段仅在光标接触到的 `**摘要**` 处显露标记，其余 `*SIR*` 和 `$R_0$` 保持排版。
+    let Block::Paragraph(second) = &blocks[1] else {
+        panic!("第二块应为段落");
+    };
+    assert!(second.text.starts_with("**摘要**"));
+    assert!(
+        !second.text.contains("*SIR*"),
+        "未接触的斜体不应退化为原文: {}",
+        second.text
+    );
+    assert!(
+        !second.text.contains("$R_0$"),
+        "未接触的公式不应退化为原文: {}",
+        second.text
+    );
+    assert_eq!(second.source_of(0), Some(caret));
+}

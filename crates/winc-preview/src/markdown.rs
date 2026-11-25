@@ -160,6 +160,22 @@ impl SourceMap {
         Some(a.source as usize + (at - a.text as usize).min(a.len as usize))
     }
 
+    /// 仅当文字中第 `at` 个字节真正落在某条原文对照段内（或恰好命中零长度锚点）时返回其原文位置；
+    /// 附加在段落末尾的生成文字（如脚注末尾的 ` ↩`）返回 `None`，避免污染真实正文的 `Span`。
+    pub fn char_source(&self, at: usize) -> Option<usize> {
+        let i = self
+            .0
+            .partition_point(|a| a.text as usize <= at)
+            .checked_sub(1)?;
+        let a = self.0[i];
+        let off = at - a.text as usize;
+        if a.len == 0 {
+            (off == 0).then_some(a.source as usize)
+        } else {
+            (off < a.len as usize).then_some(a.source as usize + off)
+        }
+    }
+
     /// 占用的堆内存（字节，按容量计算），用于内存测量。
     pub fn heap_bytes(&self) -> usize {
         self.0.capacity() * std::mem::size_of::<Anchor>()
@@ -545,6 +561,11 @@ impl Inline {
         self.map.source(at).map(|s| s + self.source)
     }
 
+    /// 返回文字中第 `at` 个字节在所在顶层块原文中的位置；仅匹配真实对照段或零长度锚点。
+    pub fn char_source_of(&self, at: usize) -> Option<usize> {
+        self.map.char_source(at).map(|s| s + self.source)
+    }
+
     /// 是否没有可显示的内容（只有空白）。
     pub fn is_blank(&self) -> bool {
         self.text.trim().is_empty()
@@ -690,6 +711,23 @@ struct Builder<'s> {
 
 impl Builder<'_> {
     fn step(&mut self, event: Event<'_>, range: Range<usize>) {
+        // 顶层段落开头的 1–3 个空格在 CommonMark 中会被略过；保留到行首，使段首输入空格时
+        // 仍归属该段落且能实时展示与定位。
+        let block_start = if matches!(event, Event::Start(Tag::Paragraph)) && self.stack.is_empty()
+        {
+            let line_start = self.source[..range.start].rfind('\n').map_or(0, |n| n + 1);
+            if line_start < range.start
+                && self.source[line_start..range.start]
+                    .bytes()
+                    .all(|b| matches!(b, b' ' | b'\t'))
+            {
+                line_start
+            } else {
+                range.start
+            }
+        } else {
+            range.start
+        };
         // 顶层块开始的地方：不在任何容器、段落、代码块、HTML 块里。分隔线没有开始、结束两个
         // 事件，只有一个。
         if matches!(event, Event::Start(_) | Event::Rule)
@@ -698,13 +736,13 @@ impl Builder<'_> {
             && self.code.is_none()
             && self.html.is_none()
         {
-            self.start_at = range.start;
+            self.start_at = block_start;
         }
         (self.start, self.cursor, self.end) = (range.start, range.start, range.end);
         self.event(event);
         if self.inline.is_some() {
-            let leaf = self.leaf.get_or_insert(range.clone());
-            *leaf = leaf.start.min(range.start)..leaf.end.max(range.end);
+            let leaf = self.leaf.get_or_insert(block_start..range.end);
+            *leaf = leaf.start.min(block_start)..leaf.end.max(range.end);
         }
     }
 
@@ -944,6 +982,17 @@ impl Builder<'_> {
         }
         match leaf {
             Leaf::Paragraph | Leaf::Loose => {
+                // 紧凑列表项没有 `Tag::Paragraph` 包裹，其 `leaf.end` 不含行尾空格；
+                // 延伸覆盖同行的水平空白，避免在列表项末尾输入空格时越界落入下一项。
+                if let Some(range) = &mut self.leaf
+                    && let Some(rest) = self.source.get(range.end..)
+                {
+                    let spaces = rest
+                        .bytes()
+                        .take_while(|&b| matches!(b, b' ' | b'\t'))
+                        .count();
+                    range.end += spaces;
+                }
                 if !inline.is_blank() || !inline.images.is_empty() {
                     self.push_block(Block::Paragraph(inline));
                 } else {

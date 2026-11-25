@@ -9,6 +9,7 @@ pub(super) const AREA_LINE: f32 = 20.0;
 /// 按它的行数定，再交给 [`draw_area_field`] 绘制：一帧里只测量一次宽度、只做一次折行。
 pub(super) struct AreaWrap {
     font: FontKind,
+    size: f32,
     /// 排版用的文字：输入法组字中的文字插在光标处。
     display: String,
     /// 组字中的文字的字节数。
@@ -52,7 +53,15 @@ pub(crate) fn wrap_area_field(
     field: &mut TextField,
     focused: bool,
 ) -> AreaWrap {
-    wrap_area_field_font(app, frame, width, field, focused, FontKind::Ui)
+    wrap_area_field_font(
+        app,
+        frame,
+        width,
+        field,
+        focused,
+        FontKind::Ui,
+        app.fonts.ui,
+    )
 }
 
 pub(super) fn wrap_area_field_font(
@@ -62,6 +71,7 @@ pub(super) fn wrap_area_field_font(
     field: &mut TextField,
     focused: bool,
     font: FontKind,
+    size: f32,
 ) -> AreaWrap {
     let preedit = if focused {
         app.ime.field_preedit.as_str()
@@ -108,7 +118,7 @@ pub(super) fn wrap_area_field_font(
             opportunity = Some(all.len() - 1);
         }
         previous = grapheme.chars().next_back();
-        let w = frame.measure(font, app.fonts.ui, grapheme);
+        let w = frame.measure(font, size, grapheme);
         // 放不下：从最近的可折行处起换到下一行；该行没有可折行处时只把这个字素换到下一行。
         // 折行处的边界归入下一行的开头，上一行末尾的位置另记在 `ends` 中。
         while x > 0.0 && x + w > width {
@@ -149,6 +159,7 @@ pub(super) fn wrap_area_field_font(
     }
     AreaWrap {
         font,
+        size,
         display,
         preedit: pl,
         row_starts,
@@ -177,6 +188,7 @@ pub(crate) fn draw_area_field(
     let p = app.palette;
     let AreaWrap {
         font,
+        size,
         display,
         preedit: pl,
         row_starts,
@@ -270,9 +282,9 @@ pub(crate) fn draw_area_field(
         let line = band(r as u32);
         if line.bottom() > area.y && line.y < area.bottom() {
             if font == FontKind::Mono {
-                let metrics = frame.metrics(font, app.fonts.ui);
+                let metrics = frame.metrics(font, size);
                 let baseline = line.y + (line.h + metrics.ascent - metrics.descent) / 2.0;
-                frame.text(font, app.fonts.ui, area.x, baseline, segment, color, area);
+                frame.text(font, size, area.x, baseline, segment, color, area);
             } else {
                 ui_text(frame, app, area.x, line, segment, color, area);
             }

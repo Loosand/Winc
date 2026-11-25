@@ -48,6 +48,8 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         let mut text = std::mem::take(&mut app.overlays.picker.input);
         let focused = app.focus == Focus::Picker;
         app.ime.cursor = if source {
+            let base = (app.fonts.code * crate::app::preview::markdown::laid::BASE_RATIO).round();
+            let size = base * 0.83;
             let wrap = super::fields::wrap_area_field_font(
                 app,
                 frame,
@@ -55,6 +57,7 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
                 &mut text,
                 focused,
                 FontKind::Mono,
+                size,
             );
             super::fields::draw_area_field(app, frame, field, &mut text, wrap, placeholder, focused)
         } else {

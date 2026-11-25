@@ -42,7 +42,7 @@ impl Cx<'_, '_> {
                 {
                     let (revealed, blanks, placed) = reveal(raw);
                     self.preedit |= placed;
-                    return RawState::Reveal(Box::new(revealed), blanks);
+                    return RawState::Reveal(revealed, blanks);
                 }
                 if matches!(block, Block::Rule(_)) {
                     return RawState::Rule;

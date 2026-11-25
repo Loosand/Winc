@@ -255,10 +255,18 @@ impl<'a> SourceBridge<'a> {
     pub fn leaf_at(&self, caret: usize) -> Option<LiveLeaf> {
         let len = self.rope.len_bytes();
         let caret = self.snap_byte(caret);
+        let delta = len as i64 - self.parsed.len as i64;
+        // 输入领先于异步解析时，先将当前光标还原到上一版解析坐标系，再在旧 `leaves` / `ranges`
+        // 中查找归属块，避免刚输入的多字节字符（如中文）越过未平移的下一块起点而跳块。
+        let parsed_caret = if delta > 0 {
+            caret.saturating_sub(delta as usize)
+        } else {
+            caret
+        };
         let i = self
             .parsed
             .leaves
-            .partition_point(|l| l.range.start <= caret);
+            .partition_point(|l| l.range.start <= parsed_caret);
         let line = self.rope.byte_to_line(caret);
         let line_start = self.rope.line_to_byte(line);
         let line_end = self
@@ -286,7 +294,7 @@ impl<'a> SourceBridge<'a> {
             // 叶子块：取该叶子块，从光标所在行显示原文。
             (_, Some(leaf))
                 if block_of(leaf.range.start)
-                    .is_some_and(|block| block_of(caret) == Some(block)) =>
+                    .is_some_and(|block| block_of(parsed_caret) == Some(block)) =>
             {
                 let start = leaf.range.start;
                 (

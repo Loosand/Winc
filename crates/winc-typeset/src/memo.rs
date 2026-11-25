@@ -157,6 +157,7 @@ impl Para {
         }
         self.bold.hash(h);
         self.align.hash(h);
+        self.keep_spaces.hash(h);
     }
 }
 

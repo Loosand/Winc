@@ -389,7 +389,7 @@ fn blank_rows_at_document_edges_and_after_properties_are_clickable() {
         (
             "properties",
             format!("{HEADER}\n \n\n# 乙"),
-            [HEADER.len(), HEADER.len() + 1, HEADER.len() + 3],
+            [HEADER.len(), HEADER.len() + 2, HEADER.len() + 3],
         ),
     ] {
         let (mut app, dir) = live_doc(&format!("md-blank-{name}"), &source);
@@ -707,5 +707,300 @@ fn document_end_scrolls_an_offscreen_last_paragraph_into_view() {
     let y = caret_screen_y(&app);
     let area = app.preview.markdown.area;
     assert!((area.y..area.bottom()).contains(&y), "{y} {area:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn typing_trailing_spaces_advances_visible_caret() {
+    let (mut app, dir) = live_doc(
+        "md-trailing-spaces",
+        "你好，打了很多空格\n\n**摘要** 正文\n",
+    );
+    put_caret(&mut app, "你好，打了很多空格", true);
+    let caret_x = |app: &App| {
+        let laid = app.preview.markdown.layout.as_ref().unwrap();
+        laid.caret_point(app.live_caret_source().unwrap())
+            .unwrap()
+            .0
+    };
+    let mut prev_x = caret_x(&app);
+    for n in 1..=4 {
+        app.run(winc_editor::Command::Insert(" ".into()));
+        settle(&mut app);
+        let x = caret_x(&app);
+        assert!(
+            x > prev_x + 1.0,
+            "第 {n} 个行尾空格未推动光标: {x} <= {prev_x}"
+        );
+        prev_x = x;
+    }
+
+    // 在加粗元素之后输入空格同样推动光标，不丢弃纯空格段。
+    put_caret(&mut app, "**摘要** 正文", true);
+    let before = caret_x(&app);
+    app.run(winc_editor::Command::Insert("   ".into()));
+    settle(&mut app);
+    let after = caret_x(&app);
+    assert!(
+        after > before + 5.0,
+        "样式后空格未推动光标: {after} <= {before}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn blank_row_caret_has_clearance_from_neighboring_paragraphs() {
+    let source = "适用读者：正文\n\n\n**摘要** 第二段\n";
+    let (app, dir) = live_doc("md-blank-clearance", source);
+    let laid = app.preview.markdown.layout.as_ref().unwrap();
+    let gap_top = laid.tops()[0] + laid.block_at(0).unwrap().height;
+    let gap_bottom = laid.tops()[1];
+    let second_blank = source.find("\n\n\n").unwrap() + 2;
+    let (_, caret_y, caret_h) = laid.caret_point(second_blank).unwrap();
+    let top_in_content = laid.content_y(caret_y);
+    assert!(
+        top_in_content > gap_top,
+        "空行光标紧贴上一段底部: {top_in_content} <= {gap_top}"
+    );
+    assert!(
+        top_in_content + caret_h < gap_bottom,
+        "空行光标撞进下一段顶部: {} >= {gap_bottom}",
+        top_in_content + caret_h
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn typing_spaces_on_blank_line_advances_caret_without_jump_or_overlap() {
+    let source = "适用读者：正文\n\n\n**摘要** 第二段\n";
+    let (mut app, dir) = live_doc("md-blank-spaces", source);
+    let blank_byte = source.find("\n\n\n").unwrap() + 2;
+    let blank_char = app
+        .editor
+        .active()
+        .unwrap()
+        .text()
+        .rope()
+        .unwrap()
+        .byte_to_char(blank_byte);
+    app.editor.active_mut().unwrap().selection = winc_core::Selection::point(blank_char);
+    app.start_live_editing();
+    settle(&mut app);
+
+    let caret_x = |app: &App| {
+        let laid = app.preview.markdown.layout.as_ref().unwrap();
+        laid.caret_point(app.live_caret_source().unwrap())
+            .unwrap()
+            .0
+    };
+    let mut prev_x = caret_x(&app);
+    assert!(prev_x.abs() < 0.5, "空行行首光标应从 0 开始: {prev_x}");
+
+    for n in 1..=4 {
+        app.run(winc_editor::Command::Insert(" ".into()));
+        paint(&mut app);
+        let immediate_x = caret_x(&app);
+        settle(&mut app);
+        let settled_x = caret_x(&app);
+        assert!(
+            immediate_x > prev_x + 1.0,
+            "第 {n} 个空行空格即时帧未推动光标: {immediate_x} <= {prev_x}"
+        );
+        assert!(
+            settled_x > prev_x + 1.0,
+            "第 {n} 个空行空格解析后未推动光标: {settled_x} <= {prev_x}"
+        );
+        assert!(
+            (immediate_x - settled_x).abs() < 0.5,
+            "第 {n} 个空行空格解析前后横向跳动: immediate={immediate_x}, settled={settled_x}"
+        );
+        // 绘制出的光标矩形不得侵入邻接段落。
+        let ime = app.ime.cursor.expect("空行光标已绘制");
+        let laid = app.preview.markdown.layout.as_ref().unwrap();
+        let origin_y = laid.origin_y(app.preview.markdown.area.y, app.preview.markdown.scroll());
+        let p0_bottom = origin_y + laid.tops()[0] + laid.block_at(0).unwrap().height;
+        let p1_top = origin_y + laid.tops()[1];
+        assert!(
+            ime.y > p0_bottom,
+            "绘制空行光标上沿侵入上一段: {} <= {p0_bottom}",
+            ime.y
+        );
+        assert!(
+            ime.y + ime.h < p1_top,
+            "绘制空行光标下沿侵入下一段: {} >= {p1_top}",
+            ime.y + ime.h
+        );
+        prev_x = settled_x;
+    }
+
+    // 在含 4 个空格的空行上点击行首和空格末尾，分别落回第 0 列和第 4 列。
+    let (left, area_y, scroll, caret_y, caret_h) = {
+        let laid = app.preview.markdown.layout.as_ref().unwrap();
+        let (_, y, h) = laid.caret_point(app.live_caret_source().unwrap()).unwrap();
+        (
+            laid.column_bounds().0,
+            app.preview.markdown.area.y,
+            app.preview.markdown.scroll(),
+            y,
+            h,
+        )
+    };
+    let click_y = area_y - scroll + caret_y + caret_h / 2.0;
+    let hit_start = app
+        .preview
+        .markdown
+        .layout
+        .as_ref()
+        .unwrap()
+        .source_at(area_y, scroll, left, click_y);
+    let hit_end = app.preview.markdown.layout.as_ref().unwrap().source_at(
+        area_y,
+        scroll,
+        left + prev_x,
+        click_y,
+    );
+    assert_eq!(hit_start, Some(blank_byte));
+    assert_eq!(hit_end, Some(blank_byte + 4));
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn epidemic_modeling_multiline_spaces_and_click_roundtrip() {
+    let source = concat!(
+        "---\n",
+        "title: 传染病动力学入门\n",
+        "---\n\n",
+        "# 传染病动力学入门：SIR 模型\n\n",
+        "公共卫生建模学习小组  \n",
+        "2024 年 3 月 · 第 1.2 版\\\n",
+        "适用读者：具备微积分基础的公共卫生、统计与计算机专业读者\n\n",
+        "**摘要** 🦠 本文从仓室模型的基本思想出发，重点讨论**基本再生数** $R_0$ 的含义。\n",
+    );
+    let (mut app, dir) = live_doc("md-epidemic-repro", source);
+
+    // 1. 模拟用户在「第 1.2 版\」后删掉反斜杠并连打 7 个空格再打标点。
+    put_caret(&mut app, "第 1.2 版\\", true);
+    app.run(winc_editor::Command::Backspace { word: false });
+    settle(&mut app);
+
+    let caret_x = |app: &App| {
+        let laid = app.preview.markdown.layout.as_ref().unwrap();
+        laid.caret_point(app.live_caret_source().unwrap())
+            .unwrap()
+            .0
+    };
+    let mut prev_x = caret_x(&app);
+    for n in 1..=7 {
+        app.run(winc_editor::Command::Insert(" ".into()));
+        paint(&mut app);
+        let immediate_x = caret_x(&app);
+        settle(&mut app);
+        let settled_x = caret_x(&app);
+        assert!(
+            immediate_x > prev_x + 1.0,
+            "多行段落中间行第 {n} 个空格即时帧未推动光标: {immediate_x} <= {prev_x}"
+        );
+        assert!(
+            settled_x > prev_x + 1.0,
+            "多行段落中间行第 {n} 个空格解析后未推动光标: {settled_x} <= {prev_x}"
+        );
+        prev_x = settled_x;
+    }
+
+    // 2. 验证在「**摘要** 🦠 ... $R_0$」段落内点击不同文字后，光标回落位置无异常偏移。
+    for needle in ["本文", "基本再生数", "的含义"] {
+        put_caret(&mut app, needle, false);
+        settle(&mut app);
+        let src = app.live_caret_source().unwrap();
+        let laid = app.preview.markdown.layout.as_ref().unwrap();
+        let (x, y, h) = laid.caret_point(src).expect("caret point");
+        let left = laid.column_bounds().0;
+        let area_y = app.preview.markdown.area.y;
+        let scroll = app.preview.markdown.scroll();
+        let hit = laid.source_at(
+            area_y,
+            scroll,
+            left + x + 1.0,
+            area_y - scroll + y + h / 2.0,
+        );
+        assert_eq!(
+            hit,
+            Some(src),
+            "点击 `{needle}` 处后命中源码偏移不匹配: hit={hit:?}, expected={src}"
+        );
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn blank_row_caret_matches_body_caret_height_and_selects_spaces() {
+    let source = "适用读者：正文\n\n\n**摘要** 第二段\n";
+    let (mut app, dir) = live_doc("md-blank-caret-height-and-select", source);
+    put_caret(&mut app, "适用读者：正文", true);
+    let body_h = app.ime.cursor.expect("正文光标已绘制").h;
+
+    let blank_byte = source.find("\n\n\n").unwrap() + 2;
+    let blank_char = app
+        .editor
+        .active()
+        .unwrap()
+        .text()
+        .rope()
+        .unwrap()
+        .byte_to_char(blank_byte);
+    app.editor.active_mut().unwrap().selection = winc_core::Selection::point(blank_char);
+    settle(&mut app);
+    let blank_h = app.ime.cursor.expect("空行光标已绘制").h;
+    assert!(
+        (blank_h - body_h).abs() < 0.5,
+        "空行光标高度应与正文一致: blank_h={blank_h}, body_h={body_h}"
+    );
+
+    // 在空行输入 4 个空格后，选中这些空格必须生成非空选区矩形，且宽度随选中空格数线性增长。
+    app.run(winc_editor::Command::Insert("    ".into()));
+    settle(&mut app);
+    let laid = app.preview.markdown.layout.as_ref().unwrap();
+    let two = laid.blank_selection_rects(blank_byte, blank_byte + 2);
+    let four = laid.blank_selection_rects(blank_byte, blank_byte + 4);
+    assert_eq!(two.len(), 1, "选中 2 个空行空格应生成 1 个选区矩形");
+    assert_eq!(four.len(), 1, "选中 4 个空行空格应生成 1 个选区矩形");
+    assert!(two[0].w > 2.0 && four[0].w > two[0].w * 1.8);
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn holding_a_key_with_async_parse_does_not_scroll_the_page() {
+    let source = concat!(
+        "---\n",
+        "title: 传染病动力学入门\n",
+        "authors:\n  - 公共卫生建模学习小组\n",
+        "---\n\n",
+        "# 传染病动力学入门\n\n",
+        "公共卫生建模学习小组  \n",
+        "2024 年 3 月 · 第 1.2 版\n\n",
+        "适用读者：正文\n\n",
+    )
+    .to_owned()
+        + &"段落内容。\n\n".repeat(40);
+    let (mut app, dir) = live_doc("md-no-scroll-drift", &source);
+    put_caret(&mut app, "第 1.2 版", true);
+    settle(&mut app);
+    let initial_scroll = app.preview.markdown.scroll();
+
+    // 模拟长文档解析超过 INLINE_PARSE，连续按住一个字符并在异步解析完成前后重绘。
+    for _ in 0..8 {
+        app.preview.markdown.cost = Some(std::time::Duration::from_millis(20));
+        app.run(winc_editor::Command::Insert("a".into()));
+        paint(&mut app);
+        settle(&mut app);
+    }
+    let after_scroll = app.preview.markdown.scroll();
+    assert!(
+        (after_scroll - initial_scroll).abs() < 0.5,
+        "连续输入字符不应导致页面持续滚动: before={initial_scroll}, after={after_scroll}"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

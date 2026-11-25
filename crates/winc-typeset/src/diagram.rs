@@ -403,6 +403,7 @@ impl Cx<'_, '_> {
             color,
             line: 1.35,
             align: Align::Center,
+            keep_spaces: false,
         };
         let inline = Inline {
             text: text.to_owned(),

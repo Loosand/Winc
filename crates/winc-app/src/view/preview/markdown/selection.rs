@@ -120,7 +120,8 @@ pub(super) fn draw(
             } else if to > range.end
                 && let Some(next) = laid.tops().get(block + 1)
             {
-                bottom = bottom.max(body.y + next - laid.top(block));
+                let limit = laid.gap_top_after(block).unwrap_or(*next);
+                bottom = bottom.max(body.y + limit - laid.top(block));
             }
         }
         frame.rect_clipped(
@@ -129,5 +130,24 @@ pub(super) fn draw(
             0.0,
             clip,
         );
+    }
+}
+
+/// 绘制落在段间/文末可编辑空行上的选区背景（包括空行上键入的空格与跨行选区）。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_gaps(
+    frame: &mut Frame<'_>,
+    laid: &Laid,
+    left: f32,
+    origin_y: f32,
+    clip: Rect,
+    (from, to): (usize, usize),
+    color: Color,
+) {
+    for rect in laid.blank_selection_rects(from, to) {
+        let screen = Rect::new(left + rect.x, origin_y + rect.y, rect.w, rect.h);
+        if screen.bottom() > clip.y && screen.y < clip.bottom() {
+            frame.rect_clipped(screen, color, 0.0, clip);
+        }
     }
 }

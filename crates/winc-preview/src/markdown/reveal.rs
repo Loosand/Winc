@@ -25,25 +25,155 @@ pub fn reveal(
     insert: Option<&str>,
     leading_quote: bool,
 ) -> Block {
+    let mut blocks = reveal_blocks(text, caret, insert, leading_quote);
+    if blocks.len() == 1
+        && let Some(single) = blocks.pop()
+    {
+        return single;
+    }
+    let insert = caret.zip(insert);
+    let lines = Lines::strip(text, leading_quote);
+    let plain = lines.plain.trim_end_matches(['\n', '\r']);
+    Block::Paragraph(verbatim(plain, insert, |at| Some(lines.to_text(at))))
+}
+
+/// 编辑器核心 · 多块行内标记显隐：与 [`reveal`] 相同，但当实时编辑期间（例如回车拆段、
+/// 异步解析尚未追上时）原文已经拆成多个段落或标题，逐块保持富文本排版，仅对光标所在块
+/// 显露接触到的语法标记，避免整段退回为未排版的纯文本源码。
+pub fn reveal_blocks(
+    text: &str,
+    caret: Option<usize>,
+    insert: Option<&str>,
+    leading_quote: bool,
+) -> Vec<Block> {
     let insert = caret.zip(insert);
     let lines = Lines::strip(text, leading_quote);
     let plain = &lines.plain;
     // 去掉引用标记后没有内容（只输入了 `>`）：逐字显示原文，光标仍有位置可落。
     if plain.trim().is_empty() && !text.trim().is_empty() {
         let text = text.trim_end_matches(['\n', '\r']);
-        return Block::Paragraph(verbatim(text, insert, Some));
+        return vec![Block::Paragraph(verbatim(text, insert, Some))];
     }
     let parsed = parse(plain);
-    let (heading, inline) = match parsed.blocks.as_slice() {
-        [Block::Paragraph(inline)] => (None, inline),
-        [Block::Heading(level, inline)] => (Some(*level), inline),
-        _ => {
-            let text = plain.trim_end_matches(['\n', '\r']);
-            return Block::Paragraph(verbatim(text, insert, |at| Some(lines.to_text(at))));
+    if parsed.blocks.is_empty() {
+        let text = plain.trim_end_matches(['\n', '\r']);
+        return vec![Block::Paragraph(verbatim(text, insert, |at| {
+            Some(lines.to_text(at))
+        }))];
+    }
+    if parsed.blocks.len() == 1 {
+        return match parsed.blocks.as_slice() {
+            [Block::Paragraph(inline)] => {
+                let base = parsed.ranges.first().map_or(0, |r| r.start) + inline.source;
+                vec![Block::Paragraph(reveal_slice(
+                    text,
+                    &lines,
+                    0..plain.len(),
+                    base,
+                    inline,
+                    caret,
+                    insert,
+                    leading_quote,
+                ))]
+            }
+            [Block::Heading(level, inline)] => {
+                let base = parsed.ranges.first().map_or(0, |r| r.start) + inline.source;
+                vec![Block::Heading(
+                    *level,
+                    reveal_slice(
+                        text,
+                        &lines,
+                        0..plain.len(),
+                        base,
+                        inline,
+                        caret,
+                        insert,
+                        leading_quote,
+                    ),
+                )]
+            }
+            _ => {
+                let text = plain.trim_end_matches(['\n', '\r']);
+                vec![Block::Paragraph(verbatim(text, insert, |at| {
+                    Some(lines.to_text(at))
+                }))]
+            }
+        };
+    }
+
+    // 多个块（常见于回车拆段而后台解析尚未追上）：只对光标所在的块显露标记，其余块保持排版。
+    let caret_plain = caret.map(|c| lines.to_plain(c));
+    let mut blocks = Vec::with_capacity(parsed.blocks.len());
+    for (block, range) in parsed.blocks.into_iter().zip(parsed.ranges) {
+        let line_limit = match plain[range.end..].find('\n') {
+            Some(rel) => range.end + rel,
+            None => plain.len(),
+        };
+        let slice_end = plain[..line_limit].trim_end_matches('\r').len();
+        let slice = range.start..slice_end.max(range.start);
+        let here = caret_plain.is_some_and(|c| slice.start <= c && c <= slice.end);
+        let block_caret = here.then_some(caret).flatten();
+        let block_insert = here.then_some(insert).flatten();
+        match block {
+            Block::Paragraph(inline) => {
+                let base = range.start + inline.source;
+                blocks.push(Block::Paragraph(reveal_slice(
+                    text,
+                    &lines,
+                    slice,
+                    base,
+                    &inline,
+                    block_caret,
+                    block_insert,
+                    leading_quote && range.start == 0,
+                )));
+            }
+            Block::Heading(level, inline) => {
+                let base = range.start + inline.source;
+                blocks.push(Block::Heading(
+                    level,
+                    reveal_slice(
+                        text,
+                        &lines,
+                        slice,
+                        base,
+                        &inline,
+                        block_caret,
+                        block_insert,
+                        leading_quote && range.start == 0,
+                    ),
+                ));
+            }
+            _ => {
+                let raw_part = plain[slice.clone()].trim_end_matches(['\n', '\r']);
+                let start = slice.start;
+                blocks.push(Block::Paragraph(verbatim(raw_part, block_insert, |at| {
+                    Some(lines.to_text(start + at))
+                })));
+            }
         }
-    };
-    let base = parsed.ranges.first().map_or(0, |r| r.start) + inline.source;
-    let ranges = caret.map_or_else(Vec::new, |_| elements(plain));
+    }
+    blocks
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reveal_slice(
+    text: &str,
+    lines: &Lines,
+    slice: Range<usize>,
+    base: usize,
+    inline: &Inline,
+    caret: Option<usize>,
+    insert: Option<(usize, &str)>,
+    leading_quote: bool,
+) -> Inline {
+    let plain = &lines.plain;
+    let ranges = caret.map_or_else(Vec::new, |_| {
+        elements(&plain[slice.clone()])
+            .into_iter()
+            .map(|r| slice.start + r.start..slice.start + r.end)
+            .collect()
+    });
     let elements = ElementIndex::new(&ranges);
     let mut out = Out {
         insert,
@@ -53,13 +183,13 @@ pub fn reveal(
     let caret = caret.map(|c| lines.to_plain(c));
     let anchors = &inline.map.0;
     // 已写入的文字和已处理的原文（相对 `plain`）的末尾位置。
-    let (mut t, mut s) = (0, 0);
+    let (mut t, mut s) = (0, slice.start);
     let emit = |out: &mut Out, gap: Range<usize>, made: Range<usize>| {
         let generated = &inline.text[made.clone()];
         // 由原文生成的文字（emoji、脚注编号）之前的标记单独成为一处：光标接触时显示原文，
         // 不显示生成的文字。
         let own = !generated.trim().is_empty();
-        let shown = out.gap(plain, gap, &elements, caret, own, &lines);
+        let shown = out.gap(plain, gap, &elements, caret, own, lines);
         let image = generated.contains(super::IMAGE_MARK);
         if shown && image && !out.text.ends_with('\n') {
             // 显示图片的原文时，图片另起一行排在原文下方，使原文与图片都完整可见。
@@ -74,14 +204,14 @@ pub fn reveal(
         emit(&mut out, s..src.max(s), t..at.max(t));
         t = t.max(at);
         if len > 0 {
-            out.copy(inline, at..at + len, Some((src, &lines)), &elements, caret);
+            out.copy(inline, at..at + len, Some((src, lines)), &elements, caret);
             t = at + len;
             s = s.max(src + len);
         }
     }
-    emit(&mut out, s..plain.len(), t..inline.text.len());
+    emit(&mut out, s..slice.end.max(s), t..inline.text.len());
     out.flush();
-    let inline = Inline {
+    Inline {
         text: out.text,
         runs: out.runs,
         links: inline.links.clone(),
@@ -90,10 +220,6 @@ pub fn reveal(
         map: out.map,
         ids: inline.ids.clone(),
         source: 0,
-    };
-    match heading {
-        Some(level) => Block::Heading(level, inline),
-        None => Block::Paragraph(inline),
     }
 }
 
@@ -405,13 +531,26 @@ impl Out<'_> {
         }
         let mut shown = false;
         let text = &plain[gap.clone()];
-        // 不属于任何元素的一段，截止到换行。
+        // 不属于任何元素的一段，截止到换行或相邻元素的边界。
         let piece = |i: usize| {
             if own {
                 return 0..text.len();
             }
-            let from = text[..i].rfind('\n').map_or(0, |n| n + 1);
-            let to = text[i..].find('\n').map_or(text.len(), |n| i + n);
+            let line_start = text[..i].rfind('\n').map_or(0, |n| n + 1);
+            let from = text[line_start..i]
+                .char_indices()
+                .rev()
+                .find_map(|(off, ch)| {
+                    elements
+                        .at(gap.start + line_start + off)
+                        .map(|_| line_start + off + ch.len_utf8())
+                })
+                .unwrap_or(line_start);
+            let line_end = text[i..].find('\n').map_or(text.len(), |n| i + n);
+            let to = text[i..line_end]
+                .char_indices()
+                .find_map(|(off, _)| elements.at(gap.start + i + off).map(|_| i + off))
+                .unwrap_or(line_end);
             from..to
         };
         for (i, c) in text.char_indices() {
@@ -419,20 +558,33 @@ impl Out<'_> {
                 continue;
             }
             let at = gap.start + i;
-            let show = match elements.at(at) {
-                Some(e) => touches(e, caret),
+            let (show, style) = match elements.at(at) {
+                Some(e) => (
+                    touches(e, caret),
+                    Style {
+                        flags: Style::SYNTAX,
+                        link: 0,
+                    },
+                ),
                 None => {
                     let p = piece(i);
                     let p = gap.start + p.start..gap.start + p.end;
-                    // 行首、行尾的空白（续行的缩进、硬换行的两个空格）不视为标记。
-                    !plain[p.clone()].trim().is_empty() && touches(&p, caret)
+                    if plain[p.clone()].trim().is_empty() {
+                        // 光标接触空白段（含段落首尾空格与多行段落行尾空格）时按普通文字保留，
+                        // 确保键入空格、移动光标与拖选空格都有真实宽度。
+                        (touches(&p, caret), Style::default())
+                    } else {
+                        (
+                            touches(&p, caret),
+                            Style {
+                                flags: Style::SYNTAX,
+                                link: 0,
+                            },
+                        )
+                    }
                 }
             };
             if show {
-                let style = Style {
-                    flags: Style::SYNTAX,
-                    link: 0,
-                };
                 self.push(c, style, Some(lines.to_text(at)));
                 shown = true;
             }
