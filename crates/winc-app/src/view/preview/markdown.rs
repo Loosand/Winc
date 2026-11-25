@@ -81,6 +81,86 @@ fn draw_plain(frame: &mut Frame<'_>, items: &[Item], (left, top): (f32, f32), cl
     }
 }
 
+/// 绘制非侵入式装饰层（区间高亮、下划线、删除线与行内虚文字挂件）。
+fn draw_decorations(
+    frame: &mut Frame<'_>,
+    laid: &Laid,
+    decorations: &winc_richtext::DecorationSet,
+    left: f32,
+    origin_y: f32,
+    clip: Rect,
+    base: f32,
+) {
+    use winc_richtext::{DecorationKind, MarkStyle};
+    for dec in decorations.all() {
+        match &dec.kind {
+            DecorationKind::Mark { style } => {
+                for rect in laid.mark_rects(dec.range.clone()) {
+                    let r = Rect::new(left + rect.x, origin_y + rect.y, rect.w, rect.h);
+                    if r.bottom() <= clip.y || r.y >= clip.bottom() {
+                        continue;
+                    }
+                    match *style {
+                        MarkStyle::Background(color) => {
+                            frame.rect_clipped(r, color, 2.0, clip);
+                        }
+                        MarkStyle::SolidUnderline(color) => {
+                            frame.rect_clipped(
+                                Rect::new(r.x, (r.bottom() - 1.5).round(), r.w, 1.5),
+                                color,
+                                0.0,
+                                clip,
+                            );
+                        }
+                        MarkStyle::DashedUnderline(color) => {
+                            let y = (r.bottom() - 1.5).round();
+                            let mut x = r.x;
+                            while x < r.right() {
+                                let w = 2.0f32.min(r.right() - x);
+                                frame.rect_clipped(Rect::new(x, y, w, 1.0), color, 0.0, clip);
+                                x += 4.0;
+                            }
+                        }
+                        MarkStyle::Strikethrough(color) => {
+                            let y = (r.y + r.h * 0.5).round();
+                            frame.rect_clipped(Rect::new(r.x, y, r.w, 1.0), color, 0.0, clip);
+                        }
+                    }
+                }
+            }
+            DecorationKind::InlineWidget { text, style } => {
+                if let Some((x, y, h)) = laid.inline_widget_point(dec.range.start) {
+                    let sy = origin_y + laid.content_y(y);
+                    if sy + h <= clip.y || sy >= clip.bottom() {
+                        continue;
+                    }
+                    let sx = left + x;
+                    let faux = winc_render::Faux {
+                        bold: false,
+                        italic: style.italic,
+                    };
+                    if let Some(bg) = style.background {
+                        let w = frame.measure_faux(FontKind::Ui, faux, base, text);
+                        frame.rect_clipped(Rect::new(sx, sy, w, h), bg, 2.0, clip);
+                    }
+                    let baseline = sy + base * 1.05;
+                    frame.text_faux(
+                        FontKind::Ui,
+                        faux,
+                        base,
+                        sx,
+                        baseline,
+                        text,
+                        style.color,
+                        clip,
+                    );
+                }
+            }
+            DecorationKind::BlockWidget { .. } => {}
+        }
+    }
+}
+
 /// 在指向不存在的文件或标题的链接下方绘制错误色的虚线。
 fn draw_broken_links(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     let color = app.palette.error.alpha(0.7);
@@ -120,6 +200,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     }
     // 可编辑的预览在排版之前取得当前文字的解析结果，本帧即按最新的结构显示。
     app.parse_markdown_inline();
+    app.sync_markdown_decorations();
     // 第一次解析还没回来：先留空。
     let Some(parsed) = app.preview.markdown.parsed.clone() else {
         return;
@@ -456,6 +537,17 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             .is_some_and(|p| p.input == PropertyInput::Source);
     if let Some(range) = live_selection.filter(|_| motion.as_ref().is_none_or(|m| !m.moving())) {
         selection::draw_gaps(frame, &laid, left, origin_y, area, range, p.selection);
+    }
+    if !md.decorations.is_empty() && motion.as_ref().is_none_or(|m| !m.moving()) {
+        draw_decorations(
+            frame,
+            &laid,
+            &md.decorations,
+            left,
+            origin_y,
+            area,
+            key.base,
+        );
     }
     for (i, block_top, block) in laid.iter_blocks().skip(first) {
         let opacity = match focused {

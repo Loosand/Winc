@@ -1199,3 +1199,76 @@ fn invariant_12_long_doc_edits_stay_synchronous_via_incremental_reparse() {
 
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// 不变量 13：非侵入式装饰层（批注高亮与 AI 幽灵补全挂件）不污染文档正文与撤销历史，
+/// 在上方持续编辑后自动随原文精确平移并产出有效的视图几何。
+#[test]
+fn invariant_13_decoration_layer_anchors_and_tracks_edits() {
+    use winc_richtext::{Decoration, DecorationId, DecorationLayer, MarkStyle, WidgetStyle};
+
+    let doc = "第一段前言。\n\n第二段讨论**基本再生数**的含义。\n\n尾段。\n";
+    let (mut app, dir) = live_doc("inv-13-decorations", doc);
+    let target = "基本再生数";
+    let target_start = doc.find(target).unwrap();
+    let target_range = target_start..target_start + target.len();
+    let ghost_at = doc.find("的含义").unwrap() + "的含义".len();
+
+    app.preview.markdown.decorations.upsert(Decoration::mark(
+        DecorationId(1),
+        DecorationLayer::Annotation,
+        target_range,
+        MarkStyle::Background(winc_render::Color::hex(0xfff2a8).alpha(0.5)),
+    ));
+    app.preview
+        .markdown
+        .decorations
+        .upsert(Decoration::inline_widget(
+            DecorationId(2),
+            DecorationLayer::AiPreview,
+            ghost_at,
+            "（建议补充数学推导）",
+            WidgetStyle {
+                color: winc_render::Color::hex(0x7c8696),
+                background: None,
+                italic: true,
+            },
+        ));
+    paint(&mut app);
+
+    // 在装饰上方插入新文本与新段落：装饰锚点必须自动同步平移到新位置。
+    put_caret(&mut app, "第一段前言。", true);
+    let inserted = " 新增说明文字\n\n插入的中间段";
+    app.run(winc_editor::Command::Insert(inserted.into()));
+    paint(&mut app);
+
+    let now_text = doc_text(&app);
+    assert!(
+        !now_text.contains("建议补充数学推导"),
+        "行内虚文字不得写入原文"
+    );
+    let expected_start = now_text.find(target).unwrap();
+    let expected_range = expected_start..expected_start + target.len();
+    let expected_ghost = now_text.find("的含义").unwrap() + "的含义".len();
+
+    let all = app.preview.markdown.decorations.all();
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].range, expected_range, "批注锚点未随上方编辑精确平移");
+    assert_eq!(
+        all[1].range,
+        expected_ghost..expected_ghost,
+        "AI 预览挂件锚点未随上方编辑精确平移"
+    );
+
+    let laid = app.preview.markdown.layout.as_ref().unwrap();
+    let rects = laid.mark_rects(all[0].range.clone());
+    assert!(
+        !rects.is_empty() && rects[0].w > 20.0,
+        "装饰投影矩形无效: {rects:?}"
+    );
+    assert!(
+        laid.inline_widget_point(all[1].range.start).is_some(),
+        "行内挂件锚点坐标缺失"
+    );
+
+    std::fs::remove_dir_all(dir).unwrap();
+}

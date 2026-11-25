@@ -146,6 +146,11 @@ impl ChangeSeq {
         self.steps.is_empty()
     }
 
+    /// 返回按先后排列的全部变更步骤。
+    pub fn steps(&self) -> &[ChangeMap] {
+        &self.steps
+    }
+
     /// 追加一步变更映射。
     pub fn push(&mut self, map: ChangeMap) {
         if !map.is_empty() {

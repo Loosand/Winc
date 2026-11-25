@@ -205,6 +205,10 @@ pub(crate) struct MarkdownPreview {
     pub(crate) menu_image: Option<resize::ImageAt>,
     /// 正在拖动把手的图片。
     pub(crate) resizing: Option<resize::Resizing>,
+    /// 非侵入式视图装饰层（批注、校验提示、AI 原位预览等），随编辑自动同步锚点。
+    pub(crate) decorations: winc_richtext::DecorationSet,
+    /// `decorations` 最近一次同步对应的文档版本号。
+    decorations_revision: Option<u64>,
 }
 
 /// 可编辑的预览重排后的过渡动画。
@@ -310,6 +314,8 @@ impl Default for MarkdownPreview {
             menu_picture: None,
             menu_image: None,
             resizing: None,
+            decorations: winc_richtext::DecorationSet::new(),
+            decorations_revision: None,
         }
     }
 }
@@ -382,10 +388,40 @@ impl MarkdownPreview {
         self.images.reset();
         self.failed = None;
         self.contents = None;
+        self.decorations.clear();
+        self.decorations_revision = None;
     }
 }
 
 impl App {
+    /// 按当前活动文档的最新编辑记录同步装饰层锚点，使批注与 AI 预览在持续编辑中不漂移。
+    pub(crate) fn sync_markdown_decorations(&mut self) {
+        let Some(doc) = self.editor.active() else {
+            return;
+        };
+        let md = &mut self.preview.markdown;
+        if md.doc != Some(doc.id) {
+            return;
+        }
+        if md.decorations.is_empty() {
+            md.decorations_revision = Some(doc.revision);
+            return;
+        }
+        let Some(prev_rev) = md.decorations_revision else {
+            md.decorations_revision = Some(doc.revision);
+            return;
+        };
+        if prev_rev == doc.revision {
+            return;
+        }
+        if let Some((old_range, new_range)) = doc.byte_edit_since(prev_rev) {
+            let change =
+                winc_richtext::ChangeMap::single(old_range.start, old_range.len(), new_range.len());
+            md.decorations.map(&change);
+        }
+        md.decorations_revision = Some(doc.revision);
+    }
+
     /// 返回当前标签显示 Markdown 预览的区域（分栏的右半边或整个编辑区）；不显示时返回 `None`。
     pub(crate) fn markdown_shown_area(&self) -> Option<winc_render::Rect> {
         let doc = self.editor.active()?;

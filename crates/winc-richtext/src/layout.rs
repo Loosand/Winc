@@ -1424,6 +1424,44 @@ impl Laid {
         rects
     }
 
+    /// 将任意原文区间 `range` 投影为内容坐标系下的高亮矩形列表（覆盖单行、多行折行、
+    /// 跨内联样式与空行空格，供统一装饰层绘制批注、搜索匹配与 AI 修订高亮）。
+    pub fn mark_rects(&self, range: std::ops::Range<usize>) -> Vec<Rect> {
+        if range.is_empty() {
+            return Vec::new();
+        }
+        let mut rects = self.blank_selection_rects(range.start, range.end);
+        for (block_idx, block_range) in self.ranges.iter().enumerate() {
+            if block_range.end <= range.start || block_range.start >= range.end {
+                continue;
+            }
+            for (top, _, ix, baseline, size, span, _, text) in self.spans(block_idx..block_idx + 1)
+            {
+                if span.source.is_none() || span.advances.is_empty() {
+                    continue;
+                }
+                let a = span.chars_before(text, range.start.saturating_sub(block_range.start));
+                let b = span.chars_before(text, range.end.saturating_sub(block_range.start));
+                if a >= b {
+                    continue;
+                }
+                let x = ix + span.advances[..a].iter().sum::<f32>();
+                let w = span.advances[a..b].iter().sum::<f32>();
+                if w <= 0.0 {
+                    continue;
+                }
+                let (y, h) = line_box(top + baseline, size);
+                rects.push(Rect::new(x, y, w, h));
+            }
+        }
+        rects
+    }
+
+    /// 返回行内虚拟挂件（如 AI 幽灵补全）在原文偏移 `at` 处的锚点 `(x, y, h)`（相对预览顶部）。
+    pub fn inline_widget_point(&self, at: usize) -> Option<Point> {
+        self.caret_point(at)
+    }
+
     /// Whether a byte begins an actual glyph in the visible source mapping.
     pub fn shows_source(&self, source: usize) -> bool {
         let Some(block) = self
