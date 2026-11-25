@@ -14,8 +14,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use ropey::Rope;
 
+use winc_core::Lines;
 use winc_core::diff::{self, LineHunk};
-use winc_core::{Change, EditKind, Lines, Transaction};
 use winc_editor::diff_view::inline_marks;
 use winc_editor::encoding::decode_known;
 use winc_editor::format::Cancel;
@@ -792,48 +792,7 @@ fn compare(base: &str, rope: &Rope) -> Vec<LineHunk> {
     diff::line_hunks(base, &rope.to_string())
 }
 
-/// 将 `doc` 的第 `lines` 行（含换行符）替换为 `inserted`，作为一步可撤销的编辑；光标不变。
-///
-/// # Errors
-///
-/// 文档不可编辑（只读、大文件）时返回原因。
-pub(crate) fn replace_lines(
-    doc: &mut winc_editor::Document,
-    lines: std::ops::Range<usize>,
-    inserted: String,
-) -> Result<(), &'static str> {
-    if let Some(reason) = doc.edit_blocked(&winc_editor::Command::Insert(String::new())) {
-        return Err(reason);
-    }
-    let text = doc.text();
-    let line_start = |line: usize| {
-        if line >= text.line_count() {
-            text.end_pos()
-        } else {
-            text.line_start(line)
-        }
-    };
-    let start = line_start(lines.start);
-    let end = if lines.is_empty() {
-        start
-    } else {
-        line_start(lines.end)
-    };
-    let removed = doc.text_range(start, end).unwrap_or_default();
-    let selection = doc.selection;
-    let change = Change {
-        start,
-        removed,
-        inserted,
-    };
-    doc.apply(Transaction::new(
-        vec![change],
-        selection,
-        selection,
-        EditKind::Other,
-    ));
-    Ok(())
-}
+pub(crate) use super::merge::replace_lines;
 
 /// 返回文本中第 `lines` 行范围（从 0 起，左闭右开）的内容，保留各行的换行符。
 ///

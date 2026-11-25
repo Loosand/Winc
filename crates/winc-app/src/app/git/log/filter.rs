@@ -159,7 +159,7 @@ impl App {
 
     /// 打开输入其他路径的对话框（路径菜单的「其他路径…」）。
     pub(in crate::app) fn open_log_path_dialog(&mut self) {
-        use crate::app::git::form::FormKind;
+        use crate::app::git::dialog::FormKind;
         self.show_form_dialog(
             FormKind::LogPath,
             TextField::default(),

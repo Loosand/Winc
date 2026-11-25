@@ -109,18 +109,19 @@ impl App {
         true
     }
 
-    /// 提交前的整理做完了：说明整理了几个文件，接着提交。
-    pub(super) fn reformatted(&mut self, count: usize, root: &Path) {
+    /// 提交前的整理做完了：说明整理了几个文件，仍在同一仓库时放行并返回 `true`，由调用方接着
+    /// 提交。
+    pub(super) fn reformatted(&mut self, count: usize, root: &Path) -> bool {
         self.git.commit.busy = false;
         if self.git.root.as_deref() != Some(root) {
             self.git.commit.push_after = false;
-            return;
+            return false;
         }
         if count > 0 {
             self.flash(t!("git-commit-reformatted", count = count));
         }
         self.git.commit.reformat_passed = true;
-        self.git_commit();
+        true
     }
 
     /// 打开或关闭提交前格式化（提交按钮的菜单）。

@@ -3,153 +3,15 @@
 //! 从日志里提交的右键菜单发起，范围是该提交到 `HEAD`。列表按执行顺序排列，最早的提交在最上面，
 //! 因此「压缩」「修正」并入的是上一行。提交信息只在「改写」时可以编辑。
 
-use winc_editor::git::{RebaseAction, RebaseCommit, RebasePlan, RebaseStep};
+use winc_editor::git::{RebaseAction, RebasePlan};
 use winc_i18n::t;
 
-use super::branch::Then;
-use super::form::{FormKind, FormPlan};
+use super::dialog::{FormKind, FormPlan};
+pub(crate) use super::dialog::{REBASE_ACTIONS, RebaseForm, action_label};
+use super::operate::Then;
 use crate::app::input::context_menu::{MenuCommand, MenuTarget};
 use crate::app::{App, TextField};
 use crate::layout::{DialogLayout, DialogPart, REBASE_PILL_W, REBASE_ROW_H};
-
-/// 列表中的一行。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RebaseRow {
-    /// 提交。
-    pub commit: RebaseCommit,
-    /// 处理方式。
-    pub action: RebaseAction,
-    /// 改写后的信息；只在 [`RebaseAction::Reword`] 时有值。
-    pub message: Option<String>,
-    /// 打开对话框时在第几行，用于判断顺序是否变化。
-    original: usize,
-}
-
-/// 对话框的内容。
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct RebaseForm {
-    /// 变基的基点；从根提交开始时为 `None`。
-    pub base: Option<String>,
-    /// 各行，最早的提交在最前。
-    pub rows: Vec<RebaseRow>,
-    /// 选中的行。
-    pub selected: usize,
-    /// 列表的滚动位置（逻辑像素）。
-    pub scroll: f32,
-    /// 范围内已推送的提交数。
-    pub pushed: usize,
-}
-
-// 浮点滚动位置不会是 NaN，整体比较是安全的。
-impl Eq for RebaseForm {}
-
-/// 处理方式在菜单和列表里的文字。
-pub(crate) fn action_label(action: RebaseAction) -> &'static str {
-    match action {
-        RebaseAction::Pick => t!("git-rebase-pick"),
-        RebaseAction::Reword => t!("git-rebase-reword"),
-        RebaseAction::Edit => t!("git-rebase-edit"),
-        RebaseAction::Squash => t!("git-rebase-squash"),
-        RebaseAction::Fixup => t!("git-rebase-fixup"),
-        RebaseAction::Drop => t!("git-rebase-drop"),
-    }
-}
-
-/// 全部处理方式，顺序就是菜单里的顺序。
-pub(crate) const REBASE_ACTIONS: [RebaseAction; 6] = [
-    RebaseAction::Pick,
-    RebaseAction::Reword,
-    RebaseAction::Edit,
-    RebaseAction::Squash,
-    RebaseAction::Fixup,
-    RebaseAction::Drop,
-];
-
-/// 返回按键 `base` 对应的处理方式：取各命令的首字母。
-fn action_of_key(base: &str) -> Option<RebaseAction> {
-    match base {
-        "p" => Some(RebaseAction::Pick),
-        "r" => Some(RebaseAction::Reword),
-        "e" => Some(RebaseAction::Edit),
-        "s" => Some(RebaseAction::Squash),
-        "f" => Some(RebaseAction::Fixup),
-        "d" => Some(RebaseAction::Drop),
-        _ => None,
-    }
-}
-
-impl RebaseForm {
-    /// 创建范围 `plan` 对应的对话框内容，全部为「保留」。
-    fn new(plan: RebasePlan) -> RebaseForm {
-        let rows = (plan.commits.into_iter().enumerate())
-            .map(|(original, commit)| RebaseRow {
-                commit,
-                action: RebaseAction::Pick,
-                message: None,
-                original,
-            })
-            .collect();
-        RebaseForm {
-            base: plan.base,
-            rows,
-            selected: 0,
-            scroll: 0.0,
-            pushed: plan.pushed,
-        }
-    }
-
-    /// 返回不能开始的原因；可以开始或没有更改时返回 `None`。
-    ///
-    /// `editing` 是信息框的内容：选中行正在编辑的信息还没有存入该行。信息为空时 `git commit` 会
-    /// 中止，变基因此停在这个提交上。
-    pub(super) fn problem(&self, editing: &str) -> Option<&'static str> {
-        let mut kept = self
-            .rows
-            .iter()
-            .filter(|row| row.action != RebaseAction::Drop);
-        match kept.next().map(|row| row.action) {
-            None => return Some(t!("git-rebase-all-dropped")),
-            Some(RebaseAction::Squash | RebaseAction::Fixup) => {
-                return Some(t!("git-rebase-first-squash"));
-            }
-            Some(_) => {}
-        }
-        let empty = (self.rows.iter().enumerate())
-            .filter(|(_, row)| row.action == RebaseAction::Reword)
-            .any(|(i, row)| {
-                let message = if i == self.selected {
-                    editing
-                } else {
-                    row.message.as_deref().unwrap_or_default()
-                };
-                message.trim().is_empty()
-            });
-        empty.then(|| t!("git-rebase-empty-message"))
-    }
-
-    /// 与打开对话框时相比是否有更改。
-    pub(super) fn changed(&self) -> bool {
-        (self.rows.iter().enumerate())
-            .any(|(i, row)| row.original != i || row.action != RebaseAction::Pick)
-    }
-
-    /// 返回对话框内容对应的待办步骤。
-    fn steps(&self) -> Vec<RebaseStep> {
-        self.rows
-            .iter()
-            .map(|row| RebaseStep {
-                oid: row.commit.oid.clone(),
-                action: row.action,
-                message: row.message.clone(),
-            })
-            .collect()
-    }
-
-    /// 选中的行是否在改写信息。
-    pub(crate) fn rewording(&self) -> bool {
-        (self.rows.get(self.selected)).is_some_and(|row| row.action == RebaseAction::Reword)
-    }
-}
 
 impl App {
     /// 打开交互式变基对话框。
@@ -182,7 +44,7 @@ impl App {
     }
 
     /// 选中第 `row` 行，并把信息框换成这一行的信息。
-    fn select_rebase_row(&mut self, row: usize) {
+    pub(super) fn select_rebase_row(&mut self, row: usize) {
         self.store_rebase_message();
         self.with_rebase(|form, field| {
             form.selected = row.min(form.rows.len().saturating_sub(1));
@@ -244,7 +106,7 @@ impl App {
     }
 
     /// 把选中的行上移（`up`）或下移一行。
-    fn move_rebase_row(&mut self, up: bool) {
+    pub(super) fn move_rebase_row(&mut self, up: bool) {
         self.store_rebase_message();
         self.with_rebase(|form, _| {
             let selected = form.selected;
@@ -260,38 +122,6 @@ impl App {
         });
         self.keep_rebase_row_visible();
         self.request_redraw();
-    }
-
-    /// 处理交互式变基对话框列表上的按键；不是该对话框或列表没有焦点时返回 `false`。
-    pub(in crate::app) fn rebase_list_key(
-        &mut self,
-        key: &winit::keyboard::Key,
-        base: &str,
-    ) -> bool {
-        use winit::keyboard::{Key, NamedKey};
-        let Some(dialog) = &self.overlays.form_dialog else {
-            return false;
-        };
-        let FormKind::Rebase(form) = &dialog.kind else {
-            return false;
-        };
-        if dialog.focus != DialogPart::RebaseList {
-            return false;
-        }
-        let selected = form.selected;
-        let alt = self.pointer.modifiers.alt_key();
-        match key {
-            Key::Named(NamedKey::ArrowUp) if alt => self.move_rebase_row(true),
-            Key::Named(NamedKey::ArrowDown) if alt => self.move_rebase_row(false),
-            Key::Named(NamedKey::ArrowUp) => self.select_rebase_row(selected.saturating_sub(1)),
-            Key::Named(NamedKey::ArrowDown) => self.select_rebase_row(selected + 1),
-            Key::Named(NamedKey::Enter) => self.submit_form_dialog(),
-            _ => match action_of_key(base) {
-                Some(action) => self.set_rebase_action(selected, action),
-                None => return false,
-            },
-        }
-        true
     }
 
     /// 返回交互式变基对话框中 (`x`, `y`) 处的列表部件。

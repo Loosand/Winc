@@ -1,5 +1,7 @@
 //! `rebase` 的测试：能否开始的判断和步骤的生成。
 
+use winc_editor::git::RebaseCommit;
+
 use super::*;
 
 fn plan(names: &[&str]) -> RebasePlan {

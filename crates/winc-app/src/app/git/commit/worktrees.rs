@@ -43,19 +43,6 @@ impl App {
         self.git.commit.worktrees.track(settled, clock);
     }
 
-    /// 返回底部各组高度过渡所用的时钟；上一帧尚未读到仓库的状态时为 `None`，各组直接到位。
-    pub(crate) fn section_clock(&mut self) -> Option<crate::app::animation::Clock> {
-        if !self.git.commit.sections_known {
-            return None;
-        }
-        self.clock(crate::app::animation::TREE_ANIMATION)
-    }
-
-    /// 记录这一帧是否已读到仓库的状态。各组的高度跟踪之后调用。
-    pub(crate) fn sections_tracked(&mut self) {
-        self.git.commit.sections_known = self.git.status.is_some();
-    }
-
     /// 返回工作树一组的高度（逻辑像素），过渡中按时钟插值；当前仓库只有一个工作树时为 0。
     pub(crate) fn worktree_section_height(&self) -> f32 {
         (self.git.commit.worktrees).height(self.worktree_settled_height())

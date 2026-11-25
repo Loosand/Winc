@@ -16,6 +16,9 @@ mod repository;
 mod time;
 mod tree;
 
+pub use super::operate::LogConfirmed;
+pub(in crate::app) use super::operate::commit_diff;
+pub(crate) use super::operate::short;
 pub(crate) use branches::{BRANCH_ROW, BranchRow, PanelFold};
 pub(crate) use columns::{AUTHOR_DEFAULT, LogColumn, log_author_width};
 pub(crate) use details::LogFileRow;
@@ -251,31 +254,6 @@ pub(crate) struct TextPoint {
     pub run: usize,
     /// 行内位置：位于第几个字符之前（从 0 起）。
     pub ch: usize,
-}
-
-/// 日志中需要确认后才执行的提交操作。
-///
-/// 确认框由系统绘制，确认后经 `UserEvent` 返回。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LogConfirmed {
-    /// 签出提交本身，进入分离的 `HEAD`。
-    ///
-    /// 参数是完整的提交号。
-    Detach(String),
-    /// 签出一个标签指向的提交，进入分离的 `HEAD`；参数是标签名。
-    CheckoutTag(String),
-    /// 将当前分支硬重置到该提交。
-    ResetHard(String),
-    /// 删除一条储藏；执行时按提交号查找（[`winc_editor::git::Git::stash`]）。
-    ///
-    /// 使用 `Box`：储藏包含父提交、时间和说明，直接内联会增大发往事件循环的每个事件的大小。
-    DropStash(Box<winc_editor::git::Stash>),
-    /// 删除一个本地分支；第二项为真时连同未合并的提交一并删除（[`App::run_delete_branch`]）。
-    DeleteBranch(String, bool),
-    /// 删除一个标签。
-    DeleteTag(String, winc_editor::git::TagTarget),
-    /// 移除一个远程仓库。
-    RemoveRemote(String),
 }
 
 /// 一个提交上的本地分支；签出时优先签出该分支，不进入分离的 `HEAD`。
@@ -660,7 +638,7 @@ impl App {
             self.flash(t!("git-not-a-repository"));
             return;
         }
-        use crate::app::git::form::FormKind;
+        use crate::app::git::dialog::FormKind;
         self.show_form_dialog(
             FormKind::GoToRevision,
             TextField::default(),
@@ -1001,7 +979,7 @@ impl App {
                 let (x, y) = self.pointer.mouse;
                 self.click_field(x, y);
             }
-            LogTarget::Branch => self.open_branch_picker(crate::app::GitAnchor::Log),
+            LogTarget::Branch => self.open_branch_picker(crate::app::git::operate::GitAnchor::Log),
             LogTarget::Author => {
                 let Some(rect) = self
                     .hits
@@ -1239,74 +1217,6 @@ impl App {
     /// 是否正在拖动列表与详情之间的分隔线。
     pub(crate) fn log_dividing(&self) -> bool {
         matches!(self.pointer.drag, crate::app::Drag::LogDivider { .. })
-    }
-}
-
-/// 在后台准备一个文件在两个版本之间的差异。
-///
-/// 左侧为 `old` 中的版本（重命名的文件取旧路径；`None` 表示根提交之前，内容为空），
-/// 右侧为 `new` 中的版本。
-pub(in crate::app) fn commit_diff(
-    git: &Git,
-    root: &Path,
-    old_rev: Option<&str>,
-    new_rev: &str,
-    file: &CommitFile,
-) -> Result<DiffView, String> {
-    let name = winc_editor::display_name(&file.path).into_owned();
-    let cancel = Cancel::default();
-    let read = |rev: &str, path: &Path| -> Result<Option<String>, String> {
-        let bytes = git
-            .content_at(root, rev, path, &cancel)
-            .map_err(|e| t!("git-read-file-failed", name = name.as_str(), error = e))?;
-        match bytes {
-            Some(b) if b.len() as u64 > LARGE_FILE => {
-                Err(t!("git-diff-too-large", name = name.as_str()))
-            }
-            Some(b) if looks_binary(&b) => Err(t!("git-diff-binary", name = name.as_str())),
-            Some(b) => Ok(Some(decode_unknown(&b).0)),
-            None => Ok(None),
-        }
-    };
-    let old_path: PathBuf = file.from.clone().unwrap_or_else(|| file.path.clone());
-    let old = match old_rev {
-        Some(rev) => read(rev, &old_path)?,
-        None => None,
-    };
-    let new = read(new_rev, &file.path)?;
-    let language = winc_syntax::detect(&name);
-    let side_title = |oid: Option<&str>, present: bool| match (oid, present) {
-        (Some(oid), true) => short(oid).to_owned(),
-        (Some(oid), false) => t!("git-diff-side-commit-missing", commit = short(oid)),
-        (None, _) => t!("git-diff-side-before-root").to_owned(),
-    };
-    let mut view = DiffView::new(
-        DiffSide::new(
-            side_title(old_rev, old.is_some()),
-            old.as_deref().unwrap_or(""),
-            None,
-            language,
-        )
-        .with_missing(old_rev.is_some() && old.is_none()),
-        DiffSide::new(
-            side_title(Some(new_rev), new.is_some()),
-            new.as_deref().unwrap_or(""),
-            None,
-            language,
-        )
-        .with_missing(new.is_none()),
-    );
-    view.snapshot_path = Some(file.path.clone());
-    Ok(view)
-}
-
-/// 返回提交号的前 7 位；不是提交号（分支名、标签名）时原样返回，名字里有汉字也不会被截断在
-/// 一个字的中间。
-pub(crate) fn short(oid: &str) -> &str {
-    if oid.len() > 7 && oid.bytes().all(|b| b.is_ascii_hexdigit()) {
-        &oid[..7]
-    } else {
-        oid
     }
 }
 

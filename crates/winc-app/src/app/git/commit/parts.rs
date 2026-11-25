@@ -3,11 +3,11 @@
 use super::*;
 
 impl App {
-    /// 计算提交视图的布局。
+    /// 计算提交视图的布局；`browse` 为真时只显示标题行和列表（用于浏览历史提交的文件）。
     ///
     /// 自上而下依次为标题行、分支行、说明条（有进行中的操作时）、改动列表、工作树、储藏、提交
     /// 卡片和尚未推送的上一次提交。
-    pub(crate) fn commit_parts(&self) -> CommitParts {
+    pub(in crate::app::git) fn commit_parts_for(&self, browse: bool) -> CommitParts {
         let s = self.layout.sidebar;
         let panel = Rect::new(s.x, TOP_BAR_END, s.w, (s.bottom() - TOP_BAR_END).max(0.0));
         let header = Rect::new(panel.x, panel.y, panel.w, SIDEBAR_HEADER);
@@ -21,7 +21,7 @@ impl App {
             (tool(2), CommitTarget::More),
         ];
         // 浏览历史提交的文件时只有标题行和列表：列表从标题行下面一直到视图底部。
-        if self.shown_commit_list().browse {
+        if browse {
             let list_y = header.bottom() + SIDEBAR_LIST_GAP;
             let list = Rect::new(panel.x, list_y, panel.w, (panel.bottom() - list_y).max(0.0));
             return CommitParts {

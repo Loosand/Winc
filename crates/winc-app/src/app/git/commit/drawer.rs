@@ -5,6 +5,9 @@
 use super::*;
 use crate::app::animation::Clock;
 
+/// 储藏、工作树两组上下各留的空隙（逻辑像素）：列表间隔（`SIDEBAR_LIST_GAP`）的一半。上下
+/// 都是分隔线，分隔线本身已经隔开了相邻区域，留半个间隔即可。
+pub(crate) const STASH_GAP: f32 = SIDEBAR_LIST_GAP / 2.0;
 /// 一组的标题行离一组上沿的距离（逻辑像素）：上沿 1 像素的分隔线之下再留 [`STASH_GAP`]。
 pub(crate) const DRAWER_TOP: f32 = 1.0 + STASH_GAP;
 /// 一组收起时的高度（逻辑像素）：分隔线和标题一行，标题上下各留 [`STASH_GAP`]。
@@ -61,5 +64,20 @@ impl Drawer {
     pub(crate) fn toggle(&mut self, from: f32, clock: Option<Clock>) {
         self.open = !self.open;
         self.motion = clock.map(|clock| (from, clock));
+    }
+}
+
+impl App {
+    /// 返回底部各组高度过渡所用的时钟；上一帧尚未读到仓库的状态时为 `None`，各组直接到位。
+    pub(crate) fn section_clock(&mut self) -> Option<Clock> {
+        if !self.git.commit.sections_known {
+            return None;
+        }
+        self.clock(crate::app::animation::TREE_ANIMATION)
+    }
+
+    /// 记录这一帧是否已读到仓库的状态。各组的高度跟踪之后调用。
+    pub(crate) fn sections_tracked(&mut self) {
+        self.git.commit.sections_known = self.git.status.is_some();
     }
 }

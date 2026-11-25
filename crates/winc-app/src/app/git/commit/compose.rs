@@ -136,17 +136,17 @@ impl App {
         true
     }
 
-    /// 收到提交前检查的结果：没有新增的 TODO 时接着提交；有时先确认。
-    pub(super) fn todo_checked(&mut self, count: usize, root: &Path) {
+    /// 收到提交前检查的结果：没有新增的 TODO 时放行并返回 `true`，由调用方接着提交；有时先
+    /// 确认。
+    pub(super) fn todo_checked(&mut self, count: usize, root: &Path) -> bool {
         self.git.commit.busy = false;
         if self.git.root.as_deref() != Some(root) {
             self.git.commit.push_after = false;
-            return;
+            return false;
         }
         if count == 0 {
             self.git.commit.todo_passed = true;
-            self.git_commit();
-            return;
+            return true;
         }
         let message = t!("git-commit-todo-confirm", count = count);
         let detail = t!("git-commit-todo-confirm-detail");
@@ -157,16 +157,7 @@ impl App {
         if !shown {
             self.git.commit.push_after = false;
         }
-    }
-
-    /// 新增 TODO 的确认框选了 `ok`（仍然提交）或取消。
-    pub(in crate::app) fn todo_confirmed(&mut self, ok: bool) {
-        if ok {
-            self.git.commit.todo_passed = true;
-            self.git_commit();
-        } else {
-            self.git.commit.push_after = false;
-        }
+        false
     }
 
     /// 打开或关闭提交前检查新增的 TODO（提交按钮的菜单）。

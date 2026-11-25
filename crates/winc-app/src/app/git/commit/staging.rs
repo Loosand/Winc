@@ -30,6 +30,22 @@ pub(super) enum StageJob {
 }
 
 impl App {
+    /// 勾上或取消勾选 `paths` 中的文件：勾选式下记在界面中，暂存区视图中暂存或取消暂存。
+    pub(in crate::app) fn set_commit_checked(&mut self, paths: &[PathBuf], on: bool) {
+        if self.git.commit.staging {
+            return self.stage_paths(paths, on);
+        }
+        let entries = self.git.status.iter().flat_map(|s| &s.entries);
+        let entries: Vec<Entry> = entries
+            .filter(|e| paths.contains(&e.path))
+            .cloned()
+            .collect();
+        for entry in &entries {
+            self.git.commit.set_checked(entry, on);
+        }
+        self.request_redraw();
+    }
+
     /// 暂存（`on` 为真）或取消暂存 `paths` 中的文件：勾选框立即变化，命令在后台执行。
     ///
     /// 已经处于该状态的文件跳过；仍有冲突标记的文件不暂存，否则 `git` 将其视为已解决。
@@ -232,10 +248,11 @@ impl App {
         });
     }
 
-    /// 写入暂存区的一步操作结束：继续下一步；全部完成后重新读取状态，并执行等待中的提交。
-    pub(super) fn staging_finished(&mut self, result: Result<(), String>, root: &Path) {
+    /// 写入暂存区的一步操作结束：继续下一步；全部完成后重新读取状态，返回是否有等待中的提交
+    /// 需要立即执行。
+    pub(super) fn staging_finished(&mut self, result: Result<(), String>, root: &Path) -> bool {
         if self.git.root.as_deref() != Some(root) {
-            return;
+            return false;
         }
         self.git.commit.staging_running = false;
         if let Err(e) = result {
@@ -247,12 +264,10 @@ impl App {
         }
         if !self.git.commit.staging_queue.is_empty() {
             self.pump_staging();
-            return;
+            return false;
         }
         self.git_refresh();
-        if std::mem::take(&mut self.git.commit.commit_queued) {
-            self.git_commit();
-        }
+        std::mem::take(&mut self.git.commit.commit_queued)
     }
 
     /// 读取打开着差异、且暂存区中有内容的文件在暂存区中的内容；其余文件的记录释放。
@@ -305,38 +320,6 @@ impl App {
         if current {
             self.git.commit.set_index_text(path, text);
         }
-    }
-}
-
-/// 把 `entry` 改写为暂存（`on` 为真）或取消暂存之后的状态，要写入暂存区的路径加到 `touched`。
-///
-/// 已经处于该状态的文件不动；冲突中的文件不能取消暂存。
-pub(super) fn flip_staged(entry: &mut Entry, on: bool, touched: &mut Vec<PathBuf>) {
-    if on {
-        if entry.unstaged.is_none() {
-            return;
-        }
-        entry.staged = Some(match (entry.staged, entry.unstaged) {
-            (Some(Change::Added), _) | (_, Some(Change::Untracked)) => Change::Added,
-            (_, Some(Change::Deleted)) => Change::Deleted,
-            (Some(Change::Renamed), _) => Change::Renamed,
-            _ => Change::Modified,
-        });
-        entry.unstaged = None;
-        touched.push(entry.path.clone());
-    } else {
-        let Some(staged) = entry.staged.filter(|_| !entry.conflicted()) else {
-            return;
-        };
-        entry.unstaged = Some(match (staged, entry.unstaged) {
-            (Change::Added, _) => Change::Untracked,
-            (Change::Deleted, _) | (_, Some(Change::Deleted)) => Change::Deleted,
-            _ => Change::Modified,
-        });
-        entry.staged = None;
-        touched.push(entry.path.clone());
-        // 改名的文件，原来的路径一并移出暂存区。
-        touched.extend(entry.from.clone());
     }
 }
 

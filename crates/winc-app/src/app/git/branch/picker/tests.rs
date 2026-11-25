@@ -1,6 +1,9 @@
 //! `picker` 的测试：按 `/` 分层、只展开当前分支所在的目录、最近使用、同一个分支只列一次、搜索与
 //! 新建、远程收起。
 
+use std::collections::HashSet;
+
+use super::super::super::operate::RECENT_BRANCHES;
 use super::*;
 
 fn branch(name: &str, remote: bool, current: bool) -> Branch {

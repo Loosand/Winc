@@ -4,19 +4,6 @@ use super::*;
 use crate::app::ScrollTarget;
 
 impl App {
-    /// 提交视图列表现在的各行（见 [`CommitRows`]）。
-    ///
-    /// 按状态的版本（`GitState::generation`，换仓库时也变）和收起、平铺的样子缓存：每帧绘制、
-    /// 滚动、悬停都要用，不再每次从头排。
-    pub(crate) fn commit_rows(&self) -> Rc<CommitRows> {
-        rows_of(
-            &self.git.commit,
-            self.git.status.as_ref(),
-            self.git.root.as_deref(),
-            self.git.generation,
-        )
-    }
-
     /// 状态里第 `i` 个文件；状态里没有这一项时为 `None`。
     pub(super) fn commit_entry(&self, i: usize) -> Option<&Entry> {
         self.git.status.as_ref()?.entries.get(i)
@@ -52,18 +39,13 @@ impl App {
         self.git.commit.selected = Some(path.clone());
         self.reveal_commit_selection();
         if self.git.commit.browse {
-            let index = (self.git.status.as_ref())
-                .and_then(|status| status.entries.iter().position(|e| e.path == path));
-            if let Some(index) = index {
-                self.open_log_diff_file(index);
-            }
             return;
         }
         self.git_preview_changes(&path);
     }
 
-    /// 浏览历史提交的文件时点击了第 `i` 个文件：选中它，并在差异标签中打开。
-    pub(super) fn browse_commit_file(&mut self, i: usize) {
+    /// 浏览历史提交的文件时点击了第 `i` 个文件：选中它。
+    pub(in crate::app::git) fn browse_commit_file(&mut self, i: usize) {
         let Some(path) = self.commit_entry(i).map(|e| e.path.clone()) else {
             return;
         };
@@ -283,7 +265,7 @@ impl App {
         }) else {
             return;
         };
-        let list = self.commit_parts().list;
+        let list = self.commit_parts_for(self.git.commit.browse).list;
         // 多仓库时改动列表排在其他仓库的各行和当前仓库的标题行下面。
         let before = self.commit_rows_before() as f32 * COMMIT_ROW;
         let (top, bottom) = (
@@ -338,7 +320,7 @@ impl App {
 
     /// 最多固定几层：[`STICKY_MAX`]，也不超过列表高度的四成。
     fn commit_sticky_max(&self) -> usize {
-        let list = self.commit_parts().list;
+        let list = self.commit_parts_for(self.git.commit.browse).list;
         ((list.h * 0.4 / COMMIT_ROW).floor() as usize).min(STICKY_MAX)
     }
 
@@ -348,7 +330,7 @@ impl App {
     /// 目录）是下一个固定的；它自己就是第 n 层的组、目录、而且上沿已经滚到固定的位置之上时，
     /// 固定它自己。这一层最后一行的下沿滚到固定的位置之下时，它被往上推，下面不再固定别的。
     pub(crate) fn commit_sticky(&self, rows: &[CommitRow]) -> Vec<CommitSticky> {
-        let list = self.commit_parts().list;
+        let list = self.commit_parts_for(self.git.commit.browse).list;
         let scroll = self.commit_block_scroll();
         let max = self.commit_sticky_max();
         let mut stack: Vec<CommitSticky> = Vec::new();
@@ -446,10 +428,13 @@ impl App {
 
     /// 对更改列表中选中的文件执行 `action`（显示差异、打开源文件、回滚），返回是否已处理。
     ///
-    /// 焦点不在更改列表上、正在浏览历史提交的文件时不处理，按键继续交给其他绑定。
-    pub(in crate::app) fn run_changes_action(&mut self, action: crate::keymap::Action) -> bool {
+    /// 焦点不在更改列表上时不处理，按键继续交给其他绑定。
+    pub(in crate::app::git) fn run_commit_changes_action(
+        &mut self,
+        action: crate::keymap::Action,
+    ) -> bool {
         use crate::keymap::Action;
-        if self.focus != Focus::CommitList || self.log_diff_tree().is_some() {
+        if self.focus != Focus::CommitList {
             return false;
         }
         let Some(current) = self.git.commit.selected.clone() else {
@@ -538,7 +523,8 @@ impl App {
         let path = |i: usize| files.get(i).map(|&(_, f)| status.entries[f].path.clone());
         // 翻页距离为可见整行数减一，保留一行上下文；落在该行或其后第一个文件上，
         // 跳过组、目录行，到达两端时停在第一个、最后一个文件。
-        let page = ((self.commit_parts().list.h / COMMIT_ROW).floor() as usize)
+        let page = ((self.commit_parts_for(self.git.commit.browse).list.h / COMMIT_ROW).floor()
+            as usize)
             .saturating_sub(1)
             .max(1);
         let last = files.len().checked_sub(1);
@@ -647,27 +633,4 @@ impl App {
         }
         self.request_redraw();
     }
-}
-
-/// 按 `state` 的收起、平铺设置排出 `status` 的各行，按（`generation`，排列设置的版本）缓存在
-/// `state` 中；没有状态或仓库时返回空的列表。
-pub(in crate::app::git) fn rows_of(
-    state: &CommitState,
-    status: Option<&Status>,
-    root: Option<&Path>,
-    generation: u64,
-) -> Rc<CommitRows> {
-    let (Some(status), Some(root)) = (status, root) else {
-        return Rc::default();
-    };
-    let key = (generation, state.layout);
-    let mut cache = state.rows.borrow_mut();
-    if let Some((built, rows)) = cache.as_ref()
-        && *built == key
-    {
-        return Rc::clone(rows);
-    }
-    let rows = Rc::new(state.build_rows(status, root));
-    *cache = Some((key, Rc::clone(&rows)));
-    rows
 }

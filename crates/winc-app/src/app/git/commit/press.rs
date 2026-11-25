@@ -3,8 +3,8 @@
 use super::*;
 
 impl App {
-    /// 点了提交视图里的 `target`。
-    pub(in crate::app) fn press_commit(&mut self, target: CommitTarget) {
+    /// 点了提交视图里的 `target`；需要打开 Git 日志时返回 `true`。
+    pub(in crate::app::git) fn press_commit_target(&mut self, target: CommitTarget) -> bool {
         // 按下标找文件的目标，状态在绘制以后变过就不处理：下标可能已经指向别的文件。
         let indexed = matches!(
             target,
@@ -22,7 +22,7 @@ impl App {
         );
         if indexed && self.git.commit.hits_generation != self.git.generation {
             self.request_redraw();
-            return;
+            return false;
         }
         // 浏览历史提交的文件时只能展开、收起和查看文件，其余目标（勾选、回滚、储藏、提交等）
         // 都会修改工作区，不处理。
@@ -30,10 +30,10 @@ impl App {
             match target {
                 CommitTarget::File(i) => self.browse_commit_file(i),
                 CommitTarget::Group(_) | CommitTarget::Dir(_) | CommitTarget::Sticky(..) => {}
-                _ => return,
+                _ => return false,
             }
             if matches!(target, CommitTarget::File(_)) {
-                return;
+                return false;
             }
         }
         match target {
@@ -92,20 +92,25 @@ impl App {
             | CommitTarget::OtherCheck(..) => {
                 self.press_other_check(target);
             }
-            _ => self.press_commit_button(target),
+            _ => return self.press_commit_button(target),
         }
+        false
     }
 
     /// 处理提交视图中按钮类的目标：工具按钮、位置与分支、同步、提交和上一次提交。
-    fn press_commit_button(&mut self, target: CommitTarget) {
+    /// 需要打开 Git 日志时返回 `true`。
+    fn press_commit_button(&mut self, target: CommitTarget) -> bool {
         match target {
-            CommitTarget::Log => self.git_show_log(),
+            CommitTarget::Log => {
+                self.request_redraw();
+                return true;
+            }
             CommitTarget::Refresh => {
                 self.git.commit.refreshed = Some(Instant::now());
                 self.git_refresh();
             }
             CommitTarget::More => {
-                let rect = self.commit_parts().tools[2].0;
+                let rect = self.commit_parts_for(self.git.commit.browse).tools[2].0;
                 self.open_button_menu(
                     MenuButton::CommitMore,
                     MenuTarget::CommitMore,
@@ -129,8 +134,9 @@ impl App {
                 }
             }
             CommitTarget::LastCommit => {
-                let Some((_, _, button)) = self.commit_parts().undo else {
-                    return;
+                let Some((_, _, button)) = self.commit_parts_for(self.git.commit.browse).undo
+                else {
+                    return false;
                 };
                 self.open_button_menu(
                     MenuButton::LastCommit,
@@ -142,7 +148,7 @@ impl App {
             CommitTarget::CommitMenu => {
                 // 菜单挂在「⌄」那一段下方，右端与按钮右端对齐、向左展开，不从整个按钮的左端弹出，
                 // 避免菜单看起来与「⌄」无关。
-                let rect = self.commit_parts().commit_menu;
+                let rect = self.commit_parts_for(self.git.commit.browse).commit_menu;
                 let (_, y) = menu_below(rect);
                 self.open_button_menu(
                     MenuButton::CommitButton,
@@ -150,10 +156,11 @@ impl App {
                     (rect.right(), y),
                 );
             }
-            // 其余目标由 [`Self::press_commit`] 交给别的函数。
+            // 其余目标由 [`Self::press_commit_target`] 交给别的函数。
             _ => {}
         }
         self.request_redraw();
+        false
     }
 
     /// 处理文件列表中的目标：分组、目录、文件行及其勾选、打开和回滚。
@@ -239,7 +246,8 @@ impl App {
                     Some(CommitRow::Dir { .. }) => CommitTarget::Dir(row),
                     _ => return,
                 };
-                return self.press_commit(target);
+                self.press_commit_row(target);
+                return;
             }
             CommitTarget::OpenFile(i) => {
                 let Some(path) = self.commit_entry(i).map(|e| e.path.clone()) else {
@@ -284,7 +292,7 @@ impl App {
             CommitTarget::StashFile(at) => self.open_stash_file(at),
             CommitTarget::StashApply(i) => {
                 if let Some(stash) = self.git.stashes.get(i).cloned() {
-                    self.run_stash_op(super::super::branch::StashOp::Apply, stash);
+                    self.run_stash_op(super::super::operate::StashOp::Apply, stash);
                 }
             }
             CommitTarget::StashMenu(i) => {
@@ -305,6 +313,36 @@ impl App {
             }
             // 其余目标由 [`Self::press_commit`] 交给别的函数。
             _ => {}
+        }
+        self.request_redraw();
+    }
+
+    /// 点了其他仓库的标题行或文件：切换到该仓库，点的是文件时选中它并预览差异。
+    fn press_other(&mut self, target: CommitTarget) {
+        let (repo, entry) = match target {
+            CommitTarget::OtherRepository(repo) => (repo, None),
+            CommitTarget::OtherFile(repo, entry) | CommitTarget::OtherStagedFile(repo, entry) => {
+                (repo, Some(entry))
+            }
+            _ => return,
+        };
+        let path = entry.and_then(|entry| {
+            let path = |status: &Status| status.entries.get(entry).map(|e| e.path.clone());
+            self.other_status(repo, |_, status| path(status)).flatten()
+        });
+        // 切换仓库会重置滚动位置：按原位置和标题行移动的距离恢复，点击的标题行位置不变。
+        let header = [OtherRow::Repository(repo), OtherRow::Quiet(repo)];
+        let before = header.into_iter().find_map(|h| self.other_row_offset(h));
+        let scroll = self.git.commit.scroll;
+        self.git_switch_repository(repo);
+        let moved = match (before, self.other_row_offset(OtherRow::Current)) {
+            (Some(before), Some(after)) => after - before,
+            _ => 0.0,
+        };
+        self.git.commit.scroll = (scroll + moved).max(0.0);
+        self.focus = Focus::CommitList;
+        if let Some(path) = path {
+            self.select_commit_file(path);
         }
         self.request_redraw();
     }

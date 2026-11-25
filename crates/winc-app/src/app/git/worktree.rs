@@ -7,11 +7,11 @@
 
 use std::path::{Path, PathBuf};
 
-use winc_editor::git::{Branch, Worktree, WorktreeCheck};
+use winc_editor::git::{Branch, Worktree};
 use winc_i18n::t;
 
 use super::GitState;
-use super::branch::{Then, local_name};
+use super::operate::{RemoveCheck, Then, local_name, short};
 use crate::app::NoticeKind;
 use crate::app::{AlertButton, App, UserEvent};
 
@@ -27,16 +27,6 @@ pub(crate) enum NameTarget {
     Stale,
     /// 当前分支：不能在另一个工作树里再签出。
     Current,
-}
-
-/// 检查完、等着确认移除的工作树。
-pub(crate) struct RemoveCheck {
-    /// 工作树的目录。
-    path: PathBuf,
-    /// 签出的分支。
-    branch: Option<String>,
-    /// 检查结果：没提交的改动数、未跟踪的文件数、游离的提交数，以及分支是否已合并。
-    check: WorktreeCheck,
 }
 
 impl GitState {
@@ -320,7 +310,7 @@ impl App {
         if let Some(branch) = branch.and_then(|b| self.log_worktree_branch(&b)) {
             return self.new_worktree_for(&branch);
         }
-        let short = super::log::short(&oid).to_owned();
+        let short = short(&oid).to_owned();
         let Some(dir) = self.new_worktree_dir(&short) else {
             return;
         };
@@ -430,11 +420,7 @@ impl App {
             let path = worktree.path;
             Ok((
                 String::new(),
-                Then::ConfirmRemove(RemoveCheck {
-                    path,
-                    branch,
-                    check,
-                }),
+                Then::ConfirmRemove(RemoveCheck::new(path, branch, check)),
             ))
         });
     }
@@ -467,11 +453,7 @@ impl App {
     ///
     /// 没有窗口时（测试中）直接移除，已合并的分支一起删。
     pub(super) fn confirm_remove_worktree(&mut self, remove: RemoveCheck) {
-        let RemoveCheck {
-            path,
-            branch,
-            check,
-        } = remove;
+        let (path, branch, check) = remove.into_parts();
         let deletable = branch.filter(|_| check.merged);
         let name = winc_editor::git::repo_name(&path);
         let message = t!("git-worktree-remove-confirm", name = name.as_str());

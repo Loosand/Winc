@@ -66,7 +66,7 @@ impl App {
 
     /// 打开「与指定版本比较」对话框：输入要与提交 `oid` 比较的提交号、分支名或标签名。
     pub(super) fn open_compare_revision(&mut self, oid: String) {
-        use crate::app::git::form::FormKind;
+        use crate::app::git::dialog::FormKind;
         self.show_form_dialog(
             FormKind::CompareRevision { commit: oid },
             TextField::default(),

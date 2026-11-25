@@ -1,19 +1,17 @@
 //! Git 模块的界面线程部分：决定何时刷新仓库状态，收到结果后更新文件树、状态栏和已打开的差异；
-//! 读取文件在 `HEAD` 中的版本并打开差异。
-//!
-//! 模块关闭或打开的目录不在仓库中时不查找 `git`，也不启动线程。`git status` 在后台线程上运行，
-//! 同一时刻最多一次，运行期间又有变化时在完成后补做一次。打开差异时，读取 `HEAD` 与磁盘内容、
-//! 判断二进制与大小、解码和逐行比较都在后台完成，界面线程只提供文档内容的快照。
-
+//! 读取文件在 `HEAD` 中的版本并打开差异。模块关闭或目录不在仓库中时不查找 `git`；`git status`
+//! 在后台串行运行，打开差异时读取、解码和逐行比较都在后台完成，界面线程只提供文档内容快照。
 pub(crate) mod blame;
 pub(crate) mod branch;
 pub(super) mod changes;
 pub(super) mod commit;
+pub(crate) mod dialog;
 pub(super) mod fetch;
 pub(crate) mod form;
 pub(crate) mod location_picker;
 pub(crate) mod log;
 pub(crate) mod merge;
+pub(crate) mod operate;
 pub(crate) mod question;
 pub(crate) mod rebase;
 mod repository;

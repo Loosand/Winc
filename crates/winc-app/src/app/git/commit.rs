@@ -10,14 +10,13 @@ mod actions;
 mod compose;
 mod ignore;
 mod reformat;
-pub(in crate::app) use actions::COMMITTED_SHOWN;
-pub(crate) use actions::{PUSH_PREVIEW, PushIntent, SyncState};
+pub(in crate::app) use super::operate::COMMITTED_SHOWN;
+pub(crate) use super::operate::{PUSH_PREVIEW, PushIntent};
+pub(crate) use actions::SyncState;
 pub(crate) use compose::{AUTHOR_COMMITS, OWN_MESSAGES};
 pub use ignore::IgnoreKind;
 mod list;
-pub(in crate::app::git) use list::rows_of;
 mod stash;
-use stash::STASH_GAP;
 pub(crate) use stash::{StashLine, StashView};
 mod drawer;
 pub(crate) use drawer::{DRAWER_CLOSED, DRAWER_TOP, Drawer};
@@ -36,8 +35,9 @@ mod state;
 
 use picks::Skip;
 use staging::StageJob;
+pub(in crate::app::git) use state::rows_of;
 use state::*;
-pub(crate) use state::{CommitScope, stages_by_hunk};
+pub(crate) use state::{CommitRows, CommitScope, stages_by_hunk};
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -46,7 +46,7 @@ use std::ops::{Deref, Range};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use winc_editor::DocumentId;
 use winc_editor::git::{Entry, Git, Head, LastCommit, Operation, Status};
@@ -55,10 +55,10 @@ use winc_render::Rect;
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
 
-use super::branch::branch_menu;
+use super::operate::{GitAnchor, branch_menu};
 use super::unusable;
 use crate::app::input::context_menu::{MenuButton, MenuCommand, MenuTarget, menu_below};
-use crate::app::{AlertButton, App, Focus, GitAnchor, UserEvent};
+use crate::app::{AlertButton, App, Focus, UserEvent};
 use crate::field::TextField;
 use crate::theme::{BUTTON_GAP, SIDEBAR_GAP, SIDEBAR_HEADER, SIDEBAR_LIST_GAP, TOP_BAR_END};
 
@@ -263,96 +263,6 @@ impl CommitRow {
     /// 是不是能装别的行的（组、目录）。
     fn is_container(&self) -> bool {
         !matches!(self, CommitRow::File { .. })
-    }
-}
-
-/// 排好的改动列表：各行，和每组、每个目录下面有哪些文件（画勾选框、点勾选框时用，不必每行
-/// 把所有改动翻一遍）。
-///
-/// 按状态和收起、平铺的样子排一次，缓存到它们变了为止（见 [`App::commit_rows`]）；解引用成
-/// 各行。
-#[derive(Debug, Default)]
-pub(crate) struct CommitRows {
-    rows: Vec<CommitRow>,
-    /// 各组、各目录下面的文件（`Status::entries` 的下标）：一组、一个目录（收起的也算）下面的
-    /// 文件在这里连成一段，它里面的目录是其中的一小段。
-    members: Vec<usize>,
-    /// 每组的文件在 `members` 里的那一段（下标是 `CommitGroup as usize`）。
-    groups: [Range<usize>; CommitGroup::COUNT],
-    /// 列表里每个目录行的文件在 `members` 里的那一段：下标同上，键是相对仓库根目录的目录。
-    dirs: [HashMap<PathBuf, Range<usize>>; CommitGroup::COUNT],
-    /// 组、目录行的勾选框（见 [`CommitRows::members_state`]）：（勾选的版本，按那一段在
-    /// `members` 里的位置记下的结果）。
-    states: RefCell<MemberStates>,
-}
-
-/// [`CommitRows::members_state`] 的缓存：勾选的版本，以及按那一段在 `members` 里的
-/// （起点，长度）记下的勾选状态。
-type MemberStates = (u64, HashMap<(usize, usize), Option<bool>>);
-
-impl CommitRows {
-    /// 返回第 `row` 行所在的组：该行或它之前最近的组标题行；没有这一行时为 `None`。
-    pub fn group_of(&self, row: usize) -> Option<CommitGroup> {
-        self.rows.get(..=row)?.iter().rev().find_map(|r| match r {
-            CommitRow::Group(group) => Some(*group),
-            _ => None,
-        })
-    }
-
-    /// 组 `group` 里的文件（`Status::entries` 的下标）。
-    pub fn group(&self, group: CommitGroup) -> &[usize] {
-        &self.members[self.groups[group.index()].clone()]
-    }
-
-    /// 组 `group` 里目录 `dir`（相对仓库根目录）下面的文件；列表里没有这个目录行时为空。
-    pub fn dir(&self, group: CommitGroup, dir: &Path) -> &[usize] {
-        self.dirs[group.index()]
-            .get(dir)
-            .map_or(&[], |r| &self.members[r.clone()])
-    }
-
-    /// `members`（本表的 [`Self::group`]、[`Self::dir`] 给出的一段）的勾选状态，含义同
-    /// [`CommitState::members_state`]；`checks` 是勾选的版本（[`CommitState::checks`]）。
-    ///
-    /// 组、目录下面可能有上万个文件，每帧都要画它们的勾选框：按位置记下结果，勾选变了、或者
-    /// 重新排了各行（换成另一张表）时才重新算。
-    pub fn members_state(
-        &self,
-        members: &[usize],
-        checks: u64,
-        compute: impl FnOnce() -> Option<bool>,
-    ) -> Option<bool> {
-        if members.is_empty() {
-            return compute();
-        }
-        let offset = (members.as_ptr() as usize - self.members.as_ptr() as usize)
-            / std::mem::size_of::<usize>();
-        let mut states = self.states.borrow_mut();
-        if states.0 != checks {
-            *states = (checks, HashMap::new());
-        }
-        *states
-            .1
-            .entry((offset, members.len()))
-            .or_insert_with(compute)
-    }
-
-    /// 排下一层已经排好序的文件 `files`（下标、相对路径）：每个一行，深 `depth` 层。
-    fn push_files(&mut self, files: &[(usize, &Path)], depth: usize) {
-        self.members.extend(files.iter().map(|&(index, _)| index));
-        self.rows.extend(
-            files
-                .iter()
-                .map(|&(index, _)| CommitRow::File { index, depth }),
-        );
-    }
-}
-
-impl Deref for CommitRows {
-    type Target = [CommitRow];
-
-    fn deref(&self) -> &[CommitRow] {
-        &self.rows
     }
 }
 
@@ -1106,27 +1016,6 @@ impl App {
         }
     }
 
-    /// 提交视图是否正在显示；借用提交视图显示历史提交的文件时（`commit.browse`）同样为
-    /// `true`。
-    pub(crate) fn commit_shown(&self) -> bool {
-        self.panels.sidebar.view == crate::layout::SidebarView::Commit
-            && self.layout.sidebar.right() > 0.0
-            && (self.git.commit.browse || self.log_diff_tree().is_none())
-    }
-
-    /// 改动列表或历史提交的文件列表是否正在显示。
-    pub(in crate::app) fn commit_list_shown(&self) -> bool {
-        self.commit_shown() || self.log_diff_tree().is_some()
-    }
-
-    /// 返回正在显示的列表的状态：显示历史提交的文件时为其浏览列表，否则为提交视图。
-    pub(in crate::app) fn shown_commit_list(&self) -> &CommitState {
-        match self.log_diff_tree() {
-            Some(_) if !self.git.commit.browse => self.log_list(),
-            _ => &self.git.commit,
-        }
-    }
-
     /// 是否显示提交卡片：有改动、有进行中的合并或变基、开着「修改上一次提交」或正在提交时显示。
     ///
     /// 没有可提交的东西时不显示：卡片里只会是一个灰掉的按钮，空状态下面改为写下一步（推送、
@@ -1148,7 +1037,7 @@ impl App {
     /// 放着「提交并推送…」时也不是：两个按钮不写同一件事。
     pub(crate) fn commit_pushes(&self) -> bool {
         self.pointer.modifiers.alt_key()
-            && self.commit_parts().push.is_none()
+            && self.commit_parts_for(self.git.commit.browse).push.is_none()
             && !self.git.commit.busy
             && !self.git.commit.amend
             && (self.git.status.as_ref()).is_some_and(|s| s.operation.is_none())
@@ -1164,13 +1053,8 @@ impl App {
         (self.commit_undoable()).or(self.git.commit.undo_drawn.as_ref())
     }
 
-    /// 每帧绘制前调用：与上一帧比较是否显示提交卡片（见 [`App::commit_compose_shown`]）和
-    /// 「上一次提交」（见 [`App::commit_undoable`]）。
-    ///
-    /// 卡片出现时从视图底部滑上来，消失时（提交完、改动都没了）滑下去；上一次提交在提交以后拉开，
-    /// 推送、撤销以后收起。上面的改动列表和储藏跟着移动。刚读到仓库状态（启动、换仓库）时和提交
-    /// 视图不在屏幕上时直接到终态：它们本来就在那里，切到提交视图时也不补放动画。
-    pub(in crate::app) fn track_commit_bars(&mut self) {
+    /// 跟踪提交卡片和「上一次提交」一栏的显隐过渡；`shown` 为提交视图此刻是否在屏幕上显示。
+    pub(in crate::app::git) fn track_commit_bars_if(&mut self, shown: bool) {
         let known = self.git.status.is_some();
         let card = known.then(|| self.commit_compose_shown());
         let undoable = self.commit_undoable();
@@ -1181,7 +1065,7 @@ impl App {
             self.git.commit.undo_drawn = Some(last.clone());
         }
         let changing = self.git.commit.card.changes(card) || self.git.commit.undo.changes(undo);
-        let clock = if changing && self.commit_shown() {
+        let clock = if changing && shown {
             self.clock(crate::app::animation::TREE_ANIMATION)
         } else {
             None
@@ -1196,17 +1080,6 @@ impl App {
             .status
             .as_ref()
             .is_some_and(|s| s.operation.is_none() && s.oid.is_some())
-    }
-
-    /// 打开提交视图时焦点落在哪：显示提交卡片时在提交信息里，否则在改动列表上。
-    pub(crate) fn commit_view_focus(&self) -> Focus {
-        if self.log_diff_tree().is_some() {
-            Focus::CommitList
-        } else if self.commit_compose_shown() {
-            Focus::CommitMessage
-        } else {
-            Focus::CommitList
-        }
     }
 
     /// 提交卡片收起以后（提交完、改动都没了）把焦点从提交信息移到改动列表上，否则键入的字会
@@ -1300,7 +1173,7 @@ impl App {
         if lines == self.git.commit.message_lines {
             return;
         }
-        let from = self.commit_parts().message.h;
+        let from = self.commit_parts_for(self.git.commit.browse).message.h;
         self.git.commit.message_lines = lines;
         let clock = self.clock(crate::app::animation::TREE_ANIMATION);
         self.git.commit.message_motion = clock.map(|c| (from, c));
@@ -1314,12 +1187,12 @@ impl App {
             return;
         }
         let first = self.git.commit.labels == CommitLabels::default();
-        let before = self.commit_parts();
+        let before = self.commit_parts_for(self.git.commit.browse);
         self.git.commit.labels = labels;
         if first {
             return;
         }
-        let after = self.commit_parts();
+        let after = self.commit_parts_for(self.git.commit.browse);
         let from = before.commit.w;
         if (from - after.commit.w).abs() >= 0.5 {
             let clock = self.clock(crate::app::animation::TREE_ANIMATION);
@@ -1361,14 +1234,6 @@ impl App {
         });
     }
 
-    /// 窗口坐标的 `y` 是否落在写全名的那一改动行上：鼠标在这一行上时不唤出列表的滚动条，
-    /// 和文件树相同。
-    pub(in crate::app) fn over_commit_overflow_row(&self, y: f32) -> bool {
-        self.commit_list_shown()
-            && (self.shown_commit_list().overflow)
-                .is_some_and(|o| (o.y..o.y + COMMIT_ROW).contains(&y))
-    }
-
     /// 每帧算出 `overflow` 之后调用：换了写全名的文件行时，按钮从原位开始滑到全名后面；
     /// `before` 是上一帧写全名的那一行。
     pub(crate) fn track_commit_actions(&mut self, before: Option<usize>) {
@@ -1384,52 +1249,40 @@ impl App {
             .map(|row| (row, self.git.commit.names.clock()));
     }
 
-    /// 窗口坐标 (`x`, `y`) 是否在改动行伸出侧栏的那一段名字上。
-    pub(in crate::app) fn in_commit_overflow(&self, x: f32, y: f32) -> bool {
-        self.commit_list_shown()
-            && (self.shown_commit_list().overflow)
-                .and_then(|o| o.spill)
-                .is_some_and(|r| r.contains(x, y))
-    }
-
     /// 返回提交列表的最大滚动距离；内容超出视口时末尾留出一行空白，表示已到列表末尾。
     pub(crate) fn commit_max_scroll(&self) -> f32 {
         let rows = (self.commit_block_len() + self.commit_other_rows().len()) as f32;
-        let list = self.commit_parts().list.h;
+        let list = self.commit_parts_for(self.git.commit.browse).list.h;
         if rows * COMMIT_ROW <= list {
             return 0.0;
         }
         ((rows + 1.0) * COMMIT_ROW - list).max(0.0)
     }
 
-    /// 打开提交视图（⌃⇧G），焦点放进提交信息。
-    ///
-    /// 当前标签是从日志打开的差异时，提交视图已经可见则在该差异的文件树与工作区改动之间
-    /// 切换，否则显示文件树（见 [`App::toggle_log_diff_tree`]）。
-    pub(in crate::app) fn show_commit(&mut self) {
-        // 不是仓库：仍然打开提交视图，那里写明原因并给出初始化和克隆的入口；没有可以写的提交
-        // 信息，焦点不动。
-        if self.git.root.is_none() {
-            if !self.panels.sidebar.visible {
-                self.set_sidebar(true);
-            }
-            self.set_sidebar_view(crate::layout::SidebarView::Commit);
-            self.request_redraw();
+    /// 切换到一个仓库后恢复离开时记下的分支、储藏、工作树和上一次提交；
+    /// 未记录过的仓库使用后台读到的工作树。
+    pub(in crate::app::git) fn restore_kept_refs(&mut self) {
+        let Some(root) = self.git.root.clone() else {
+            return;
+        };
+        // 恢复的内容影响排好的位置（`cached_places`）。
+        self.git.generation += 1;
+        if let Some(kept) = self.git.kept.remove(&root) {
+            self.git.branches = kept.branches;
+            self.git.stashes = kept.stashes;
+            self.git.worktrees = kept.worktrees;
+            self.git.commit.last = kept.last;
             return;
         }
-        // 从日志打开的差异标签中，提交视图在文件树与工作区改动之间切换。
-        self.toggle_log_diff_tree();
-        if !self.panels.sidebar.visible {
-            self.set_sidebar(true);
+        if self.git.worktrees.is_empty() {
+            let known = self.git.summary_worktrees.lock();
+            let known = known.unwrap_or_else(std::sync::PoisonError::into_inner);
+            // 仓库是附属工作树时，其工作树列表记在主工作树名下。
+            let trees = known
+                .values()
+                .find(|trees| trees.iter().any(|w| w.path == root));
+            self.git.worktrees = trees.cloned().unwrap_or_default();
         }
-        self.set_sidebar_view(crate::layout::SidebarView::Commit);
-        if self.log_diff_tree().is_some() {
-            self.reveal_log_diff_file();
-        } else {
-            self.git_refresh();
-        }
-        self.focus = self.commit_view_focus();
-        self.request_redraw();
     }
 }
 
@@ -1473,5 +1326,37 @@ impl App {
             motion: clock.map(|clock| (from, clock)),
         };
         self.git.context_row.shown(target)
+    }
+
+    /// 在后台对打开的仓库做一件提交视图的事（提交、回滚、暂存、检查等），做完以
+    /// [`UserEvent::GitCommit`] 收结果（[`App::spawn_git`]）；找不到 git 时 `work` 收到原因。
+    fn run_git_job(&mut self, work: impl FnOnce(Result<&Git, String>, &Path) + Send + 'static) {
+        let Some(root) = self.git.root.clone() else {
+            return;
+        };
+        self.spawn_git(UserEvent::GitCommit, move |tool| {
+            work(tool.as_ref().map_err(unusable), &root);
+        });
+    }
+
+    /// 保存 `paths` 里在编辑器中开着、还没保存的文档，返回是否全部保存成功。
+    ///
+    /// 有一个保存失败就停下；失败的原因保存时已经说明了。
+    pub(in crate::app) fn save_dirty_documents(&mut self, paths: &[PathBuf]) -> bool {
+        for path in paths {
+            let canonical = winc_editor::canonical_path(path);
+            let dirty = self
+                .editor
+                .documents
+                .iter()
+                .find(|d| d.path.as_deref() == Some(canonical.as_path()) && d.is_dirty())
+                .map(|d| d.id);
+            if let Some(id) = dirty
+                && !self.write_document(id, None, true)
+            {
+                return false;
+            }
+        }
+        true
     }
 }

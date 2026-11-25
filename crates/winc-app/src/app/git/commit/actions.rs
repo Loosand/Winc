@@ -2,12 +2,14 @@
 
 use std::sync::{Arc, PoisonError};
 
-use winc_editor::git::Synced;
+use winc_core::diff::Pick;
+use winc_editor::format::Cancel;
+use winc_editor::git::{CommitOptions, Synced};
 use winc_i18n::t;
 
 use super::*;
 use crate::app::NoticeKind;
-use crate::app::git::branch::{Then, keep_changes};
+use crate::app::git::operate::{Then, keep_changes};
 use crate::app::lifecycle::notice::NoticeAction;
 
 /// 分支行右端同步控件的状态。
@@ -33,26 +35,6 @@ pub(crate) enum SyncState {
         behind: u32,
     },
 }
-
-/// 需要确认的推送（见 [`App::ask_push`]）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PushIntent {
-    /// 把还没有上游的当前分支发布到这个远程，并设为上游。
-    Publish(String),
-    /// 把当前分支推送到上游。
-    Push,
-    /// 同步：拉取上游的新提交，再推送本地的提交。
-    Sync,
-}
-
-/// 推送的确认框里最多列出几个提交的标题：确认框不能滚动，一屏之内读得完；超出的写明个数，
-/// 全部提交在「查看提交」打开的日志里。
-pub(crate) const PUSH_PREVIEW: usize = 8;
-
-/// 提交成功后按钮显示「✓ 已提交」的时长（经验值）。
-///
-/// 短于状态栏提示的显示时长，足以让用户确认提交已完成。
-pub(in crate::app) const COMMITTED_SHOWN: Duration = Duration::from_millis(1600);
 
 impl App {
     /// 分支和上游的关系决定的同步控件状态。
@@ -87,11 +69,17 @@ impl App {
     /// 会推送的发布和同步先确认（[`App::ask_push`]）；只拉取时不确认。
     pub(in crate::app) fn git_sync(&mut self) {
         match self.git_sync_state() {
-            SyncState::Publish => self.run_branch_command(MenuCommand::GitPush),
+            SyncState::Publish => {
+                if let Some(intent) = self.push_intent() {
+                    self.ask_push(intent);
+                }
+            }
             SyncState::Push(_) | SyncState::Both { .. } => self.ask_push(PushIntent::Sync),
             SyncState::Pull(_) => self.run_git_sync(false),
             SyncState::NoRemote | SyncState::Hidden | SyncState::InSync => {
-                self.run_branch_command(MenuCommand::GitFetch);
+                self.git_operate(t!("git-op-fetch").into(), |git, root| {
+                    git.operate(root, &["fetch", "--all", "--prune"])
+                });
             }
         }
     }
@@ -210,7 +198,7 @@ impl App {
     /// 目标没有改、也不推送标签时与直接推送相同（[`App::run_push`]）；发布时把目标设为上游。
     pub(in crate::app) fn submit_push(
         &mut self,
-        form: super::super::form::PushForm,
+        form: super::super::dialog::PushForm,
         (remote, target): (String, String),
         tags: bool,
         never: bool,
@@ -527,25 +515,41 @@ impl App {
         });
     }
 
-    /// 保存 `paths` 里在编辑器中开着、还没保存的文档，返回是否全部保存成功。
-    ///
-    /// 有一个保存失败就停下；失败的原因保存时已经说明了。
-    pub(in crate::app) fn save_dirty_documents(&mut self, paths: &[PathBuf]) -> bool {
-        for path in paths {
-            let canonical = winc_editor::canonical_path(path);
-            let dirty = self
-                .editor
-                .documents
-                .iter()
-                .find(|d| d.path.as_deref() == Some(canonical.as_path()) && d.is_dirty())
-                .map(|d| d.id);
-            if let Some(id) = dirty
-                && !self.write_document(id, None, true)
-            {
-                return false;
-            }
+    /// 当前仓库提交时是否附加签署行（在提交按钮的菜单中打开，按仓库记在状态文件里）。
+    pub(in crate::app) fn commit_signs_off(&self) -> bool {
+        (self.git.root.as_ref()).is_some_and(|root| self.state.sign_off_repos.contains(root))
+    }
+
+    /// 提交勾上的文件，成功以后继续推送。
+    pub(in crate::app) fn git_commit_and_push(&mut self) {
+        self.git_commit_then(false);
+    }
+
+    /// 提交勾上的文件，成功以后与上游同步（先拉取再推送）。
+    pub(in crate::app) fn git_commit_and_sync(&mut self) {
+        self.git_commit_then(true);
+    }
+
+    /// 提交，成功以后推送（`sync` 时同步）。
+    fn git_commit_then(&mut self, sync: bool) {
+        self.git.commit.push_after = true;
+        self.git.commit.sync_after = sync;
+        self.git_commit();
+        // 没有真的开始提交（没写信息、没勾文件），就不留着「之后推送」。
+        if !self.git.commit.busy {
+            self.git.commit.push_after = false;
+            self.git.commit.sync_after = false;
         }
-        true
+    }
+
+    /// 新增 TODO 的确认框选了 `ok`（仍然提交）或取消。
+    pub(in crate::app) fn todo_confirmed(&mut self, ok: bool) {
+        if ok {
+            self.git.commit.todo_passed = true;
+            self.git_commit();
+        } else {
+            self.git.commit.push_after = false;
+        }
     }
 
     /// 确认后中止进行中的合并、变基等操作。
@@ -566,7 +570,15 @@ impl App {
             return;
         }
         // 没有窗口（测试中）时直接中止。
-        self.run_branch_command(crate::app::input::context_menu::MenuCommand::GitAbort);
+        let what = match operation {
+            Operation::Merge => t!("git-op-abort-merge"),
+            Operation::Rebase => t!("git-op-abort-rebase"),
+            Operation::CherryPick => t!("git-op-abort-cherry-pick"),
+            Operation::Revert => t!("git-op-abort-revert"),
+        };
+        self.git_operate(what.into(), move |git, root| {
+            git.abort_operation(root, operation)
+        });
     }
 
     /// 确认后跳过变基、拣选等操作停着的这个提交。
@@ -587,7 +599,11 @@ impl App {
             return;
         }
         // 没有窗口（测试中）时直接跳过。
-        self.run_branch_command(crate::app::input::context_menu::MenuCommand::GitSkip);
+        if let Some(operation) = operation {
+            self.git_operate(t!("git-op-skip").into(), move |git, root| {
+                git.skip_operation(root, operation)
+            });
+        }
     }
 
     /// 回滚前先确认（系统确认框）；确认后回滚组 `group` 中勾上的文件，没有勾上的文件时回滚
@@ -805,10 +821,26 @@ impl App {
                     }
                     self.git_refresh();
                 }
-                Outcome::Staged(result, root) => self.staging_finished(result, &root),
-                Outcome::OtherStaged(result) => self.other_staging_finished(result),
-                Outcome::TodoChecked(count, root) => self.todo_checked(count, &root),
-                Outcome::Reformatted(count, root) => self.reformatted(count, &root),
+                Outcome::Staged(result, root) => {
+                    if self.staging_finished(result, &root) {
+                        self.git_commit();
+                    }
+                }
+                Outcome::OtherStaged(result) => {
+                    if self.other_staging_finished(result) {
+                        self.git_commit();
+                    }
+                }
+                Outcome::TodoChecked(count, root) => {
+                    if self.todo_checked(count, &root) {
+                        self.git_commit();
+                    }
+                }
+                Outcome::Reformatted(count, root) => {
+                    if self.reformatted(count, &root) {
+                        self.git_commit();
+                    }
+                }
                 Outcome::IndexText(root, path, version, text) => {
                     self.index_text_arrived(&root, path, version, text);
                 }
@@ -906,19 +938,238 @@ impl App {
         self.git.commit.sections_known = old.sections_known;
     }
 
-    /// 在后台对打开的仓库做一件提交视图的事（提交、回滚），做完以 [`UserEvent::GitCommit`] 收
-    /// 结果（[`App::spawn_git`]）；找不到 git 时 `work` 收到原因。
-    pub(super) fn run_git_job(
-        &mut self,
-        work: impl FnOnce(Result<&Git, String>, &Path) + Send + 'static,
-    ) {
-        let Some(root) = self.git.root.clone() else {
+    /// 勾选式下提交勾上的文件：把勾上的内容写入暂存区，再提交暂存区。
+    ///
+    /// 提交按磁盘上的内容：勾上的文件在编辑器中未保存的修改先保存。没写提交信息、一个都没勾时在
+    /// 状态栏说明，不提交。
+    fn git_commit_picked(&mut self) {
+        let message = self.git.commit.message.text().trim().to_owned();
+        let Some(status) = self.git.status.as_ref() else {
             return;
         };
-        self.spawn_git(UserEvent::GitCommit, move |tool| {
-            work(tool.as_ref().map_err(unusable), &root);
+        let rebasing = status.operation == Some(Operation::Rebase);
+        if message.is_empty() && !rebasing {
+            self.flash(t!("git-commit-message-required"));
+            self.focus = Focus::CommitMessage;
+            return;
+        }
+        let checked: Vec<PathBuf> = (self.git.commit.picked_entries(status))
+            .map(|e| e.path.clone())
+            .collect();
+        if !self.save_dirty_documents(&checked) {
+            return;
+        }
+        let Some(status) = self.git.status.as_ref() else {
+            return;
+        };
+        // 勾上的冲突文件中仍有冲突标记时不提交，否则标记和两侧的内容会一并进入提交；这里读取刚
+        // 保存的磁盘内容。
+        let unresolved = (self.git.commit.picked_entries(status))
+            .filter(|e| e.conflicted() && winc_editor::git::merge::file_has_conflicts(&e.path))
+            .count();
+        if unresolved > 0 {
+            self.flash(t!("git-commit-unresolved-conflicts", count = unresolved));
+            return;
+        }
+        let state = &self.git.commit;
+        let mut plan = PickedCommit::default();
+        for entry in state.picked_entries(status) {
+            match state.skipped.get(&entry.path).filter(|s| !s.is_empty()) {
+                Some(skipped) => plan.partial.push((entry.path.clone(), skipped.clone())),
+                None => {
+                    plan.whole.push(entry.path.clone());
+                    // 改名的文件，原来的路径一并提交，否则提交里同时留着新旧两个文件。
+                    plan.whole.extend(entry.from.clone());
+                }
+            }
+            if entry.untracked() {
+                plan.added.push(entry.path.clone());
+            }
+        }
+        let left = (status.entries.iter())
+            .filter(|e| e.staged.is_some() && !e.conflicted() && !state.picked(e));
+        plan.dropped = left
+            .flat_map(|e| std::iter::once(e.path.clone()).chain(e.from.clone()))
+            .collect();
+        let amend = state.amend;
+        // 修改上次提交、合并或变基暂停时只动当前仓库。
+        let others = if amend || status.operation.is_some() {
+            Vec::new()
+        } else {
+            self.other_plans()
+        };
+        let own = !(plan.whole.is_empty() && plan.partial.is_empty());
+        if !own && others.is_empty() && !amend && !rebasing {
+            self.flash(t!("git-commit-nothing-checked"));
+            return;
+        }
+        // 变基停下来时：勾上的文件标记为已解决，继续变基（git 用原来的提交信息）。
+        if rebasing {
+            let paths = plan.whole;
+            self.git_operate(t!("git-op-continue-rebase").to_owned(), move |git, root| {
+                if !paths.is_empty() {
+                    git.stage(root, &paths)?;
+                }
+                git.continue_operation(root, Operation::Rebase)
+            });
+            return;
+        }
+        let merging = status.operation.is_some();
+        let committed: Vec<PathBuf> = others.iter().map(|(root, ..)| root.clone()).collect();
+        self.git.commit.others_left = self.others_left(&committed);
+        self.git.commit.committed_with = committed;
+        let state = &self.git.commit;
+        let options = CommitOptions {
+            all: false,
+            amend,
+            sign_off: self.commit_signs_off(),
+            no_verify: state.no_verify,
+        };
+        let sender = state.results.0.clone();
+        self.git.commit.busy = true;
+        self.run_git_job(move |git, root| {
+            // 先提交当前仓库，再依次提交其他仓库勾上的文件；其中一个失败就停下，已经提交的保留。
+            let work = |git: &Git| {
+                let mut done = CommittedIn::default();
+                if own || amend {
+                    let oid = write_picked(git, root, (&message, options), &plan, merging)?;
+                    done.add(root, oid);
+                }
+                for (other, plan, sign_off) in &others {
+                    let options = CommitOptions {
+                        amend: false,
+                        sign_off: *sign_off,
+                        ..options
+                    };
+                    let oid = write_picked(git, other, (&message, options), plan, false);
+                    done.add(other, oid.map_err(|error| done.failed(other, &error))?);
+                }
+                Ok(done.first.unwrap_or_default())
+            };
+            let result = git.and_then(work);
+            let _ = sender.send(Outcome::Committed(result, message, root.to_path_buf()));
         });
     }
+
+    /// 其他仓库中勾上的文件各自的提交内容：仓库的根目录、要写入暂存区的内容、是否附加签署行。
+    ///
+    /// 换仓库时带过来的、只勾了一部分改动的文件只提交勾上的改动；有合并、变基等操作进行中的
+    /// 仓库不在这里提交。
+    fn other_plans(&self) -> Vec<(PathBuf, PickedCommit, bool)> {
+        if self.other_checked_count() == 0 {
+            return Vec::new();
+        }
+        let root = self.git.root.as_deref();
+        let summaries = (self.git.summaries.lock()).unwrap_or_else(PoisonError::into_inner);
+        let mut plans = Vec::new();
+        for repo in &self.git.repositories {
+            let Some(status) = summaries.get(repo).filter(|_| Some(repo.as_path()) != root) else {
+                continue;
+            };
+            if status.operation.is_some() {
+                continue;
+            }
+            let mut plan = PickedCommit::default();
+            let skipped = &self.git.commit.other_skipped;
+            for entry in &status.entries {
+                let checked = self.other_checked(&entry.path) && !entry.conflicted();
+                let partial = skipped.get(&entry.path).filter(|s| !s.is_empty());
+                if let Some(partial) = partial.filter(|_| checked) {
+                    plan.partial.push((entry.path.clone(), partial.clone()));
+                } else if checked {
+                    plan.whole.push(entry.path.clone());
+                    plan.whole.extend(entry.from.clone());
+                    if entry.untracked() {
+                        plan.added.push(entry.path.clone());
+                    }
+                } else if entry.staged.is_some() && !entry.conflicted() {
+                    plan.dropped.push(entry.path.clone());
+                    plan.dropped.extend(entry.from.clone());
+                }
+            }
+            if !(plan.whole.is_empty() && plan.partial.is_empty()) {
+                let sign_off = self.state.sign_off_repos.contains(repo);
+                plans.push((repo.clone(), plan, sign_off));
+            }
+        }
+        plans
+    }
+}
+
+/// 勾选式下一次提交要写入暂存区的内容。
+#[derive(Debug, Default)]
+struct PickedCommit {
+    /// 整个提交的文件，连同改名文件原来的路径。
+    whole: Vec<PathBuf>,
+    /// 只提交一部分改动的文件，以及其中取消勾选的各处改动。
+    partial: Vec<(PathBuf, Vec<Skip>)>,
+    /// 其中未跟踪的文件：提交失败时移出暂存区，恢复为未跟踪。
+    added: Vec<PathBuf>,
+    /// 暂存区中已有内容而没有勾上的文件：提交前移出暂存区。
+    dropped: Vec<PathBuf>,
+}
+
+/// 把 `plan` 写入暂存区并提交，返回新提交号的前 7 位。
+///
+/// `merging` 为真（合并、拣选、还原进行中）时暂存区里已有自动合并的结果，只加入勾上的文件，不把
+/// 其他内容移出。提交失败时把刚加入的未跟踪文件移出暂存区。
+fn write_picked(
+    git: &Git,
+    root: &Path,
+    (message, options): (&str, CommitOptions),
+    plan: &PickedCommit,
+    merging: bool,
+) -> Result<String, String> {
+    if !merging && !plan.dropped.is_empty() {
+        git.unstage(root, &plan.dropped)?;
+    }
+    if !plan.whole.is_empty() {
+        git.stage(root, &plan.whole)?;
+    }
+    for (path, skipped) in &plan.partial {
+        git.stage_content(root, path, partial_content(git, root, path, skipped)?)?;
+    }
+    let result = git.commit_with(root, message, options);
+    if result.is_err() && !plan.added.is_empty() {
+        let _ = git.unstage(root, &plan.added);
+    }
+    result
+}
+
+/// 返回文件 `path` 只提交 `skipped` 以外的改动时提交成的内容：`HEAD` 中的版本应用磁盘上其余的
+/// 改动。
+fn partial_content(
+    git: &Git,
+    root: &Path,
+    path: &Path,
+    skipped: &[Skip],
+) -> Result<Vec<u8>, String> {
+    use winc_core::diff::{hunk_key, line_hunks, lines, pick_changes};
+    let name = winc_editor::display_name(path).into_owned();
+    let head = git.head_content(root, path, &Cancel::default())?;
+    let disk = winc_backend::fs::read(path)
+        .map_err(|e| t!("git-read-file-failed", name = &name, error = e.to_string()))?;
+    let texts = (
+        String::from_utf8(head.unwrap_or_default()),
+        String::from_utf8(disk),
+    );
+    let (Ok(head), Ok(disk)) = texts else {
+        return Err(t!("git-commit-partial-not-utf8", name = name));
+    };
+    // 各处改动和取消勾选的记录一一对应（见 `assign`），内容相同的几处各按各的勾选提交。
+    let (a, b) = (lines(&head), lines(&disk));
+    let all: Vec<(u64, Range<usize>)> = (line_hunks(&head, &disk).into_iter())
+        .map(|h| {
+            let key = hunk_key(a[h.old.clone()].iter().copied(), b[h.new].iter().copied());
+            (key, h.old)
+        })
+        .collect();
+    let picks = picks::picks(skipped, &all);
+    let content = pick_changes(&head, &disk, |key, old| {
+        (all.iter().position(|(k, o)| *k == key && *o == old))
+            .map_or(Pick::Apply, |h| picks[h].clone())
+    });
+    Ok(content.into_bytes())
 }
 
 /// 「提交并推送」「提交并同步」时把一并提交了的其他仓库 `others` 的当前分支依次推到各自的
@@ -948,23 +1199,23 @@ fn push_others(git: &Git, others: &[PathBuf]) -> Result<(), String> {
 /// 一次提交依次写入几个仓库时，已经提交了的：失败时的说明里写明哪些仓库已经提交，用户不会
 /// 以为什么都没发生。
 #[derive(Default)]
-pub(super) struct CommittedIn {
+struct CommittedIn {
     /// 第一个新提交的提交号。
-    pub first: Option<String>,
+    first: Option<String>,
     /// 已经提交了的仓库的名字。
     names: Vec<String>,
 }
 
 impl CommittedIn {
     /// 记下仓库 `root` 已经提交，新提交号是 `oid`。
-    pub fn add(&mut self, root: &Path, oid: String) {
+    fn add(&mut self, root: &Path, oid: String) {
         self.first.get_or_insert(oid);
         self.names
             .push(winc_editor::display_name(root).into_owned());
     }
 
     /// 仓库 `root` 提交失败（原因 `error`）时的说明：写明是哪个仓库，前面已经提交了的一并写出。
-    pub fn failed(&self, root: &Path, error: &str) -> String {
+    fn failed(&self, root: &Path, error: &str) -> String {
         let name = winc_editor::display_name(root);
         if self.names.is_empty() {
             return format!("{name}: {error}");

@@ -21,7 +21,6 @@ use winc_editor::{Document, DocumentId};
 use winc_i18n::t;
 use winc_render::Rect;
 
-use super::changes::replace_lines;
 use crate::app::NoticeKind;
 use crate::app::{App, UserEvent};
 
@@ -732,4 +731,48 @@ pub(crate) fn part_of(conflict: &Conflict, line: usize) -> Option<Part> {
     } else {
         Some(Part::Base)
     }
+}
+
+/// 将 `doc` 的第 `lines` 行（含换行符）替换为 `inserted`，作为一步可撤销的编辑；光标不变。
+///
+/// # Errors
+///
+/// 文档不可编辑（只读、大文件）时返回原因。
+pub(crate) fn replace_lines(
+    doc: &mut winc_editor::Document,
+    lines: std::ops::Range<usize>,
+    inserted: String,
+) -> Result<(), &'static str> {
+    use winc_core::{Change, EditKind, Transaction};
+    if let Some(reason) = doc.edit_blocked(&winc_editor::Command::Insert(String::new())) {
+        return Err(reason);
+    }
+    let text = doc.text();
+    let line_start = |line: usize| {
+        if line >= text.line_count() {
+            text.end_pos()
+        } else {
+            text.line_start(line)
+        }
+    };
+    let start = line_start(lines.start);
+    let end = if lines.is_empty() {
+        start
+    } else {
+        line_start(lines.end)
+    };
+    let removed = doc.text_range(start, end).unwrap_or_default();
+    let selection = doc.selection;
+    let change = Change {
+        start,
+        removed,
+        inserted,
+    };
+    doc.apply(Transaction::new(
+        vec![change],
+        selection,
+        selection,
+        EditKind::Other,
+    ));
+    Ok(())
 }

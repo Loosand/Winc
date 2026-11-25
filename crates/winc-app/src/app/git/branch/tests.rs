@@ -1,19 +1,16 @@
 //! 分支操作的测试：提交视图「⋯」里的拉取、被占用的分支不能签出到新工作树。
 
+use super::super::operate::branch_menu;
 use super::*;
 
 impl App {
     /// 测试用：在 `root` 里做完了「拉取」，收下结果。
     #[cfg(unix)] // 只有 Unix 上的 Git 测试用到
     pub(in crate::app) fn pulled_in(&mut self, root: &Path) {
-        let what = "拉取".to_owned();
         // 换目录之前起的操作：编号比后来起的都小。
-        let _ = self.git.branch.results.0.send(Done {
-            id: 0,
-            root: Some(root.into()),
-            what,
-            result: Ok((String::new(), Then::Nothing)),
-        });
+        self.git
+            .branch
+            .send_test_done(root.into(), "拉取".to_owned());
         self.poll_branch_ops();
     }
 }

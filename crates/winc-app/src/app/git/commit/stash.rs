@@ -34,9 +34,6 @@ pub(crate) enum StashLine {
     MoreStashes(usize),
 }
 
-/// 储藏一组上下各留的空隙（逻辑像素）：列表间隔（`SIDEBAR_LIST_GAP`）的一半。这一组上下都是
-/// 分隔线，分隔线本身已经隔开了相邻区域，留半个间隔即可。
-pub(crate) const STASH_GAP: f32 = SIDEBAR_LIST_GAP / 2.0;
 /// 正在预览标签里看的一条储藏。
 #[derive(Debug, Clone)]
 pub(crate) struct StashView {
@@ -211,7 +208,7 @@ impl App {
         let sender = self.git.commit.results.0.clone();
         self.run_git_job(move |git, root| {
             let diff = git.and_then(|git| {
-                crate::app::git::log::commit_diff(git, root, old.as_deref(), &new, &file)
+                crate::app::git::operate::commit_diff(git, root, old.as_deref(), &new, &file)
             });
             let _ = sender.send(Outcome::StashDiff(title, diff.map(Box::new)));
         });

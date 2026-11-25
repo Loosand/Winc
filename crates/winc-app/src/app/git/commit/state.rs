@@ -2,8 +2,280 @@
 
 use winc_core::diff::Pick;
 use winc_editor::diff_view::DiffView;
+use winc_editor::git::Change;
 
 use super::*;
+
+/// 排好的改动列表：各行，和每组、每个目录下面有哪些文件（画勾选框、点勾选框时用，不必每行
+/// 把所有改动翻一遍）。
+///
+/// 按状态和收起、平铺的样子排一次，缓存到它们变了为止（见 [`App::commit_rows`]）；解引用成
+/// 各行。
+#[derive(Debug, Default)]
+pub(crate) struct CommitRows {
+    rows: Vec<CommitRow>,
+    /// 各组、各目录下面的文件（`Status::entries` 的下标）：一组、一个目录（收起的也算）下面的
+    /// 文件在这里连成一段，它里面的目录是其中的一小段。
+    members: Vec<usize>,
+    /// 每组的文件在 `members` 里的那一段（下标是 `CommitGroup as usize`）。
+    groups: [Range<usize>; CommitGroup::COUNT],
+    /// 列表里每个目录行的文件在 `members` 里的那一段：下标同上，键是相对仓库根目录的目录。
+    dirs: [HashMap<PathBuf, Range<usize>>; CommitGroup::COUNT],
+    /// 组、目录行的勾选框（见 [`CommitRows::members_state`]）：（勾选的版本，按那一段在
+    /// `members` 里的位置记下的结果）。
+    states: RefCell<MemberStates>,
+}
+
+/// [`CommitRows::members_state`] 的缓存：勾选的版本，以及按那一段在 `members` 里的
+/// （起点，长度）记下的勾选状态。
+type MemberStates = (u64, HashMap<(usize, usize), Option<bool>>);
+
+/// 排列表时读取的折叠与排序设置，使 [`CommitRows`] 不依赖 [`CommitState`]。
+struct RowsLayout<'a> {
+    staging: bool,
+    flat: bool,
+    compact: bool,
+    sort: CommitSort,
+    collapsed: &'a [bool; CommitGroup::COUNT],
+    collapsed_dirs: &'a [HashSet<PathBuf>; CommitGroup::COUNT],
+}
+
+impl CommitRows {
+    /// 返回第 `row` 行所在的组：该行或它之前最近的组标题行；没有这一行时为 `None`。
+    pub fn group_of(&self, row: usize) -> Option<CommitGroup> {
+        self.rows.get(..=row)?.iter().rev().find_map(|r| match r {
+            CommitRow::Group(group) => Some(*group),
+            _ => None,
+        })
+    }
+
+    /// 组 `group` 里的文件（`Status::entries` 的下标）。
+    pub fn group(&self, group: CommitGroup) -> &[usize] {
+        &self.members[self.groups[group.index()].clone()]
+    }
+
+    /// 组 `group` 里目录 `dir`（相对仓库根目录）下面的文件；列表里没有这个目录行时为空。
+    pub fn dir(&self, group: CommitGroup, dir: &Path) -> &[usize] {
+        self.dirs[group.index()]
+            .get(dir)
+            .map_or(&[], |r| &self.members[r.clone()])
+    }
+
+    /// `members`（本表的 [`Self::group`]、[`Self::dir`] 给出的一段）的勾选状态，含义同
+    /// [`CommitState::members_state`]；`checks` 是勾选的版本（[`CommitState::checks`]）。
+    ///
+    /// 组、目录下面可能有上万个文件，每帧都要画它们的勾选框：按位置记下结果，勾选变了、或者
+    /// 重新排了各行（换成另一张表）时才重新算。
+    pub fn members_state(
+        &self,
+        members: &[usize],
+        checks: u64,
+        compute: impl FnOnce() -> Option<bool>,
+    ) -> Option<bool> {
+        if members.is_empty() {
+            return compute();
+        }
+        let offset = (members.as_ptr() as usize - self.members.as_ptr() as usize)
+            / std::mem::size_of::<usize>();
+        let mut states = self.states.borrow_mut();
+        if states.0 != checks {
+            *states = (checks, HashMap::new());
+        }
+        *states
+            .1
+            .entry((offset, members.len()))
+            .or_insert_with(compute)
+    }
+
+    /// 排下一层已经排好序的文件 `files`（下标、相对路径）：每个一行，深 `depth` 层。
+    fn push_files(&mut self, files: &[(usize, &Path)], depth: usize) {
+        self.members.extend(files.iter().map(|&(index, _)| index));
+        self.rows.extend(
+            files
+                .iter()
+                .map(|&(index, _)| CommitRow::File { index, depth }),
+        );
+    }
+
+    /// 排列表：每组一行标题，没收起的组下面按目录排成树（或者平铺）。
+    ///
+    /// 空的组不显示。`root` 是仓库的根目录，文件的路径按它算相对路径。
+    fn build(layout: &RowsLayout<'_>, status: &Status, root: &Path) -> CommitRows {
+        let mut out = CommitRows::default();
+        for group in CommitGroup::ALL {
+            let files: Vec<(usize, &Path)> = status
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| group.holds(e, layout.staging))
+                .map(|(i, e)| (i, e.path.strip_prefix(root).unwrap_or(&e.path)))
+                .collect();
+            if files.is_empty() {
+                continue;
+            }
+            out.rows.push(CommitRow::Group(group));
+            let start = out.members.len();
+            if layout.collapsed[group.index()] {
+                out.members.extend(files.iter().map(|&(index, _)| index));
+            } else if layout.flat {
+                // 平铺：每个文件一行，按选定的方式排。
+                let mut files = files;
+                sort_files(layout.sort, status, &mut files);
+                out.push_files(&files, 0);
+            } else {
+                out.push_level(layout, status, group, Path::new(""), files, 0);
+            }
+            out.groups[group.index()] = start..out.members.len();
+        }
+        out
+    }
+
+    /// 把 `dir` 下面的 `items`（下标、相对 `dir` 的路径）排成一层：先是子目录（未收起的继续
+    /// 往下排），再是文件。
+    fn push_level<'a>(
+        &mut self,
+        layout: &RowsLayout<'_>,
+        status: &Status,
+        group: CommitGroup,
+        dir: &Path,
+        items: Vec<(usize, &'a Path)>,
+        depth: usize,
+    ) {
+        let mut files = Vec::new();
+        let mut dirs: BTreeMap<NaturalName<'a>, Vec<(usize, &'a Path)>> = BTreeMap::new();
+        for (index, path) in items {
+            let mut parts = path.components();
+            match (parts.next(), parts.as_path()) {
+                (Some(first), rest) if !rest.as_os_str().is_empty() => {
+                    dirs.entry(NaturalName(first.as_os_str()))
+                        .or_default()
+                        .push((index, rest));
+                }
+                _ => files.push((index, path)),
+            }
+        }
+        for (NaturalName(name), mut sub) in dirs {
+            // 只有一个子目录、没有文件：按设置和子目录合成一行。
+            let mut label = PathBuf::from(name);
+            while let Some(next) = only_subdir(&sub).filter(|_| layout.compact) {
+                label.push(next);
+                for (_, p) in &mut sub {
+                    let rest: &'a Path = p;
+                    *p = rest.strip_prefix(next).unwrap_or(Path::new(""));
+                }
+            }
+            let full = dir.join(&label);
+            let start = self.members.len();
+            self.rows.push(CommitRow::Dir {
+                group,
+                dir: full.clone(),
+                label: label.to_string_lossy().into_owned(),
+                depth,
+            });
+            if layout.collapsed_dirs[group.index()].contains(&full) {
+                self.members.extend(sub.iter().map(|&(index, _)| index));
+            } else {
+                self.push_level(layout, status, group, &full, sub, depth + 1);
+            }
+            self.dirs[group.index()].insert(full, start..self.members.len());
+        }
+        sort_files(layout.sort, status, &mut files);
+        self.push_files(&files, depth);
+    }
+}
+
+/// 按 `sort` 排 `files`（各项在状态中的下标和相对仓库根的路径）。
+fn sort_files(sort: CommitSort, status: &Status, files: &mut [(usize, &Path)]) {
+    let letter = |index: usize| status.entries.get(index).map(|e| e.shown().letter());
+    files.sort_by(|a, b| match sort {
+        CommitSort::Path => natural_path_cmp(a.1, b.1),
+        CommitSort::Name => {
+            let name = |path: &Path| path.file_name().map(Path::new).unwrap_or(path).to_owned();
+            natural_path_cmp(&name(a.1), &name(b.1)).then_with(|| natural_path_cmp(a.1, b.1))
+        }
+        CommitSort::Status => {
+            (letter(a.0).cmp(&letter(b.0))).then_with(|| natural_path_cmp(a.1, b.1))
+        }
+    });
+}
+
+impl Deref for CommitRows {
+    type Target = [CommitRow];
+
+    fn deref(&self) -> &[CommitRow] {
+        &self.rows
+    }
+}
+
+impl App {
+    /// 提交视图列表现在的各行（见 [`CommitRows`]）。
+    ///
+    /// 按状态的版本（`GitState::generation`，换仓库时也变）和收起、平铺的样子缓存：每帧绘制、
+    /// 滚动、悬停都要用，不再每次从头排。
+    pub(crate) fn commit_rows(&self) -> Rc<CommitRows> {
+        rows_of(
+            &self.git.commit,
+            self.git.status.as_ref(),
+            self.git.root.as_deref(),
+            self.git.generation,
+        )
+    }
+}
+
+/// 按 `state` 的收起、平铺设置排出 `status` 的各行，按（`generation`，排列设置的版本）缓存在
+/// `state` 中；没有状态或仓库时返回空的列表。
+pub(in crate::app::git) fn rows_of(
+    state: &CommitState,
+    status: Option<&Status>,
+    root: Option<&Path>,
+    generation: u64,
+) -> Rc<CommitRows> {
+    let (Some(status), Some(root)) = (status, root) else {
+        return Rc::default();
+    };
+    let key = (generation, state.layout);
+    let mut cache = state.rows.borrow_mut();
+    if let Some((built, rows)) = cache.as_ref()
+        && *built == key
+    {
+        return Rc::clone(rows);
+    }
+    let rows = Rc::new(state.build_rows(status, root));
+    *cache = Some((key, Rc::clone(&rows)));
+    rows
+}
+
+/// 把 `entry` 改写为暂存（`on` 为真）或取消暂存之后的状态，要写入暂存区的路径加到 `touched`。
+///
+/// 已经处于该状态的文件不动；冲突中的文件不能取消暂存。
+pub(super) fn flip_staged(entry: &mut Entry, on: bool, touched: &mut Vec<PathBuf>) {
+    if on {
+        if entry.unstaged.is_none() {
+            return;
+        }
+        entry.staged = Some(match (entry.staged, entry.unstaged) {
+            (Some(Change::Added), _) | (_, Some(Change::Untracked)) => Change::Added,
+            (_, Some(Change::Deleted)) => Change::Deleted,
+            (Some(Change::Renamed), _) => Change::Renamed,
+            _ => Change::Modified,
+        });
+        entry.unstaged = None;
+        touched.push(entry.path.clone());
+    } else {
+        let Some(staged) = entry.staged.filter(|_| !entry.conflicted()) else {
+            return;
+        };
+        entry.unstaged = Some(match (staged, entry.unstaged) {
+            (Change::Added, _) => Change::Untracked,
+            (Change::Deleted, _) | (_, Some(Change::Deleted)) => Change::Deleted,
+            _ => Change::Modified,
+        });
+        entry.staged = None;
+        touched.push(entry.path.clone());
+        // 改名的文件，原来的路径一并移出暂存区。
+        touched.extend(entry.from.clone());
+    }
+}
 
 impl CommitState {
     /// 返回当前按下「提交」不会提交的原因；可以提交（或正在提交）时为 `None`。
@@ -273,21 +545,6 @@ impl CommitState {
         }
     }
 
-    /// 按 [`CommitState::sort`] 排 `files`（各项在状态中的下标和相对仓库根的路径）。
-    fn sort_files(&self, status: &Status, files: &mut [(usize, &Path)]) {
-        let letter = |index: usize| status.entries.get(index).map(|e| e.shown().letter());
-        files.sort_by(|a, b| match self.sort {
-            CommitSort::Path => natural_path_cmp(a.1, b.1),
-            CommitSort::Name => {
-                let name = |path: &Path| path.file_name().map(Path::new).unwrap_or(path).to_owned();
-                natural_path_cmp(&name(a.1), &name(b.1)).then_with(|| natural_path_cmp(a.1, b.1))
-            }
-            CommitSort::Status => {
-                (letter(a.0).cmp(&letter(b.0))).then_with(|| natural_path_cmp(a.1, b.1))
-            }
-        });
-    }
-
     /// 全部收起，或者全部展开（连收起的目录一起展开）。
     pub(super) fn collapse_all(&mut self, collapse: bool) {
         self.collapsed = [collapse; CommitGroup::COUNT];
@@ -339,86 +596,18 @@ impl CommitState {
     ///
     /// 空的组不显示。`root` 是仓库的根目录，文件的路径按它算相对路径。
     pub(in crate::app::git) fn build_rows(&self, status: &Status, root: &Path) -> CommitRows {
-        let mut out = CommitRows::default();
-        for group in CommitGroup::ALL {
-            let files: Vec<(usize, &Path)> = status
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| group.holds(e, self.staging))
-                .map(|(i, e)| (i, e.path.strip_prefix(root).unwrap_or(&e.path)))
-                .collect();
-            if files.is_empty() {
-                continue;
-            }
-            out.rows.push(CommitRow::Group(group));
-            let start = out.members.len();
-            if self.collapsed[group.index()] {
-                out.members.extend(files.iter().map(|&(index, _)| index));
-            } else if self.flat {
-                // 平铺：每个文件一行，按选定的方式排。
-                let mut files = files;
-                self.sort_files(status, &mut files);
-                out.push_files(&files, 0);
-            } else {
-                self.push_level(status, group, Path::new(""), files, 0, &mut out);
-            }
-            out.groups[group.index()] = start..out.members.len();
-        }
-        out
-    }
-
-    /// 把 `dir` 下面的 `items`（下标、相对 `dir` 的路径）排成一层：先是子目录（未收起的继续
-    /// 往下排），再是文件。
-    fn push_level<'a>(
-        &self,
-        status: &Status,
-        group: CommitGroup,
-        dir: &Path,
-        items: Vec<(usize, &'a Path)>,
-        depth: usize,
-        out: &mut CommitRows,
-    ) {
-        let mut files = Vec::new();
-        let mut dirs: BTreeMap<NaturalName<'a>, Vec<(usize, &'a Path)>> = BTreeMap::new();
-        for (index, path) in items {
-            let mut parts = path.components();
-            match (parts.next(), parts.as_path()) {
-                (Some(first), rest) if !rest.as_os_str().is_empty() => {
-                    dirs.entry(NaturalName(first.as_os_str()))
-                        .or_default()
-                        .push((index, rest));
-                }
-                _ => files.push((index, path)),
-            }
-        }
-        for (NaturalName(name), mut sub) in dirs {
-            // 只有一个子目录、没有文件：按设置和子目录合成一行。
-            let mut label = PathBuf::from(name);
-            while let Some(next) = only_subdir(&sub).filter(|_| self.compact) {
-                label.push(next);
-                for (_, p) in &mut sub {
-                    let rest: &'a Path = p;
-                    *p = rest.strip_prefix(next).unwrap_or(Path::new(""));
-                }
-            }
-            let full = dir.join(&label);
-            let start = out.members.len();
-            out.rows.push(CommitRow::Dir {
-                group,
-                dir: full.clone(),
-                label: label.to_string_lossy().into_owned(),
-                depth,
-            });
-            if self.dir_collapsed(group, &full) {
-                out.members.extend(sub.iter().map(|&(index, _)| index));
-            } else {
-                self.push_level(status, group, &full, sub, depth + 1, out);
-            }
-            out.dirs[group.index()].insert(full, start..out.members.len());
-        }
-        self.sort_files(status, &mut files);
-        out.push_files(&files, depth);
+        CommitRows::build(
+            &RowsLayout {
+                staging: self.staging,
+                flat: self.flat,
+                compact: self.compact,
+                sort: self.sort,
+                collapsed: &self.collapsed,
+                collapsed_dirs: &self.collapsed_dirs,
+            },
+            status,
+            root,
+        )
     }
 }
 

@@ -56,7 +56,7 @@ impl App {
         self.spawn_git(UserEvent::GitStatus, move |tool| {
             if let Ok(git) = tool {
                 // 端点只提供已保存的凭据，在获取结束时关闭。
-                let listener = super::question::listen_unattended(remember);
+                let listener = super::operate::Asker::listen_unattended(remember);
                 let askpass = listener.as_ref().and_then(Listener::askpass);
                 let _ = git.with_askpass(askpass).fetch_unattended(&root);
             }

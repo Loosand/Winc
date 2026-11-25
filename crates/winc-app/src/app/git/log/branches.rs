@@ -3,8 +3,8 @@
 //! 右键是分支的各项操作。
 
 use super::*;
-pub(crate) use crate::app::git::branch::picker::BranchRow;
-use crate::app::git::branch::picker::{BranchList, branch_rows, locals_key, without_recent};
+use crate::app::git::operate::BranchList;
+pub(crate) use crate::app::git::operate::BranchRow;
 
 /// 分支面板一组或一个目录展开、收起中的一帧（与提交视图里组、目录的动画相同）。
 #[derive(Debug, Clone)]
@@ -108,7 +108,7 @@ impl App {
             tags: &git.tags,
         };
         let mut rows = vec![BranchRow::All];
-        rows.extend(without_recent(branch_rows(&list)));
+        rows.extend(BranchRow::without_recent(list.rows()));
         let key = (
             git.branches.clone(),
             git.recent_branches.clone(),
@@ -120,19 +120,10 @@ impl App {
     }
 
     /// 分支面板第 `i` 行的分支（`GitState::branches` 里的）；不是分支的行为 `None`。
-    fn log_branch_at(&self, i: usize) -> Option<&winc_editor::git::Branch> {
+    pub(in crate::app::git) fn log_branch_at(&self, i: usize) -> Option<&winc_editor::git::Branch> {
         match self.log_branch_rows().into_iter().nth(i)? {
             BranchRow::Branch { index, .. } => self.git.branches.get(index),
             _ => None,
-        }
-    }
-
-    /// 双击了分支面板的第 `i` 行：是分支（不是当前分支）时签出，远程分支签出成同名的本地分支
-    /// 并跟踪它，与分支选择器的「签出」相同。
-    pub(in crate::app) fn checkout_log_branch_row(&mut self, i: usize) {
-        let branch = self.log_branch_at(i).cloned();
-        if let Some(branch) = branch.filter(|b| !b.current) {
-            self.run_branch_op(crate::app::git::branch::BranchOp::Checkout, branch);
         }
     }
 
@@ -184,7 +175,7 @@ impl App {
         };
         let all = row == BranchRow::All;
         let fold = match row {
-            BranchRow::Locals { recent, .. } => Some(locals_key(recent)),
+            BranchRow::Locals { recent, .. } => Some(BranchRow::locals_key(recent)),
             BranchRow::Remotes { .. } => Some((true, String::new())),
             BranchRow::Tags { .. } => Some((false, String::new())),
             BranchRow::Folder { remote, path, .. } => Some((remote, path)),

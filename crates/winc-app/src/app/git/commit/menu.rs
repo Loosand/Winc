@@ -1,7 +1,7 @@
 //! 提交视图的菜单：「提交」按钮旁的菜单、「⋯」菜单和文件行的菜单，以及各项对应的命令。
 
+use super::super::operate::PickerPart;
 use super::*;
-use crate::app::PickerPart;
 use crate::keymap::Action;
 
 impl App {
@@ -147,7 +147,7 @@ impl App {
     pub(in crate::app) fn commit_button_menu(
         &self,
     ) -> Vec<crate::app::input::context_menu::MenuEntry> {
-        self.commit_menu_items(self.commit_parts().push.is_none())
+        self.commit_menu_items(self.commit_parts_for(self.git.commit.browse).push.is_none())
     }
 
     /// 提交按钮菜单的各项；`push` 为假时不列「提交并推送」。
@@ -171,11 +171,6 @@ impl App {
         ]);
         entries.extend(self.compose_menu_entries());
         entries
-    }
-
-    /// 当前仓库提交时是否附加签署行（在提交按钮的菜单中打开，按仓库记在状态文件里）。
-    pub(in crate::app) fn commit_signs_off(&self) -> bool {
-        (self.git.root.as_ref()).is_some_and(|root| self.state.sign_off_repos.contains(root))
     }
 
     /// 打开或关闭当前仓库提交时的签署行。
@@ -209,47 +204,22 @@ impl App {
         self.request_redraw();
     }
 
-    /// 提交勾上的文件，成功以后继续推送。
-    pub(in crate::app) fn git_commit_and_push(&mut self) {
-        self.git_commit_then(false);
-    }
-
-    /// 提交勾上的文件，成功以后与上游同步（先拉取再推送）。
-    pub(in crate::app) fn git_commit_and_sync(&mut self) {
-        self.git_commit_then(true);
-    }
-
-    /// 提交，成功以后推送（`sync` 时同步）。
-    pub(super) fn git_commit_then(&mut self, sync: bool) {
-        self.git.commit.push_after = true;
-        self.git.commit.sync_after = sync;
-        self.git_commit();
-        // 没有真的开始提交（没写信息、没勾文件），就不留着「之后推送」。
-        if !self.git.commit.busy {
-            self.git.commit.push_after = false;
-            self.git.commit.sync_after = false;
-        }
-    }
-
-    /// 在按目录排成树和平铺之间切换更改列表。
-    ///
-    /// 记进状态文件：以后打开的窗口、下次启动都用同一种显示方式。
-    pub(crate) fn toggle_commit_layout(&mut self) {
+    /// 在按目录排成树和平铺之间切换更改列表的本地状态（不含同步历史差异文件树）。
+    pub(in crate::app::git) fn toggle_commit_layout_state(&mut self) {
         let flat = !self.git.commit.flat();
         self.git.commit.set_flat(flat);
         self.update_state(|state| state.commit_tree = !flat);
         self.git.commit.scroll = self.git.commit.scroll.min(self.commit_max_scroll());
         self.reveal_commit_selection();
-        self.sync_log_diff_layout();
         self.request_redraw();
     }
 
-    /// 提交视图标题行「⋯」的菜单选了 `command`。
-    pub(in crate::app) fn run_commit_more_command(&mut self, command: MenuCommand) {
+    /// 处理提交视图标题行「⋯」菜单中属于提交视图的命令；未处理（需交给分支操作）时返回 `false`。
+    pub(in crate::app::git) fn try_commit_more_command(&mut self, command: MenuCommand) -> bool {
         match command {
             MenuCommand::CommitTree | MenuCommand::CommitList => {
                 if self.git.commit.flat() != (command == MenuCommand::CommitList) {
-                    self.toggle_commit_layout();
+                    self.toggle_commit_layout_state();
                 }
             }
             MenuCommand::CommitAllRepositories => self.toggle_all_repositories(),
@@ -303,9 +273,10 @@ impl App {
                     .collapse_all(command == MenuCommand::CommitCollapseAll);
                 self.git.commit.scroll = self.git.commit.scroll.min(self.commit_max_scroll());
             }
-            _ => self.run_branch_command(command),
+            _ => return false,
         }
         self.request_redraw();
+        true
     }
 
     /// 提交视图里一个文件的右键菜单选了 `command`。

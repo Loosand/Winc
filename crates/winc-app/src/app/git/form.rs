@@ -5,332 +5,63 @@
 //! 按「创建」执行的操作随输入的名称变化（[`FormPlan`]）：新建工作树时可能是新建分支、签出已有的、
 //! 跟踪远程的，或者已经在别的工作树里签出着（主按钮换成「打开」）；不能做的原因写在框里。
 
-use std::path::PathBuf;
 use std::sync::{Arc, PoisonError};
 
-use winc_editor::git::unique_dir;
+use winc_editor::git::{RebaseAction, unique_dir};
 use winc_i18n::t;
 
-use super::branch::local_name;
-use super::commit::{PUSH_PREVIEW, PushIntent};
-use super::log::short;
-use super::question::QuestionView;
-use super::rebase::RebaseForm;
+use super::dialog::QuestionView;
+pub(crate) use super::dialog::{FormDialog, FormKind, FormPlan, PushForm, PushOutgoing};
+use super::operate::{PUSH_PREVIEW, PushIntent, local_name, short};
 use super::worktree::NameTarget;
-use crate::app::editor::find::ref_name_field;
-use crate::app::{App, Focus, Hover, TextField, UserEvent};
+use crate::app::{App, Focus, UserEvent};
 use crate::askpass::Prompt;
-use crate::layout::{DialogLayout, DialogPart};
+use crate::layout::DialogPart;
 
-/// 表单对话框是哪一种。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FormKind {
-    /// 新建工作树：分支、基于、位置，复制被忽略的文件、在新窗口中打开。
-    Worktree,
-    /// 新建分支：名称、基于，创建后签出。
-    ///
-    /// `at` 是日志里选的提交（完整的提交号），从它新建时「基于」不能改；`None` 时「基于」可以
-    /// 选分支。
-    Branch { at: Option<String> },
-    /// `git`、`ssh` 的输入请求，见 [`super::question`]；请求来自远端主机上的命令时，后一项是
-    /// 那台主机。
-    Question(Prompt, Option<String>),
-    /// 克隆仓库：地址、位置。
-    Clone,
-    /// 添加远程仓库，或修改 `editing` 的地址。
-    Remote { editing: Option<String> },
-    /// 在 Git 日志中转到一个提交：输入提交号、分支名或标签名。
-    GoToRevision,
-    /// 把 Git 日志中的提交 `commit` 与输入的提交号、分支名或标签名比较。
-    CompareRevision { commit: String },
-    /// 按路径筛选 Git 日志：输入相对仓库根目录的路径或通配。
-    LogPath,
-    /// 给窗口中的这组目录起名。
-    RenameGroup,
-    /// 添加或编辑本地笔记的属性。
-    Property(crate::app::preview::markdown::properties::PropertyEdit),
-    /// 交互式变基。
-    Rebase(Box<RebaseForm>),
-    /// 连接远端主机：主机、端口，见 [`crate::app::remote`]。
-    Connect,
-    /// 推送：远程、目标分支、待推送的提交，可一并推送标签。
-    Push(Box<PushForm>),
-}
-
-/// 推送对话框打开时的内容。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PushForm {
-    /// 推送还是发布。
-    pub intent: PushIntent,
-    /// 当前分支的名字。
-    pub branch: String,
-    /// 默认的远程：上游所在的远程，发布时是选出的远程。
-    pub remote: String,
-    /// 默认的目标分支：上游的分支名，发布时与当前分支同名。
-    pub target: String,
-    /// 待推送的提交的标题，最新的在前；提交多时只有最新的几个。
-    pub subjects: Vec<String>,
-    /// 待推送的提交数。
-    pub total: usize,
-    /// 提交列表按哪个目标读出（远程、分支）；改了目标以后在后台重读，读到时换上。
-    pub read_for: (String, String),
-    /// 提交列表占的行数：打开以来最多的一次，改目标时对话框不忽高忽低。
-    pub rows: usize,
-}
-
-impl PushForm {
-    /// 提交列表占几行：每个标题一行，没有列出的提交另占一行；没有待推送的提交时是一行说明。
-    pub(crate) fn lines(&self) -> usize {
-        let more = usize::from(self.total > self.subjects.len());
-        (self.subjects.len() + more).max(1)
+/// 返回按键 `base` 对应的变基处理方式：取各命令的首字母。
+fn action_of_key(base: &str) -> Option<RebaseAction> {
+    match base {
+        "p" => Some(RebaseAction::Pick),
+        "r" => Some(RebaseAction::Reword),
+        "e" => Some(RebaseAction::Edit),
+        "s" => Some(RebaseAction::Squash),
+        "f" => Some(RebaseAction::Fixup),
+        "d" => Some(RebaseAction::Drop),
+        _ => None,
     }
-}
-
-/// 推送对话框改了目标后在后台读到的提交：读的目标（远程、分支）、标题和总数。
-pub(crate) type PushOutgoing = ((String, String), Vec<String>, usize);
-
-impl FormKind {
-    /// 返回使用询问对话框版式的表单的内容；其他表单返回 `None`。
-    pub(crate) fn view(&self) -> Option<QuestionView> {
-        match self {
-            FormKind::Question(prompt, origin) => Some(QuestionView::of(prompt, origin.as_deref())),
-            FormKind::Remote { editing } => Some(QuestionView::remote(editing.as_deref())),
-            FormKind::Connect => Some(QuestionView::connect()),
-            FormKind::GoToRevision => Some(QuestionView::go_to_revision()),
-            FormKind::CompareRevision { commit } => Some(QuestionView::compare_revision(commit)),
-            FormKind::LogPath => Some(QuestionView::log_path()),
-            FormKind::RenameGroup => Some(QuestionView::rename_group()),
-            FormKind::Property(edit) => Some(edit.view()),
-            FormKind::Worktree
-            | FormKind::Branch { .. }
-            | FormKind::Clone
-            | FormKind::Push(_)
-            | FormKind::Rebase(_) => None,
-        }
-    }
-}
-
-/// 表单对话框的状态。
-pub(crate) struct FormDialog {
-    /// 哪一种。
-    pub kind: FormKind,
-    /// 名称的输入框；打开对话框时就在这里输入。
-    pub name: TextField,
-    /// 询问对话框的第二个输入框：登录的密码（遮盖）、远程仓库的地址；其他表单不显示。
-    pub second: TextField,
-    /// 连接对话框的第三个输入框：密钥文件；其他表单不显示。
-    pub third: TextField,
-    /// 新分支从哪个分支开始；`None` 是当前分支（游离时是当前提交）。
-    pub base: Option<String>,
-    /// 用「位置」右端的目录按钮选的目录，工作树建在它下面；`None` 是默认位置（见
-    /// [`App::new_worktree_dir`]）。
-    pub folder: Option<PathBuf>,
-    /// 是否复制配置 `git.worktreeCopy` 匹配的被忽略的文件。
-    pub copy: bool,
-    /// 工作树建好以后在新窗口打开（`false` 是当前窗口换过去）。
-    pub new_window: bool,
-    /// 分支建好以后签出它。
-    pub checkout: bool,
-    /// 鼠标悬停的部件。
-    pub hover: Option<DialogPart>,
-    /// 键盘焦点所在的部件。
-    ///
-    /// `Tab` 在名称、基于、选择目录、各个选项和两个按钮之间循环，空格、回车激活该部件；
-    /// 焦点在名称（[`DialogPart::Branch`]）上时，键入的文字进入输入框。
-    pub focus: DialogPart,
-    /// 按下「创建」后仍在执行的 git 操作的编号（`BranchState::started`）。
-    ///
-    /// 操作完成后才关闭对话框；失败时保留对话框，并将原因写入 `error`。
-    pub running: Option<u64>,
-    /// 上一次创建失败的原因，显示在按钮左侧；修改名称时清空。
-    pub error: Option<String>,
-    /// 打开对话框前的焦点，关闭以后还回去。
-    back: Focus,
-}
-
-/// 按「创建」会做什么，跟着输入的名称、选的起点变。
-pub(crate) struct FormPlan {
-    /// 不能创建的原因，用错误色写在输入框右端；框里就是名称，原因里不再重复。
-    pub problem: Option<String>,
-    /// 主按钮的字。
-    pub confirm: &'static str,
-    /// 主按钮能不能按。
-    pub enabled: bool,
-    /// 「基于」右边写的字。
-    pub base: String,
-    /// 能不能选起点。
-    pub base_enabled: bool,
-    /// 工作树的目录；已经签出着时是那个工作树的目录，建不了、新建分支时为 `None`。
-    pub dir: Option<PathBuf>,
 }
 
 impl App {
-    /// 打开新建工作树对话框。
-    pub(in crate::app) fn open_worktree_dialog(&mut self) {
-        self.open_form_dialog(FormKind::Worktree, None);
-    }
-
-    /// 打开新建分支对话框：`from` 是从哪个分支开始（`None` 是当前分支），`at` 是从日志里哪个
-    /// 提交开始（这时「基于」不能改）。
-    pub(in crate::app) fn open_branch_dialog(&mut self, from: Option<String>, at: Option<String>) {
-        self.open_form_dialog(FormKind::Branch { at }, from);
-    }
-
-    /// 打开推送对话框：`subjects` 是待推送的提交的标题，`total` 是提交数。
-    ///
-    /// 远程和目标分支先填上游（发布时是选出的远程和同名分支），键盘焦点在主按钮上，回车即推送。
-    pub(in crate::app) fn open_push_dialog(
+    /// 处理交互式变基对话框列表上的按键；不是该对话框或列表没有焦点时返回 `false`。
+    pub(in crate::app) fn rebase_list_key(
         &mut self,
-        intent: PushIntent,
-        subjects: Vec<String>,
-        total: usize,
-    ) {
-        if self.overlays.form_dialog.is_some() {
-            return;
-        }
-        let current = self.git.branches.iter().find(|b| b.current && !b.remote);
-        let branch = current.map_or("HEAD", |b| b.name.as_str()).to_owned();
-        let upstream = current.and_then(|b| b.upstream.clone()).unwrap_or_default();
-        // 上游写作「远程名/分支名」，远程名本身可以含 `/`，按已知的远程名匹配最长的一个。
-        let tracked = (self.git.remotes.iter())
-            .filter(|r| upstream.starts_with(&format!("{r}/")))
-            .max_by_key(|r| r.len());
-        let (remote, target) = match (&intent, tracked) {
-            (PushIntent::Publish(remote), _) => (remote.clone(), branch.clone()),
-            (_, Some(remote)) => (remote.clone(), upstream[remote.len() + 1..].to_owned()),
-            (_, None) => (upstream, branch.clone()),
+        key: &winit::keyboard::Key,
+        base: &str,
+    ) -> bool {
+        use winit::keyboard::{Key, NamedKey};
+        let Some(dialog) = &self.overlays.form_dialog else {
+            return false;
         };
-        let mut name = ref_name_field();
-        name.set_text(&target);
-        name.set_caret(target.len(), false);
-        let form = PushForm {
-            intent,
-            branch,
-            remote: remote.clone(),
-            target: target.clone(),
-            subjects,
-            total,
-            read_for: (remote.clone(), target),
-            rows: 0,
+        let FormKind::Rebase(form) = &dialog.kind else {
+            return false;
         };
-        let form = PushForm {
-            rows: form.lines(),
-            ..form
-        };
-        self.show_form_dialog(FormKind::Push(Box::new(form)), name, DialogPart::Confirm);
-        if let Some(dialog) = &mut self.overlays.form_dialog {
-            dialog.base = Some(remote);
-            dialog.copy = false;
+        if dialog.focus != DialogPart::RebaseList {
+            return false;
         }
-    }
-
-    /// 打开表单对话框；不在 Git 仓库里时说明。
-    ///
-    /// 先关闭其他浮层：对话框是模态窗口，盖在最上面。
-    fn open_form_dialog(&mut self, kind: FormKind, base: Option<String>) {
-        if self.git.status.is_none() {
-            self.flash(t!("git-not-a-repository"));
-            return;
+        let selected = form.selected;
+        let alt = self.pointer.modifiers.alt_key();
+        match key {
+            Key::Named(NamedKey::ArrowUp) if alt => self.move_rebase_row(true),
+            Key::Named(NamedKey::ArrowDown) if alt => self.move_rebase_row(false),
+            Key::Named(NamedKey::ArrowUp) => self.select_rebase_row(selected.saturating_sub(1)),
+            Key::Named(NamedKey::ArrowDown) => self.select_rebase_row(selected + 1),
+            Key::Named(NamedKey::Enter) => self.submit_form_dialog(),
+            _ => match action_of_key(base) {
+                Some(action) => self.set_rebase_action(selected, action),
+                None => return false,
+            },
         }
-        if self.overlays.form_dialog.is_some() {
-            return;
-        }
-        self.show_form_dialog(kind, ref_name_field(), DialogPart::Branch);
-        if let Some(dialog) = &mut self.overlays.form_dialog {
-            dialog.base = base;
-        }
-    }
-
-    /// 关闭其他浮层，显示表单对话框：`name` 是它的输入框，`focus` 是一开始的键盘焦点。
-    pub(in crate::app) fn show_form_dialog(
-        &mut self,
-        kind: FormKind,
-        name: TextField,
-        focus: DialogPart,
-    ) {
-        if self.overlays.picker.open {
-            self.close_picker();
-        }
-        if self.bars.goto_input.is_some() {
-            self.close_prompt();
-        }
-        self.finish_name_input();
-        self.close_settings();
-
-        let back = match self.focus {
-            focus @ (Focus::Editor | Focus::Tree | Focus::CommitList | Focus::Terminal) => focus,
-            _ => Focus::Editor,
-        };
-        self.overlays.form_dialog = Some(FormDialog {
-            kind,
-            name,
-            second: TextField::masked(),
-            third: TextField::default(),
-            base: None,
-            folder: None,
-            copy: true,
-            new_window: false,
-            checkout: true,
-            hover: None,
-            focus,
-            running: None,
-            error: None,
-            back,
-        });
-        self.focus = Focus::Dialog;
-        self.set_hover(Hover::None);
-        self.request_redraw();
-    }
-
-    /// 关闭表单对话框，焦点还给打开之前的地方。
-    pub(in crate::app) fn close_form_dialog(&mut self) {
-        let Some(dialog) = self.overlays.form_dialog.take() else {
-            return;
-        };
-        if matches!(dialog.kind, FormKind::Question(..)) {
-            self.decline_git_question();
-        }
-        if matches!(dialog.kind, FormKind::Connect) {
-            self.connect_dialog_closed();
-        }
-        self.ime.field_preedit.clear();
-        if self.focus == Focus::Dialog {
-            self.focus = dialog.back;
-        }
-        self.update_cursor_icon();
-        self.request_redraw();
-    }
-
-    /// 对话框的几何；窗口太小时卡片缩到窗口以内。
-    pub(crate) fn dialog_layout(&self) -> DialogLayout {
-        let window = self.layout.window;
-        match self.overlays.form_dialog.as_ref().map(|d| &d.kind) {
-            Some(FormKind::Clone) => DialogLayout::clone_form(window),
-            Some(FormKind::Connect) => DialogLayout::connect_form(window),
-            Some(FormKind::Rebase(form)) => {
-                DialogLayout::rebase(window, form.rows.len(), form.pushed > 0)
-            }
-            Some(kind) if let Some(view) = kind.view() => DialogLayout::question(
-                window,
-                view.message_lines,
-                view.values.len(),
-                view.inputs.len(),
-                self.question_remembers(),
-            ),
-            Some(FormKind::Branch { .. }) => {
-                DialogLayout::compute(window, false, &[DialogPart::Checkout])
-            }
-            // 两个勾选项借用已有的部件：`Copy` 是「推送标签」，`NewWindow` 是「不再询问」。
-            Some(FormKind::Push(form)) => DialogLayout::push(
-                window,
-                form.rows,
-                &[DialogPart::Copy, DialogPart::NewWindow],
-            ),
-            _ if self.config.git_worktree_copy.is_empty() => {
-                DialogLayout::compute(window, true, &[DialogPart::NewWindow])
-            }
-            _ => DialogLayout::compute(window, true, &[DialogPart::Copy, DialogPart::NewWindow]),
-        }
+        true
     }
 
     /// 返回「基于」一行要显示的文字：选了起点时是它的名字，否则是当前分支或当前提交。
@@ -624,31 +355,6 @@ impl App {
         self.request_redraw();
     }
 
-    /// 处理后台完成的编号为 `id` 的 git 操作；操作由对话框发起时返回 `true`。
-    ///
-    /// 由对话框发起的操作成功时关闭对话框，失败时保留对话框并在按钮左侧显示原因，
-    /// 不再另行通知。
-    pub(in crate::app) fn form_operation_done(&mut self, id: u64, error: Option<&str>) -> bool {
-        let Some(dialog) = self
-            .overlays
-            .form_dialog
-            .as_mut()
-            .filter(|d| d.running == Some(id))
-        else {
-            return false;
-        };
-        dialog.running = None;
-        match error {
-            Some(e) => {
-                dialog.error = Some(e.to_owned());
-                dialog.focus = DialogPart::Branch;
-                self.request_redraw();
-            }
-            None => self.close_form_dialog(),
-        }
-        true
-    }
-
     /// 返回键盘焦点可停留的部件，按 `Tab` 的顺序排列。
     ///
     /// 跳过不可用的部件：不可选的起点、不可按的主按钮。
@@ -715,7 +421,7 @@ impl App {
         };
         dialog.focus = order[next];
         self.ime.field_preedit.clear();
-        self.request_redraw();
+        self.request_overlay_redraw();
     }
 
     /// 以空格、回车激活键盘焦点所在的部件（名称除外）。
@@ -879,7 +585,7 @@ impl App {
             && dialog.hover != part
         {
             dialog.hover = part;
-            self.request_redraw();
+            self.request_overlay_redraw();
         }
         self.update_cursor_icon();
         if self.pointer.drag == crate::app::Drag::Field
@@ -887,7 +593,7 @@ impl App {
         {
             let pos = field.view.position_at_point(x, y);
             field.set_caret(pos, true);
-            self.request_redraw();
+            self.request_overlay_redraw();
         }
     }
 
@@ -898,21 +604,6 @@ impl App {
         }
         self.refresh_push_list();
         self.request_redraw();
-    }
-
-    /// 「基于」菜单里第 `i` 项是不是现在选的起点。
-    pub(in crate::app) fn form_base_chosen(&self, i: usize) -> bool {
-        let Some(dialog) = &self.overlays.form_dialog else {
-            return false;
-        };
-        match i.checked_sub(1) {
-            None => dialog.base.is_none(),
-            Some(i) => self
-                .git
-                .branches
-                .get(i)
-                .is_some_and(|b| dialog.base.as_deref() == Some(b.name.as_str())),
-        }
     }
 
     /// 推送对话框的目标（远程、分支）改了以后，在后台重读会送出的提交，读到时由
@@ -975,19 +666,5 @@ impl App {
             form.rows = form.rows.max(form.lines());
             self.request_redraw();
         }
-    }
-
-    /// 推送对话框的远程菜单里第 `i` 个远程是不是现在选的。
-    pub(in crate::app) fn form_remote_chosen(&self, i: usize) -> bool {
-        let chosen = (self.overlays.form_dialog.as_ref()).and_then(|d| d.base.as_deref());
-        chosen.is_some() && chosen == self.git.remotes.get(i).map(String::as_str)
-    }
-
-    /// 目录按钮选好了目录：工作树建在它下面。
-    pub(in crate::app) fn worktree_folder_picked(&mut self, folder: PathBuf) {
-        if let Some(dialog) = &mut self.overlays.form_dialog {
-            dialog.folder = Some(folder);
-        }
-        self.request_redraw();
     }
 }

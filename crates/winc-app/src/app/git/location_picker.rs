@@ -14,8 +14,9 @@ use winc_i18n::t;
 
 use crate::app::input::context_menu::{MenuCommand, MenuEntry, MenuLabel, MenuTarget};
 use crate::app::input::palette::{needle, rate};
-use crate::app::{App, Focus, GitAnchor, UserEvent};
+use crate::app::{App, Focus, UserEvent};
 
+use super::operate::GitAnchor;
 use super::worktree::worktree_name;
 use super::{Cancel, SUMMARY_REPOSITORIES};
 
@@ -82,32 +83,6 @@ pub(super) struct KeptRefs {
 }
 
 impl App {
-    /// 切换到一个仓库后恢复离开时记下的分支、储藏、工作树和上一次提交；
-    /// 未记录过的仓库使用后台读到的工作树。
-    pub(super) fn restore_kept_refs(&mut self) {
-        let Some(root) = self.git.root.clone() else {
-            return;
-        };
-        // 恢复的内容影响排好的位置（`cached_places`）。
-        self.git.generation += 1;
-        if let Some(kept) = self.git.kept.remove(&root) {
-            self.git.branches = kept.branches;
-            self.git.stashes = kept.stashes;
-            self.git.worktrees = kept.worktrees;
-            self.git.commit.last = kept.last;
-            return;
-        }
-        if self.git.worktrees.is_empty() {
-            let known = self.git.summary_worktrees.lock();
-            let known = known.unwrap_or_else(PoisonError::into_inner);
-            // 仓库是附属工作树时，其工作树列表记在主工作树名下。
-            let trees = known
-                .values()
-                .find(|trees| trees.iter().any(|w| w.path == root));
-            self.git.worktrees = trees.cloned().unwrap_or_default();
-        }
-    }
-
     /// 面板是否正在列出位置。
     pub(crate) fn picker_lists_locations(&self) -> bool {
         self.overlays.picker.location_rows.is_some()
@@ -159,22 +134,6 @@ impl App {
         self.relayout();
         self.reset_blink();
         self.request_redraw();
-    }
-
-    /// 打开提交视图并展开选择器：`all` 为真时列出各仓库，否则列出当前仓库的工作树。
-    pub(in crate::app) fn switch_location(&mut self, all: bool) {
-        let any = if all {
-            self.git.repositories.len() >= 2
-        } else {
-            self.git_has_worktrees()
-        };
-        if !any {
-            self.flash(t!("git-location-only-one"));
-            return;
-        }
-        self.show_commit();
-        self.paint_now();
-        self.open_places(all);
     }
 
     /// 按查询重新排列各行，选中当前位置（它不在结果里时是第一个位置）。
@@ -545,45 +504,6 @@ impl App {
         MenuLabel {
             subtitle,
             ..MenuLabel::plain(&place.label)
-        }
-    }
-
-    /// 确认选中的行：切换到这个位置。
-    pub(in crate::app) fn location_picker_accept(&mut self) {
-        let rows = self.overlays.picker.location_rows.as_ref();
-        let place = rows
-            .and_then(|rows| rows.get(self.overlays.picker.selected))
-            .cloned();
-        if let Some(place) = place {
-            self.go_to_place(&place);
-        }
-        self.request_redraw();
-    }
-
-    /// 切换到位置 `place`：打开的目录里的仓库只换当前仓库，其余的（别处的工作树）在当前窗口打开
-    /// 那个目录，文件树和编辑区跟着换。
-    pub(in crate::app) fn go_to_place(&mut self, place: &Place) {
-        // 和失效的分支一样：点了弹出它能做的事。
-        if place.missing {
-            if place.worktree.is_some() {
-                self.open_location_row_menu(self.overlays.picker.selected, place);
-            } else {
-                self.flash(t!("git-worktree-missing"));
-            }
-            return;
-        }
-        self.close_picker();
-        if place.current {
-            return;
-        }
-        if let Some(i) = self.git.repositories.iter().position(|r| *r == place.path) {
-            let scroll = self.git.commit.scroll;
-            self.git_switch_repository(i);
-            self.keep_commit_scroll(scroll);
-        } else if let Some(i) = place.worktree {
-            self.open_worktree_asking(i);
-        } else {
-            self.switch_folder(&place.path);
         }
     }
 

@@ -259,7 +259,7 @@ impl App {
     }
 
     /// 仓库标题行 `header` 在列表内容中的上沿（逻辑像素，未减去滚动量）；不在列表中时为 `None`。
-    fn other_row_offset(&self, header: OtherRow) -> Option<f32> {
+    pub(super) fn other_row_offset(&self, header: OtherRow) -> Option<f32> {
         let rows = self.commit_other_rows();
         let at = rows.iter().position(|r| *r == header)?;
         let current = rows.iter().position(|r| *r == OtherRow::Current);
@@ -275,7 +275,7 @@ impl App {
         if !self.commit_shows_others() {
             return;
         }
-        let list = self.commit_parts().list.h;
+        let list = self.commit_parts_for(self.git.commit.browse).list.h;
         let scroll = match self.other_row_offset(OtherRow::Current) {
             Some(at) if at < scroll || at + COMMIT_ROW > scroll + list => at,
             _ => scroll,
@@ -436,36 +436,6 @@ impl App {
             self.git_read_summaries();
         }
         self.git.commit.scroll = self.git.commit.scroll.min(self.commit_max_scroll());
-        self.request_redraw();
-    }
-
-    /// 点了其他仓库的标题行或文件：切换到该仓库，点的是文件时选中它并预览差异。
-    pub(super) fn press_other(&mut self, target: CommitTarget) {
-        let (repo, entry) = match target {
-            CommitTarget::OtherRepository(repo) => (repo, None),
-            CommitTarget::OtherFile(repo, entry) | CommitTarget::OtherStagedFile(repo, entry) => {
-                (repo, Some(entry))
-            }
-            _ => return,
-        };
-        let path = entry.and_then(|entry| {
-            let path = |status: &Status| status.entries.get(entry).map(|e| e.path.clone());
-            self.other_status(repo, |_, status| path(status)).flatten()
-        });
-        // 切换仓库会重置滚动位置：按原位置和标题行移动的距离恢复，点击的标题行位置不变。
-        let header = [OtherRow::Repository(repo), OtherRow::Quiet(repo)];
-        let before = header.into_iter().find_map(|h| self.other_row_offset(h));
-        let scroll = self.git.commit.scroll;
-        self.git_switch_repository(repo);
-        let moved = match (before, self.other_row_offset(OtherRow::Current)) {
-            (Some(before), Some(after)) => after - before,
-            _ => 0.0,
-        };
-        self.git.commit.scroll = (scroll + moved).max(0.0);
-        self.focus = Focus::CommitList;
-        if let Some(path) = path {
-            self.select_commit_file(path);
-        }
         self.request_redraw();
     }
 
@@ -823,7 +793,7 @@ impl App {
             let entries = status.entries.iter_mut().enumerate();
             let wanted = entries.filter(|(i, e)| entry.is_none_or(|n| n == *i) && !e.conflicted());
             for (_, e) in wanted {
-                staging::flip_staged(e, on, &mut touched);
+                flip_staged(e, on, &mut touched);
             }
         }
         self.git.summaries_changed();
@@ -854,9 +824,9 @@ impl App {
         });
     }
 
-    /// 写入其他仓库暂存区的一步操作结束：继续下一步；全部完成后重读各仓库的状态，并执行
-    /// 等待中的提交。
-    pub(super) fn other_staging_finished(&mut self, result: Result<(), String>) {
+    /// 写入其他仓库暂存区的一步操作结束：继续下一步；全部完成后重读各仓库的状态，返回是否有
+    /// 等待中的提交需要立即执行。
+    pub(super) fn other_staging_finished(&mut self, result: Result<(), String>) -> bool {
         self.git.commit.other_stage_running = false;
         if let Err(e) = result {
             // 界面已按成功的结果显示：放弃其余的操作，按各仓库的实际状态重新显示。
@@ -866,13 +836,11 @@ impl App {
         }
         if !self.git.commit.other_stage_queue.is_empty() {
             self.pump_other_staging();
-            return;
+            return false;
         }
         // 这期间可能已经换到了其中一个仓库：当前仓库的状态和其他仓库的一起重读。
         self.git_read_summaries();
         self.git_refresh();
-        if std::mem::take(&mut self.git.commit.commit_queued) {
-            self.git_commit();
-        }
+        std::mem::take(&mut self.git.commit.commit_queued)
     }
 }

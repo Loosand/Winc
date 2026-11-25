@@ -282,12 +282,7 @@ impl App {
                     },
                 );
             }
-            LogConfirmed::DropStash(stash) => {
-                self.git_operate(
-                    t!("git-op-stash-drop", name = stash.name.as_str()),
-                    move |git, root| git.stash(root, "drop", &stash.oid),
-                );
-            }
+            LogConfirmed::DropStash(stash) => self.drop_stash(*stash),
             LogConfirmed::DeleteBranch(name, force) => self.run_delete_branch(name, force),
             LogConfirmed::DeleteTag(name, target) => self.delete_tag(name, target),
             LogConfirmed::RemoveRemote(name) => self.remove_remote(name),

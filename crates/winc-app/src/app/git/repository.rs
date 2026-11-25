@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 use winc_editor::git::{Remote, TagTarget, repository_dir_name};
 use winc_i18n::t;
 
-use super::branch::{TagOp, Then};
-use super::form::{FormKind, FormPlan};
-use super::log::LogConfirmed;
+use super::dialog::{FormKind, FormPlan};
+use super::operate::{LogConfirmed, TagOp, Then};
 use crate::app::editor::find::ref_name_field;
-use crate::app::{App, TextField};
+use crate::app::{App, TextField, UserEvent};
 use crate::layout::DialogPart;
 
 /// 返回当前用户的主目录；相应的环境变量未设置时返回 `None`。
@@ -198,9 +197,42 @@ impl App {
         }
     }
 
-    /// 确认后移除远程仓库 `name`。
+    /// 确认后移除远程仓库 `name`；没有窗口时（测试中）直接移除。
     pub(in crate::app) fn confirm_remove_remote(&mut self, name: String) {
-        self.confirm_log(LogConfirmed::RemoveRemote(name));
+        if self.window.handle.is_some() {
+            let message = t!("git-remote-remove-confirm", name = name.as_str());
+            let detail = t!("git-remote-remove-confirm-detail");
+            let action = t!("git-remote-remove-confirm-button");
+            let op = LogConfirmed::RemoveRemote(name);
+            self.show_confirm(&message, detail, action, move |ok| {
+                ok.then(|| UserEvent::GitLogConfirmed(op.clone()))
+            });
+            return;
+        }
+        self.remove_remote(name);
+    }
+
+    /// 确认后删除标签 `name`；没有窗口时（测试中）直接删除。
+    fn confirm_delete_tag(&mut self, name: String, target: TagTarget) {
+        if self.window.handle.is_some() {
+            let (message, detail) = match target {
+                TagTarget::Local => (
+                    t!("git-tag-delete-confirm", name = name.as_str()),
+                    t!("git-tag-delete-confirm-detail"),
+                ),
+                TagTarget::Remote => (
+                    t!("git-tag-delete-remote-confirm", name = name.as_str()),
+                    t!("git-tag-delete-remote-confirm-detail"),
+                ),
+            };
+            let action = t!("git-tag-delete-confirm-button");
+            let op = LogConfirmed::DeleteTag(name, target);
+            self.show_confirm(&message, detail, action, move |ok| {
+                ok.then(|| UserEvent::GitLogConfirmed(op.clone()))
+            });
+            return;
+        }
+        self.delete_tag(name, target);
     }
 
     /// 执行已确认的移除远程仓库。
@@ -228,10 +260,8 @@ impl App {
                 t!("git-op-tag-push", name = name.as_str()),
                 move |git, root| git.push_tag(root, &name),
             ),
-            TagOp::Delete => self.confirm_log(LogConfirmed::DeleteTag(name, TagTarget::Local)),
-            TagOp::DeleteRemote => {
-                self.confirm_log(LogConfirmed::DeleteTag(name, TagTarget::Remote));
-            }
+            TagOp::Delete => self.confirm_delete_tag(name, TagTarget::Local),
+            TagOp::DeleteRemote => self.confirm_delete_tag(name, TagTarget::Remote),
         }
     }
 
