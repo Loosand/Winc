@@ -721,3 +721,481 @@ fn invariant_7_structural_editing_and_undo_matrix() {
         violations.join("\n")
     );
 }
+
+/// 不变量 8：跨块选区删除（含隐藏标记、空行、标题）与粘贴（纯文本、多行、富文本语法）
+/// 必须保持结构完整、光标可定位，且 Undo 逐字节无损还原。
+#[test]
+fn invariant_8_cross_block_selection_delete_and_paste() {
+    let mut violations = Vec::new();
+
+    // 8a. 跨段 + 跨加粗标记选区删除 + Undo。
+    {
+        let doc = "第一段 **加粗** 尾部\n\n## 二级标题\n\n第三段开头\n";
+        let (mut app, dir) = live_doc("inv-8-cross-del", doc);
+        let rope = app.editor.active().unwrap().text().rope().unwrap().clone();
+        let from_byte = doc.find("加粗").unwrap();
+        let to_byte = doc.find("开头").unwrap();
+        let (a, b) = (rope.byte_to_char(from_byte), rope.byte_to_char(to_byte));
+        app.editor.active_mut().unwrap().selection = winc_core::Selection::new(a, b);
+        app.start_live_editing();
+        settle(&mut app);
+
+        let bs = Key::Named(NamedKey::Backspace);
+        if !app.markdown_key(&bs, false) {
+            app.run(winc_editor::Command::Backspace { word: false });
+        }
+        settle(&mut app);
+        if caret_xyh(&app).is_none() {
+            violations.push("[跨块删除] 删除后 caret_point 为 None".into());
+        }
+        // 删除完整选中的 `加粗` 后不应残留悬空的 `**`。
+        let after_del = doc_text(&app);
+        if after_del.contains("**") {
+            violations.push(format!("[跨块删除] 残留悬空粗体标记: {after_del:?}"));
+        }
+        app.run(winc_editor::Command::Undo);
+        settle(&mut app);
+        if doc_text(&app) != doc {
+            violations.push(format!(
+                "[跨块删除撤销] Undo 未还原: got={:?}, expected={doc:?}",
+                doc_text(&app)
+            ));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    // 8b. 在段中、段尾空格后、空行上粘贴多行 Markdown 文本并 Undo。
+    {
+        let doc = "上段   \n\n\n下段\n";
+        let (mut app, dir) = live_doc("inv-8-paste", doc);
+        let payload = "粘入第一行\n\n**粘入加粗** 第二行";
+        for (name, byte) in [
+            ("段尾空格后", "上段   ".len()),
+            ("空行上", "上段   \n\n".len()),
+        ] {
+            set_caret_byte(&mut app, byte);
+            settle(&mut app);
+            app.run(winc_editor::Command::Paste(payload.into()));
+            settle(&mut app);
+            if caret_xyh(&app).is_none() {
+                violations.push(format!("[粘贴 {name}] 粘贴后 caret_point 为 None"));
+            }
+            if !doc_text(&app).contains(payload) {
+                violations.push(format!("[粘贴 {name}] 粘贴内容缺失: {:?}", doc_text(&app)));
+            }
+            app.run(winc_editor::Command::Undo);
+            settle(&mut app);
+            if doc_text(&app) != doc {
+                violations.push(format!(
+                    "[粘贴撤销 {name}] Undo 未还原: got={:?}",
+                    doc_text(&app)
+                ));
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    assert!(
+        violations.is_empty(),
+        "不变量 8（跨块删改与粘贴撤销）发现 {} 处违背:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// 不变量 9：多级嵌套列表、嵌套引用与代码块在异步节奏下的输入、Tab/Shift-Tab 缩进与上下方向键导航。
+#[test]
+fn invariant_9_nested_lists_quotes_and_code_blocks() {
+    let down = Key::Named(NamedKey::ArrowDown);
+    let up = Key::Named(NamedKey::ArrowUp);
+    let tab = Key::Named(NamedKey::Tab);
+    let mut violations = Vec::new();
+
+    let doc = concat!(
+        "- 一级甲\n",
+        "  - 二级乙\n",
+        "    - 三级丙\n",
+        "- 一级丁\n\n",
+        "> 外层引用\n",
+        "> > 内层引用\n\n",
+        "```rust\n",
+        "let a = 1;\n",
+        "let b = 2;\n",
+        "```\n\n",
+        "收尾段落\n",
+    );
+    let (mut app, dir) = live_doc("inv-9-nested", doc);
+
+    // 9a. 每一层嵌套列表和引用末尾异步输入空格与中文，即时帧与解析后一致。
+    for needle in [
+        "一级甲",
+        "二级乙",
+        "三级丙",
+        "外层引用",
+        "内层引用",
+        "let a = 1;",
+    ] {
+        put_caret(&mut app, needle, true);
+        settle(&mut app);
+        let Some(mut prev) = caret_xyh(&app) else {
+            violations.push(format!("[嵌套输入 {needle}] 初始 caret_point 为 None"));
+            continue;
+        };
+        for ch in [" ", "中"] {
+            app.preview.markdown.cost = Some(std::time::Duration::from_millis(20));
+            app.run(winc_editor::Command::Insert(ch.into()));
+            paint(&mut app);
+            let imm = caret_xyh(&app);
+            settle(&mut app);
+            let settled = caret_xyh(&app);
+            match (imm, settled) {
+                (Some((ix, iy, _)), Some((sx, sy, sh))) => {
+                    if !(ix > prev.0 + 0.5 || iy > prev.1 + 1.0) {
+                        violations.push(format!(
+                            "[嵌套输入 {needle} '{ch}'] 即时帧未推进: prev=({:.1},{:.1}) -> imm=({ix:.1},{iy:.1})",
+                            prev.0, prev.1
+                        ));
+                    }
+                    if (ix - sx).abs() > 1.5 || (iy - sy).abs() > 1.5 {
+                        violations.push(format!(
+                            "[嵌套输入 {needle} '{ch}'] 即时帧与解析后跳变: imm=({ix:.1},{iy:.1}) vs settled=({sx:.1},{sy:.1})"
+                        ));
+                    }
+                    prev = (sx, sy, sh);
+                }
+                _ => violations.push(format!(
+                    "[嵌套输入 {needle} '{ch}'] caret_point 缺失: imm={imm:?}, settled={settled:?}"
+                )),
+            }
+        }
+        // 撤销两次输入，保持后续用例文档干净。
+        app.run(winc_editor::Command::Undo);
+        app.run(winc_editor::Command::Undo);
+        settle(&mut app);
+    }
+
+    // 9b. Tab 缩进 + Shift-Tab 反缩进闭环。
+    let before_tab = doc_text(&app);
+    put_caret(&mut app, "一级丁", false);
+    settle(&mut app);
+    assert!(app.markdown_key(&tab, false));
+    settle(&mut app);
+    if !doc_text(&app).contains("  - 一级丁") {
+        violations.push(format!("[嵌套列表 Tab] 未正确缩进: {:?}", doc_text(&app)));
+    }
+    app.pointer.modifiers = winit::keyboard::ModifiersState::SHIFT;
+    assert!(app.markdown_key(&tab, false));
+    app.pointer.modifiers = winit::keyboard::ModifiersState::empty();
+    settle(&mut app);
+    if doc_text(&app) != before_tab {
+        violations.push(format!(
+            "[嵌套列表 Shift-Tab] 未还原缩进: {:?}",
+            doc_text(&app)
+        ));
+    }
+
+    // 9c. Down 从第一项一直走到文档末尾，再 Up 走回顶部，每步都不卡死。
+    put_caret(&mut app, "一级甲", false);
+    settle(&mut app);
+    let mut prev = app.live_caret_source().unwrap();
+    for step in 0..30 {
+        if prev >= doc_text(&app).len() {
+            break;
+        }
+        assert!(app.markdown_key(&down, false));
+        paint(&mut app);
+        let now = app.live_caret_source().unwrap();
+        if now <= prev {
+            violations.push(format!(
+                "[嵌套结构 Down] step {step} 停滞在偏移 {prev} -> {now}"
+            ));
+            break;
+        }
+        if caret_xyh(&app).is_none() {
+            violations.push(format!("[嵌套结构 Down] 偏移 {now} caret_point 为 None"));
+        }
+        prev = now;
+    }
+    for step in 0..30 {
+        if prev <= "- ".len() {
+            break;
+        }
+        assert!(app.markdown_key(&up, false));
+        paint(&mut app);
+        let now = app.live_caret_source().unwrap();
+        if now >= prev {
+            violations.push(format!(
+                "[嵌套结构 Up] step {step} 停滞在偏移 {prev} -> {now}"
+            ));
+            break;
+        }
+        prev = now;
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        violations.is_empty(),
+        "不变量 9（嵌套列表/引用/代码块）发现 {} 处违背:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// 不变量 10：宽表格单元格跨列导航（Tab / Shift+Tab / Enter）、单元格增删行与撤销一致性。
+#[test]
+fn invariant_10_wide_table_navigation_and_editing() {
+    let tab = Key::Named(NamedKey::Tab);
+    let enter = Key::Named(NamedKey::Enter);
+    let mut violations = Vec::new();
+
+    let doc = concat!(
+        "| 指标名称 | 2024 年基准数值 | 2025 年预测数值 | 说明与备注信息栏位 |\n",
+        "|:---|:---:|---:|:---|\n",
+        "| 基本再生数 R0 | 3.0 | 2.8 | 初始传播能力描述文本 |\n",
+        "| 群体免疫阈值 H | 67% | 64% | 需要达到的免疫比例 |\n\n",
+        "表后段落\n",
+    );
+    let (mut app, dir) = live_doc("inv-10-table", doc);
+    put_caret(&mut app, "基本再生数 R0", true);
+    settle(&mut app);
+
+    // Tab 跨列、Shift-Tab 返回、Enter 跨行。
+    for step in 0..4 {
+        assert!(app.markdown_key(&tab, false), "tab {step}");
+        paint(&mut app);
+        if caret_xyh(&app).is_none() {
+            violations.push(format!("[表格 Tab {step}] caret_point 为 None"));
+        }
+    }
+    app.pointer.modifiers = winit::keyboard::ModifiersState::SHIFT;
+    assert!(app.markdown_key(&tab, false));
+    app.pointer.modifiers = winit::keyboard::ModifiersState::empty();
+    paint(&mut app);
+    if caret_xyh(&app).is_none() {
+        violations.push("[表格 Shift-Tab] caret_point 为 None".into());
+    }
+
+    // 在第二行末单元格按 Enter 向下移动/追加行并 Undo 还原。
+    put_caret(&mut app, "群体免疫阈值 H", true);
+    settle(&mut app);
+    assert!(app.markdown_key(&enter, false));
+    settle(&mut app);
+    if caret_xyh(&app).is_none() {
+        violations.push("[表格末行 Enter] 新增行后 caret_point 为 None".into());
+    }
+    app.run(winc_editor::Command::Undo);
+    settle(&mut app);
+    if doc_text(&app) != doc {
+        violations.push(format!(
+            "[表格新增行撤销] Undo 未还原: got={:?}",
+            doc_text(&app)
+        ));
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        violations.is_empty(),
+        "不变量 10（宽表格导航与编辑）发现 {} 处违背:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// 不变量 11：确定性伪随机编辑序列（60 步混合输入、空格、中文、换行、退格、方向键、异步解析）
+/// 任何一步都不得崩溃、产生非法 UTF-8 偏移、丢失光标坐标或产出 NaN 滚动值。
+#[test]
+fn invariant_11_deterministic_random_edit_fuzz() {
+    let doc = concat!(
+        "# 标题\n\n",
+        "第一段 **加粗** 与 *斜体* 文本  \n",
+        "第二行含 $R_0$ 与 `code`\n\n",
+        "- 列表甲\n",
+        "- 列表乙\n\n",
+        "> 引用内容\n\n",
+        "末尾段落\n",
+    );
+    let (mut app, dir) = live_doc("inv-11-fuzz", doc);
+    put_caret(&mut app, "第一段", true);
+    settle(&mut app);
+
+    let enter = Key::Named(NamedKey::Enter);
+    let bs = Key::Named(NamedKey::Backspace);
+    let left = Key::Named(NamedKey::ArrowLeft);
+    let right = Key::Named(NamedKey::ArrowRight);
+    let up = Key::Named(NamedKey::ArrowUp);
+    let down = Key::Named(NamedKey::ArrowDown);
+
+    let mut state: u64 = 0x5EED_CAFE_BABE_1234;
+    let mut next = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (state >> 33) as usize
+    };
+
+    let mut violations = Vec::new();
+    for step in 0..60 {
+        // 交替模拟即时内联解析与慢速异步解析。
+        app.preview.markdown.cost = Some(std::time::Duration::from_millis(if step % 3 == 0 {
+            20
+        } else {
+            0
+        }));
+
+        match next() % 11 {
+            0 => app.run(winc_editor::Command::Insert(" ".into())),
+            1 => app.run(winc_editor::Command::Insert("a".into())),
+            2 => app.run(winc_editor::Command::Insert("中".into())),
+            3 => {
+                if !app.markdown_key(&enter, false) {
+                    app.run(winc_editor::Command::Insert("\n".into()));
+                }
+            }
+            4 => {
+                if !app.markdown_key(&bs, false) {
+                    app.run(winc_editor::Command::Backspace { word: false });
+                }
+            }
+            5 => {
+                if !app.markdown_key(&left, false) {
+                    app.run(winc_editor::Command::MoveLeft {
+                        extend: false,
+                        word: false,
+                    });
+                }
+            }
+            6 => {
+                if !app.markdown_key(&right, false) {
+                    app.run(winc_editor::Command::MoveRight {
+                        extend: false,
+                        word: false,
+                    });
+                }
+            }
+            7 => {
+                app.markdown_key(&up, false);
+            }
+            8 => {
+                app.markdown_key(&down, false);
+            }
+            9 => app.run(winc_editor::Command::Insert("**".into())),
+            _ => {
+                // 偶尔强制追平后台解析。
+                settle(&mut app);
+            }
+        }
+        paint(&mut app);
+
+        let text = doc_text(&app);
+        let Some(src) = app.live_caret_source() else {
+            violations.push(format!("step {step}: live_caret_source 为 None"));
+            break;
+        };
+        if src > text.len() || !text.is_char_boundary(src) {
+            violations.push(format!(
+                "step {step}: 非法光标字节偏移 src={src}, len={}",
+                text.len()
+            ));
+            break;
+        }
+        match caret_xyh(&app) {
+            Some((x, y, h)) => {
+                if !x.is_finite() || !y.is_finite() || !h.is_finite() || x < -1.0 || h < 10.0 {
+                    violations.push(format!(
+                        "step {step}: 异常光标几何 ({x:.1},{y:.1},{h:.1}), src={src}"
+                    ));
+                }
+            }
+            None => {
+                violations.push(format!(
+                    "step {step}: caret_point 为 None (src={src}, doc={text:?})"
+                ));
+            }
+        }
+        let scroll = app.preview.markdown.scroll();
+        if !scroll.is_finite() || scroll < 0.0 {
+            violations.push(format!("step {step}: 非法滚动值 scroll={scroll}"));
+        }
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        violations.is_empty(),
+        "不变量 11（60 步随机编辑 fuzz）发现 {} 处违背:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// 不变量 12：长文档（含 YAML、[TOC]、脚注与数百行正文）在全文解析耗时超预算的情况下，
+/// 常规正文/列表/引用/表格编辑必须通过块级增量重解析在首帧同步完成（`is_checked == true`），
+/// 无需等待后台线程，且结果与全文解析完全一致。
+#[test]
+fn invariant_12_long_doc_edits_stay_synchronous_via_incremental_reparse() {
+    let mut doc = String::from(concat!(
+        "---\n",
+        "title: 传染病动力学长文档\n",
+        "---\n\n",
+        "# 传染病动力学入门\n\n",
+        "[TOC]\n\n",
+        "第一段正文内容，包含 **加粗** 与 $R_0$。\n\n",
+        "- 列表甲\n",
+        "- 列表乙\n\n",
+        "> 引用内容\n\n",
+        "| 列一 | 列二 |\n",
+        "|---|---|\n",
+        "| 甲 | 乙 |\n\n",
+    ));
+    for i in 1..=60 {
+        doc.push_str(&format!(
+            "第 {i} 段常规正文内容，用于拉长文档规模并验证块级局部增量重解析的同步响应。\n\n"
+        ));
+    }
+    doc.push_str("带脚注[^km]的尾段。\n\n[^km]: Kermack & McKendrick (1927)。\n");
+
+    let (mut app, dir) = live_doc("inv-12-incremental-sync", &doc);
+    // 模拟长文档整篇解析耗时 25ms（远超 4ms INLINE_PARSE 预算）。
+    app.preview.markdown.cost = Some(std::time::Duration::from_millis(25));
+
+    let enter = Key::Named(NamedKey::Enter);
+    for (name, needle, insert) in [
+        ("正文输入", "第一段正文内容", " 同步增量"),
+        ("列表输入", "列表甲", " 增量"),
+        ("引用输入", "引用内容", " 续写"),
+        ("表格输入", "甲", " 数值"),
+    ] {
+        put_caret(&mut app, needle, true);
+        paint(&mut app);
+        app.preview.markdown.cost = Some(std::time::Duration::from_millis(25));
+        app.run(winc_editor::Command::Insert(insert.into()));
+        // 只绘制 1 帧，不调用 wait_for_markdown / settle！
+        paint(&mut app);
+        let rev = app.editor.active().unwrap().revision;
+        assert!(
+            app.preview.markdown.is_checked(rev),
+            "[{name}] 长文档常规输入未通过增量重解析同步完成（仍退回后台异步解析）"
+        );
+        // 验证增量解析出的 Markdown 与全文解析逐字段一致。
+        let inc = app
+            .preview
+            .markdown
+            .parsed
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .clone();
+        let full = winc_preview::markdown::parse(&doc_text(&app));
+        assert_eq!(inc, full, "[{name}] 增量解析结果与全文解析存在差异");
+    }
+
+    // 段落内回车拆段同样走增量同步完成。
+    put_caret(&mut app, "第一段正文内容", true);
+    app.preview.markdown.cost = Some(std::time::Duration::from_millis(25));
+    assert!(app.markdown_key(&enter, false));
+    paint(&mut app);
+    let rev = app.editor.active().unwrap().revision;
+    assert!(
+        app.preview.markdown.is_checked(rev),
+        "[拆段] 长文档回车拆段未通过增量重解析同步完成"
+    );
+
+    std::fs::remove_dir_all(dir).unwrap();
+}

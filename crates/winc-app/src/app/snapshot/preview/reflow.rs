@@ -46,7 +46,9 @@ fn edits_before_the_next_parse_keep_the_live_block_inside_the_text() {
 fn background_markdown_reflow_keeps_the_visible_editing_line_in_place() {
     use std::time::Duration;
     use winc_editor::Command;
-    let (mut app, dir) = live_doc("md-async-anchored-edit", &long_notes(1200));
+    // 包含链接引用定义以真实触发整篇后台异步解析回退路径（常规块级编辑现已走增量同步解析）。
+    let source = format!("{}\n[ref]: https://example.com\n", long_notes(1200));
+    let (mut app, dir) = live_doc("md-async-anchored-edit", &source);
     put_caret(&mut app, "中英文 mixed 600", true);
     let middle = app.preview.markdown.area.h / 2.0;
     let off = caret_screen_y(&app) - app.preview.markdown.area.y - middle;
@@ -101,7 +103,9 @@ fn reflow_after_ime_commit_does_not_scroll_back_to_an_offscreen_caret() {
     use winc_editor::Command;
     use winit::event::Ime;
 
-    let (mut app, dir) = live_doc("md-async-ime-scroll", &long_notes(1200));
+    // 包含链接引用定义以真实触发整篇后台异步解析回退路径（常规块级编辑现已走增量同步解析）。
+    let source = format!("{}\n[ref]: https://example.com\n", long_notes(1200));
+    let (mut app, dir) = live_doc("md-async-ime-scroll", &source);
     put_caret(&mut app, "中英文 mixed 600", true);
     app.run(Command::Insert("\n\n# 新的标题\n\n继续输入".into()));
     settle(&mut app);

@@ -496,7 +496,7 @@ impl App {
     /// 只在上一次解析不超过 [`INLINE_PARSE`] 时进行：输入、点击、移动光标之后的排版和按键
     /// 处理都依据当前文字的结构，不显示按上一版结构推算的中间帧。正在后台解析的旧版本作废。
     pub(crate) fn parse_markdown_inline(&mut self) -> bool {
-        if !self.markdown_live() || self.preview.markdown.cost.is_none_or(|c| c > INLINE_PARSE) {
+        if !self.markdown_live() {
             return false;
         }
         let Some(doc) = self.editor.active() else {
@@ -513,6 +513,26 @@ impl App {
         let Some(rope) = doc.text().rope() else {
             return false;
         };
+        // 优先尝试块级局部增量重解析：即便整篇文档很长（全文解析耗时超过 `INLINE_PARSE`），
+        // 常规输入仍可在微秒级同步完成，避免退入滞后的异步解析双态路径。
+        if let (Some(prev), Some(prev_rev)) = (md.parsed.as_deref(), md.checked)
+            && let Some((old_edit, new_edit)) = doc.byte_edit_since(prev_rev)
+            && let Some(parsed) = prev.reparse_local(
+                old_edit,
+                new_edit,
+                rope.len_bytes(),
+                |b| rope.byte_to_line(b.min(rope.len_bytes())),
+                |r| rope.byte_slice(r).to_string(),
+            )
+        {
+            md.pending = None;
+            md.checked = Some(revision);
+            md.parsed = Some(Arc::new(parsed));
+            return true;
+        }
+        if md.cost.is_none_or(|c| c > INLINE_PARSE) {
+            return false;
+        }
         let started = std::time::Instant::now();
         let parsed = markdown::parse(&rope.to_string());
         md.cost = Some(started.elapsed());

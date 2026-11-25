@@ -71,6 +71,10 @@ pub struct Markdown {
     pub leaves: Vec<LeafRange>,
     /// 原文的字节数：与当前文档的长度相比，得出解析之后又改了多少。
     pub len: usize,
+    /// 原文是否包含非脚注的链接引用定义（`[id]: url`），用于决定是否可安全局部增量重解析。
+    has_link_defs: bool,
+    /// 原文是否包含已展开的 `[TOC]` 目录块，标题变化时需整篇重解析以刷新目录。
+    has_toc: bool,
 }
 
 impl Markdown {
@@ -1347,7 +1351,7 @@ impl Builder<'_> {
                 self.ranges.push(range);
             }
         }
-        contents(&mut self.root[..main]);
+        let has_toc = contents(&mut self.root[..main]);
         for (block, range) in self.root.iter_mut().zip(&self.ranges) {
             rebase(block, range.start);
         }
@@ -1412,6 +1416,8 @@ impl Builder<'_> {
             ranges: self.ranges,
             leaves,
             len: source.len(),
+            has_link_defs: incremental::has_link_ref_defs(source),
+            has_toc,
         }
     }
 
@@ -1534,13 +1540,13 @@ pub fn slug(text: &str) -> String {
 /// 链接到对应的标题（锚点见 [`slug`]）。`blocks` 是正文的顶层块，不含脚注。
 ///
 /// 目录随标题生成，标题改变时所在块的内容随之改变；没有标题时保留原段落。
-fn contents(blocks: &mut [Block]) {
+fn contents(blocks: &mut [Block]) -> bool {
     let is_marker = |block: &Block| {
         matches!(block, Block::Paragraph(inline)
             if matches!(inline.text.trim().to_ascii_lowercase().as_str(), "[toc]" | "[[toc]]"))
     };
     if !blocks.iter().any(is_marker) {
-        return;
+        return false;
     }
     let headings: Vec<(u8, String)> = blocks
         .iter()
@@ -1552,12 +1558,13 @@ fn contents(blocks: &mut [Block]) {
         })
         .collect();
     if headings.is_empty() {
-        return;
+        return false;
     }
     let list = Block::List(None, contents_items(&headings));
     for block in blocks.iter_mut().filter(|block| is_marker(block)) {
         *block = list.clone();
     }
+    true
 }
 
 /// 把按先后排列的（级别，标题）排成嵌套的列表项：级别比前一项高的标题排在前一项下面。
@@ -1676,6 +1683,7 @@ pub mod format;
 pub mod from_html;
 mod front;
 mod html;
+mod incremental;
 mod mark;
 pub mod properties;
 mod shrink;
