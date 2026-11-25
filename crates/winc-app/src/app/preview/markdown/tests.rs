@@ -10,12 +10,7 @@ impl MarkdownPreview {
 
     /// 测试用：后台还有没做完的解析、读图或画图。
     pub fn is_busy(&self) -> bool {
-        self.pending.is_some()
-            || self.images.values().any(|slot| match slot {
-                ImageSlot::Loading => true,
-                ImageSlot::Ready { drawing, .. } => !drawing.is_empty(),
-                ImageSlot::Failed => false,
-            })
+        self.pending.is_some() || self.images.is_busy()
     }
 
     /// 测试用：等一个后台结果，最多等 10 秒。

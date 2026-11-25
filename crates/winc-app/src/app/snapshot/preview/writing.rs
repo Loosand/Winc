@@ -455,8 +455,12 @@ fn clicking_back_and_forth_does_not_drift() {
         // 每次都点那一块现在所在的位置，和来回点击时一样。
         let laid = app.preview.markdown.layout.as_ref().unwrap();
         let block = if k % 2 == 0 { 1 } else { 5 };
-        let h = laid.blocks[block].1.height;
-        let y = area.y - app.preview.markdown.scroll() + laid.pad + laid.tops[block] + h - 10.0;
+        let h = laid.block_at(block).unwrap().height;
+        let y = area.y - app.preview.markdown.scroll()
+            + (laid.body_bottom() - laid.height)
+            + laid.tops()[block]
+            + h
+            - 10.0;
         super::click(&mut app, (area.x + area.w / 2.0, y));
         settle(&mut app);
         seen.push((app.preview.markdown.scroll(), y));
@@ -475,8 +479,13 @@ fn tall_diagrams_shrink_then_fold_until_expanded() {
     let text = format!("# 流程\n\n```mermaid\nflowchart TD\n{nodes}```\n\n尾\n");
     let (mut app, dir) = live_doc("md-tall", &text);
     let height = |app: &App| {
-        app.preview.markdown.layout.as_ref().unwrap().blocks[1]
-            .1
+        app.preview
+            .markdown
+            .layout
+            .as_ref()
+            .unwrap()
+            .block_at(1)
+            .unwrap()
             .height
     };
     let cap = (app.preview.markdown.area.h * 0.66).round().max(320.0);
@@ -518,22 +527,16 @@ fn an_image_loading_above_keeps_the_view_still() {
     paint(&mut app);
     app.set_preview_mode(PreviewMode::Preview);
     settle(&mut app);
-    let image = app.preview.markdown.images.keys().next().cloned().unwrap();
+    let image = app.preview.markdown.images.first_key().unwrap();
     // 先把图片高度设为 1 像素，之后恢复实际高度。
     let set_height = |app: &mut App, h: u32| {
-        if let Some(winc_typeset::ImageSlot::Ready { height, .. }) =
-            app.preview.markdown.images.get_mut(&image)
-        {
-            *height = h;
-        }
-        app.preview.markdown.loaded.push(image.clone());
-        app.preview.markdown.images_version += 1;
+        app.preview.markdown.images.set_height_for_test(&image, h);
     };
     set_height(&mut app, 1);
     settle(&mut app);
     let top_of = |app: &App, i: usize| {
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        laid.tops[i] - app.preview.markdown.scroll()
+        laid.tops()[i] - app.preview.markdown.scroll()
     };
     app.preview
         .markdown
@@ -674,23 +677,30 @@ fn resizing_picks_the_clicked_image_when_an_earlier_one_fails() {
 
 #[test]
 fn headings_remain_visible_and_navigable() {
-    use crate::app::preview::markdown::{TocTarget, laid};
+    use crate::app::preview::markdown::TocTarget;
     let text = format!(
         "# 总\n\n见[子](#子)\n\n## 节\n\n### 子\n\n内容\n\n## 后\n\n{}",
         "尾段。\n\n".repeat(45)
     );
     let (mut app, dir) = live_doc("md-heading-navigation", &text);
-    let top = laid::anchor_top(&app, "子").unwrap();
+    let top = app.preview.markdown.anchor_top("子").unwrap();
     assert_eq!(app.check_markdown_link("#子"), None);
     assert_eq!(app.hits.markdown_toc_tops.len(), 4);
     let (_, heading_y) = point_of(&app, 0);
-    let left = app.preview.markdown.layout.as_ref().unwrap().left;
+    let left = app
+        .preview
+        .markdown
+        .layout
+        .as_ref()
+        .unwrap()
+        .column_bounds()
+        .0;
     app.on_mouse_move(left - 12.0, heading_y);
     paint(&mut app);
     assert!(app.markdown_link_at(left - 12.0, heading_y).is_none());
     super::click(&mut app, (left - 12.0, heading_y));
     settle(&mut app);
-    assert!(laid::full_text(&app).unwrap().contains("内容"));
+    assert!(app.preview.markdown.full_text().unwrap().contains("内容"));
 
     app.jump_to_anchor("子");
     app.settle_glide_of(crate::app::ScrollTarget::Markdown);
@@ -713,8 +723,13 @@ fn identical_tall_diagrams_expand_separately() {
     let text = format!("# 流程\n\n{chart}\n{chart}\n尾\n");
     let (mut app, dir) = live_doc("md-tall-twins", &text);
     let height = |app: &App, i: usize| {
-        app.preview.markdown.layout.as_ref().unwrap().blocks[i]
-            .1
+        app.preview
+            .markdown
+            .layout
+            .as_ref()
+            .unwrap()
+            .block_at(i)
+            .unwrap()
             .height
     };
     let folded = height(&app, 1);
@@ -919,11 +934,11 @@ fn focus_keeps_a_reordered_footnote_at_normal_contrast() {
         let preview = &app.preview.markdown;
         let laid = preview.layout.as_ref().unwrap();
         let (top, _, x, baseline, size, span, _, _) = laid
-            .spans(0..laid.blocks.len())
+            .spans(0..laid.block_count())
             .find(|&(.., text)| text.starts_with(needle))
             .expect("the target text has a rendered span");
-        let left = laid.left + x;
-        let baseline = preview.area.y + laid.pad - preview.scroll() + top + baseline;
+        let left = laid.column_bounds().0 + x;
+        let baseline = laid.origin_y(preview.area.y, preview.scroll()) + top + baseline;
         let to_pixel = |coord: f32| (coord * SCALE).round() as usize;
         let image = app.frame.renderer.as_ref().unwrap().image().unwrap();
         let width = image.width as usize;

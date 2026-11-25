@@ -10,9 +10,9 @@ fn clicking_table_cells_once_keeps_the_page_still() {
         &format!("{filler}| a | b |\n|---|---|\n| c |  |\n|  |  |\n\n{filler}"),
     );
     // 将表格滚动到屏幕中部。
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let a = shown.chars().position(|s| s == 'a').unwrap();
-    let top = crate::app::preview::markdown::laid::offset_top(&app, a).unwrap();
+    let top = app.preview.markdown.offset_top(a).unwrap();
     app.preview
         .markdown
         .scroll_to(top - app.preview.markdown.area.h / 2.0);

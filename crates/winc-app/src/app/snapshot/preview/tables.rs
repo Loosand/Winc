@@ -8,7 +8,7 @@ fn clicking_an_empty_table_cell_puts_the_caret_in_it() {
         "md-table-empty",
         "前文\n\n| a | b |\n|---|---|\n| c |  |\n|  |  |\n\n后文\n",
     );
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let at = |c: char| shown.chars().position(|s| s == c).unwrap();
     let (a, b, c) = (
         point_of(&app, at('a')),
@@ -58,12 +58,12 @@ fn every_table_cell_takes_one_click_from_anywhere() {
         &format!("{filler}上面 **粗** 段\n\n{table}\n下面 `码` 段\n\n{filler}"),
     );
     app.preview.markdown.frozen = Some(crate::app::animation::MARKDOWN_MOTION / 2);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let a = shown
         .find("名称")
         .map(|b| shown[..b].chars().count())
         .unwrap();
-    let top = crate::app::preview::markdown::laid::offset_top(&app, a).unwrap();
+    let top = app.preview.markdown.offset_top(a).unwrap();
     app.preview
         .markdown
         .scroll_to(top - app.preview.markdown.area.h / 2.0);
@@ -147,7 +147,7 @@ fn tables_are_edited_cell_by_cell() {
     app.run(winc_editor::Command::Insert("很".into()));
     paint(&mut app);
     // 只有光标所在的那一格显示原文，表格仍按排版显示。
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(shown.contains("**很粗**"), "{shown}");
     assert!(
         !shown.contains("|---|") && !shown.contains("| a |"),
@@ -182,11 +182,7 @@ fn tables_are_edited_cell_by_cell() {
     );
     // 位于表头下方的分隔行上：整张表显示原文，Tab 交给编辑区。
     put_caret(&mut app, "|---", true);
-    assert!(
-        crate::app::preview::markdown::laid::full_text(&app)
-            .unwrap()
-            .contains("|---|")
-    );
+    assert!(app.preview.markdown.full_text().unwrap().contains("|---|"));
     assert!(!app.markdown_key(&tab, false));
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -268,7 +264,7 @@ fn the_heading_list_stays_open_over_a_table_scrollbar() {
         &format!("# 标题\n\n{head}\n{rule}\n{row}\n\n{headings}"),
     );
     // 表格的滚动条在鼠标经过该表格后开始响应点击，鼠标经过另一个表格后不再响应。
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let cell = point_of(&app, shown[..shown.find("单元格").unwrap()].chars().count());
     app.on_mouse_move(cell.0, cell.1);
     paint(&mut app);
@@ -322,9 +318,9 @@ fn wide_tables_keep_their_columns_and_scroll_sideways() {
         "md-wide-table",
         &format!("前文\n\n{head}\n{rule}\n{row}\n\n后文\n"),
     );
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let at = |c: &str| shown[..shown.find(c).unwrap()].chars().count();
-    let offset_at = crate::app::preview::markdown::laid::offset_at;
+    let offset_at = |app: &App, x, y| app.preview.markdown.offset_at(x, y);
 
     // 表头「编号」排在同一行，没有被压成逐字换行。
     let (first, second) = (point_of(&app, at("编")), point_of(&app, at("号")));
@@ -395,7 +391,6 @@ fn wide_tables_keep_their_columns_and_scroll_sideways() {
 
 #[test]
 fn a_table_cell_in_verbatim_layout_displays_ime_preedit() {
-    use crate::app::preview::markdown::laid::full_text;
     use winit::event::Ime;
 
     let source = "| A | B |\n|---|---|\n| > 待补 | normal |\n";
@@ -403,7 +398,13 @@ fn a_table_cell_in_verbatim_layout_displays_ime_preedit() {
     put_caret(&mut app, "待补", true);
     app.on_ime(Ime::Preedit("nihao".into(), Some((5, 5))));
     paint(&mut app);
-    assert!(full_text(&app).unwrap().contains("> 待补nihao"));
+    assert!(
+        app.preview
+            .markdown
+            .full_text()
+            .unwrap()
+            .contains("> 待补nihao")
+    );
     assert_eq!(doc_text(&app), source);
 
     app.on_ime(Ime::Commit("你好".into()));
@@ -412,6 +413,6 @@ fn a_table_cell_in_verbatim_layout_displays_ime_preedit() {
         with_caret(&app),
         "| A | B |\n|---|---|\n| > 待补你好| | normal |\n"
     );
-    assert!(!full_text(&app).unwrap().contains("nihao"));
+    assert!(!app.preview.markdown.full_text().unwrap().contains("nihao"));
     std::fs::remove_dir_all(dir).unwrap();
 }

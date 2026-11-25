@@ -24,11 +24,15 @@ pub(super) fn draw(
     (from, to): (usize, usize),
     color: Color,
 ) {
-    let range = &laid.ranges[block];
+    let Some(range) = laid.block_range(block) else {
+        return;
+    };
     if range.end < from || range.start >= to {
         return;
     }
-    let items = &laid.blocks[block].1.items;
+    let Some(items) = laid.block_at(block).map(winc_typeset::LaidBlock::items) else {
+        return;
+    };
     let mut spans: Vec<_> = shown
         .iter()
         .filter_map(|&i| match &items[i as usize] {
@@ -88,7 +92,7 @@ pub(super) fn draw(
             .contains(&offset)
             .then(|| laid.caret_point_with_affinity(offset, true))
             .flatten()
-            .map(|(x, y, _)| (body.x + x, body.y + y - laid.pad - laid.tops[block]))
+            .map(|(x, y, _)| (body.x + x, body.y + laid.content_y(y) - laid.top(block)))
     };
     let start = point(from);
     let end_top = point(to).map(|(_, top)| top);
@@ -114,9 +118,9 @@ pub(super) fn draw(
             if let Some(next) = rows.get(i + 1).filter(|row| row.selected.is_some()) {
                 bottom = bottom.max(next.top);
             } else if to > range.end
-                && let Some(next) = laid.tops.get(block + 1)
+                && let Some(next) = laid.tops().get(block + 1)
             {
-                bottom = bottom.max(body.y + next - laid.tops[block]);
+                bottom = bottom.max(body.y + next - laid.top(block));
             }
         }
         frame.rect_clipped(

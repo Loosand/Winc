@@ -96,7 +96,10 @@ fn readme(name: &str, dark: bool, mode: PreviewMode) -> (App, PathBuf) {
 fn rest_on_toc(app: &mut App, x: f32, y: f32) {
     app.on_mouse_move(x, y);
     let delay = crate::theme::TOC_HOVER_DELAY;
-    app.preview.markdown.toc_rest = Some(std::time::Instant::now() - delay);
+    app.preview
+        .markdown
+        .toc
+        .set_rest_for_test(std::time::Instant::now() - delay);
 }
 
 fn settle(app: &mut App) {
@@ -146,7 +149,7 @@ fn clicking_where_markers_appear_does_not_select() {
         ("甲", "**甲**"),
         ("main", "fn main() {}"),
     ] {
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         let at = shown[..shown.find(needle).unwrap()].chars().count();
         let (x, y) = point_of(&app, at);
         app.on_mouse_move(x - 1.0, y);
@@ -157,7 +160,7 @@ fn clicking_where_markers_appear_does_not_select() {
         settle(&mut app);
         assert!(app.editor.active().unwrap().selection.is_empty());
         assert!(after_caret(&app, 1) == needle[..needle.chars().next().unwrap().len_utf8()]);
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         assert!(shown.contains(marker), "{shown}");
     }
 
@@ -239,7 +242,9 @@ fn details_open_and_close_on_click() {
     app.set_preview_mode(PreviewMode::Preview);
     settle(&mut app);
     let shown = |app: &App| {
-        crate::app::preview::markdown::laid::full_text(app)
+        app.preview
+            .markdown
+            .full_text()
             .unwrap()
             .contains("藏起来的话")
     };
@@ -278,9 +283,8 @@ fn point_of(app: &App, offset: usize) -> (f32, f32) {
     while y < area.bottom() {
         let mut x = area.x;
         while x < area.right() {
-            if crate::app::preview::markdown::laid::offset_at(app, x, y) == Some(offset)
-                && crate::app::preview::markdown::laid::offset_at(app, x + 4.0, y)
-                    == Some(offset + 1)
+            if app.preview.markdown.offset_at(x, y) == Some(offset)
+                && app.preview.markdown.offset_at(x + 4.0, y) == Some(offset + 1)
             {
                 return (x, y);
             }
@@ -958,7 +962,7 @@ fn a_new_note_can_be_written_saved_and_reopened_in_the_single_view() {
     app.open_path(&path);
     settle(&mut app);
     assert!(app.markdown_live());
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(
         shown.contains("你好") && shown.contains("第一条"),
         "{shown}"
@@ -1273,14 +1277,14 @@ fn footnote_jumps_keep_context_above_and_mark_the_target() {
     let third = app.preview.markdown.area.h / 3.0;
 
     app.jump_to_anchor("fn-1");
-    let note = crate::app::preview::markdown::laid::anchor_top(&app, "fn-1").unwrap();
+    let note = app.preview.markdown.anchor_top("fn-1").unwrap();
     assert_eq!(
         app.preview.markdown.scroll(),
         (note - third).clamp(0.0, max)
     );
 
     app.jump_to_anchor("fnref-1");
-    let back = crate::app::preview::markdown::laid::anchor_top(&app, "fnref-1").unwrap();
+    let back = app.preview.markdown.anchor_top("fnref-1").unwrap();
     assert_eq!(
         app.preview.markdown.scroll(),
         (back - third).clamp(0.0, max)
@@ -1305,11 +1309,11 @@ fn rules_show_their_source_in_place() {
     doc.selection = winc_core::Selection::point(doc.selection.head + 1);
     settle(&mut app);
     assert!((app.preview.markdown.height - height).abs() < 0.5);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(shown.contains("---") && shown.contains("一"), "{shown}");
     put_caret(&mut app, "2. ---", true);
     assert!((app.preview.markdown.height - height).abs() < 0.5);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(shown.contains("一") && !shown.contains("1."), "{shown}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1317,7 +1321,6 @@ fn rules_show_their_source_in_place() {
 /// 段落之后的空行上组字时，组字文字画在光标处；尚未点击预览就开始组字时同样显示。
 #[test]
 fn composing_on_a_blank_line_shows_the_text() {
-    use crate::app::preview::markdown::laid::full_text;
     use winit::event::Ime;
 
     let (mut app, dir) = live_doc("md-preedit-blank", "# 标题\n\n是的\n\n\n");
@@ -1337,7 +1340,7 @@ fn composing_on_a_blank_line_shows_the_text() {
     app.on_ime(Ime::Preedit("ni".into(), None));
     paint(&mut app);
     assert!(app.ime.cursor.is_some());
-    assert!(full_text(&app).unwrap().contains("ni"));
+    assert!(app.preview.markdown.full_text().unwrap().contains("ni"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

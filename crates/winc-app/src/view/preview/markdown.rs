@@ -11,9 +11,9 @@ use winc_i18n::t;
 use winc_preview::markdown::properties::{PROPERTY, RAW};
 use winc_render::{Color, FontKind, Frame, Rect, Stroke};
 
+use crate::app::preview::markdown::TableBar;
 use crate::app::preview::markdown::properties::popup::PropertyInput;
 use crate::app::preview::markdown::resize::ImageAt;
-use crate::app::preview::markdown::{ImageSlot, TableBar};
 use crate::app::{App, Focus, ScrollArea};
 use crate::icons;
 use crate::theme::Palette;
@@ -146,30 +146,23 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         _ => (left, width),
     };
     // 钉住状态变化时正文按新宽度排版，左边缘从原位置过渡到新位置，与标题列表的过渡同步。
-    app.preview.markdown.toc_left = left;
-    let left = match (app.preview.markdown.toc_pin, app.preview.markdown.toc_slide) {
-        (Some((_, clock)), Some(from)) => clock.between(from, left),
-        _ => {
-            app.preview.markdown.toc_slide = None;
-            left
-        }
-    };
+    let left = app.preview.markdown.toc.body_left(left);
     let base = (app.fonts.code * BASE_RATIO).round();
+    let (images_version, loaded) = app.preview.markdown.images.begin_layout();
     let key = Key {
         width,
         base,
         text: p.text,
         background: p.editor_bg,
-        images: app.preview.markdown.images_version,
+        images: images_version,
         // 可编辑的预览在左侧按原文编行号，代码块里不再另编。
         numbers: app.markdown_line_numbers_on() && !app.markdown_live(),
         tall: (area.h * TALL_SHARE).round().max(TALL_MIN),
     };
     let source = Arc::as_ptr(&parsed) as usize;
     let live = app.live_layout_leaf();
-    let live_key = (live.as_ref()).map(|l| live_key(l, app.preedit_at(Focus::Editor)));
+    let live_key = (live.as_ref()).map(|l| l.key(app.preedit_at(Focus::Editor)));
     let blank = live.as_ref().is_some_and(|l| l.blank);
-    let loaded = std::mem::take(&mut app.preview.markdown.loaded);
     let toggled = app.preview.markdown.toggled_now.take();
     let property_changed = std::mem::take(&mut app.preview.markdown.property_layout_dirty);
     // 重排之前光标在旧排版里的高度：重排后据此保持光标在屏幕上不动（见 [`keep_caret_still`]）。
@@ -186,10 +179,8 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         ) - pad;
         let around = |block: usize| block.saturating_sub(NEAR_BLOCKS)..block + NEAR_BLOCKS + 1;
         let chosen = app.preview.markdown.selection;
-        let picked = (app.preview.markdown.layout.as_ref().zip(chosen)).map(|(laid, (a, b))| {
-            let block = |at: usize| laid.starts.partition_point(|&s| s <= at).saturating_sub(1);
-            block(a.min(b)).saturating_sub(1)..block(a.max(b)) + 2
-        });
+        let picked = (app.preview.markdown.layout.as_ref().zip(chosen))
+            .map(|(laid, (a, b))| laid.block_range_for_selection(a, b));
         let caret = live.as_ref().map(|live| around(live.block));
         let head = (app.markdown_live() && app.live_caret_shown())
             .then(|| app.live_caret_source())
@@ -204,25 +195,18 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     };
     let mut laid = match app.preview.markdown.layout.take() {
         Some(laid)
-            if laid.key == key
-                && laid.source == source
-                && laid.live == live_key
+            if laid.matches_frame(key, source, live_key.as_ref(), &near, area.h)
                 && loaded.is_empty()
                 && toggled.is_none()
-                && !property_changed
-                && !laid.pending()
-                && (laid.near.as_ref()).is_none_or(|kept| kept.covers(&near, area.h)) =>
+                && !property_changed =>
         {
             laid
         }
         old => {
-            let hscroll = old.as_ref().map(|l| l.hscroll.clone()).unwrap_or_default();
             // 继续上一帧未完成的排版，或视口移到了保留的范围之外：排版条件和文字都未变，选区、
             // 查找结果和光标位置保留。
             let resumed = old.as_ref().is_some_and(|l| {
-                l.key == key
-                    && l.source == source
-                    && l.live == live_key
+                l.can_resume(key, source, live_key.as_ref())
                     && loaded.is_empty()
                     && toggled.is_none()
             });
@@ -232,23 +216,34 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             }
             if !resumed {
                 app.preview.markdown.find_doc = None;
-                let clicked = app.preview.markdown.clicked.take();
                 still = app
                     .markdown_live()
                     .then(|| app.live_caret_source())
                     .flatten()
                     .and_then(|caret| {
-                        old_caret(app, old.as_ref(), source, live_key.as_ref(), clicked, caret)
+                        app.old_markdown_caret(old.as_ref(), source, live_key.as_ref(), caret)
                     });
                 let slide = std::mem::take(&mut app.preview.markdown.slide);
+                let scroll = app.preview.markdown.scroll();
+                let motion = app.preview.markdown.motion.as_ref();
+                let current_rev = app.editor.active().map(|d| d.revision);
                 before = old
                     .as_ref()
                     .filter(|l| l.key == key && app.markdown_live())
-                    .map(|l| (Before::of(app, l), slide));
+                    .map(|l| {
+                        (
+                            l.snapshot_before(
+                                scroll,
+                                |i| motion.map_or(0.0, |m| m.offset(i)),
+                                current_rev,
+                            ),
+                            slide,
+                        )
+                    });
             }
             // 文字未变时保留旧的各块供沿用，并记录视口顶边所在的块，排版期间保持其屏幕位置。
             let same = (old.as_ref())
-                .filter(|l| l.source == source && l.blocks.len() == parsed.blocks.len());
+                .filter(|l| l.source == source && l.block_count() == parsed.blocks.len());
             let width_changed = same.is_some_and(|l| l.key.width != key.width);
             let top = drawn_scroll(
                 app.preview
@@ -256,13 +251,14 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                     .scroll()
                     .min(app.preview.markdown.max_scroll()),
             );
-            let held = same.and_then(|l| l.place_at(top - l.pad));
-            let mut window = same.map(|l| l.blocks_in(top - l.pad - area.h, top + area.h * 2.0));
-            let mut kept = same.map(|l| l.blocks.clone());
+            let held = same.and_then(|l| l.place_at(l.content_y(top)));
+            let mut window =
+                same.map(|l| l.blocks_in(l.content_y(top) - area.h, top + area.h * 2.0));
+            let mut kept = same.map(Laid::clone_blocks);
             let was_pending = same.is_some_and(Laid::pending);
             // 有图片刚读好时，用到它的块大小变了，需要重排；折叠块开合时，它所在的块需要
             // 重排；其余块沿用上次的结果。
-            let mut reuse = old.filter(|l| l.key == key).map(|l| {
+            let mut reuse = old.as_ref().filter(|l| l.key == key).map(|l| {
                 l.fresh()
                     .into_iter()
                     .filter(|(_, block)| {
@@ -271,8 +267,21 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                     })
                     .collect()
             });
-            let deadline = app.preview.markdown.catch_up.deadline();
+            let deadline = app.preview.markdown.catch_up_deadline();
             // 视口上方的块高度变化后，视口内的块可能与排版前估计的不同：仍有未排的块时再排一轮。
+            let doc_path = app.editor.active().and_then(|d| d.path.clone());
+            let remote_images = app.config.markdown_remote_images != Some(false);
+            let editable = app.markdown_live();
+            let checked = app
+                .editor
+                .active()
+                .is_some_and(|d| app.preview.markdown.is_checked(d.revision));
+            let properties = parsed
+                .properties
+                .as_ref()
+                .filter(|_| app.note_properties_available())
+                .map(|(_, fields)| app.property_panel(fields));
+            let preedit = app.preedit_at(Focus::Editor).to_owned();
             let mut laid = loop {
                 let later = (kept.as_deref().zip(window.clone())).map(|(old, window)| Later {
                     old,
@@ -280,8 +289,32 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                     deadline,
                 });
                 let fresh = reuse.take().unwrap_or_default();
-                let laid = lay_out(
-                    app,
+                let image_path = |url: &str| {
+                    crate::app::preview::markdown::image_path(
+                        doc_path.as_deref(),
+                        url,
+                        remote_images,
+                    )
+                };
+                let token = |kind| p.token(kind);
+                let input = LayoutInput {
+                    rope: app.editor.active().and_then(|d| d.text().rope()),
+                    preedit: &preedit,
+                    surface: p.editor_bg,
+                    accent: p.accent,
+                    colors: winc_typeset::Colors::new(p.text, p.text_muted, p.accent, p.dark),
+                    dark: p.dark,
+                    token: &token,
+                    images: app.preview.markdown.images.as_typeset_map(),
+                    image_path: &image_path,
+                    memo: &mut app.preview.markdown.memo,
+                    toggled: &app.preview.markdown.toggled,
+                    editable,
+                    checked,
+                    properties: properties.clone(),
+                };
+                let (laid, wanted_images) = Laid::build(
+                    input,
                     frame,
                     &parsed,
                     key,
@@ -291,37 +324,34 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                     later,
                     Some(near.clone()),
                 );
+                for (path, url) in wanted_images {
+                    app.request_markdown_image(&path, &url);
+                }
                 let y = held.map_or(top - pad, |(i, off)| {
-                    laid.tops[i] + off.min(room_below(&laid, i))
+                    laid.top(i) + off.min(laid.room_below(i))
                 });
                 let seen = laid.blocks_in(y, y + area.h);
-                let waits = |i: usize| laid.stale.get(i).copied().unwrap_or(false);
-                if window.as_ref() == Some(&seen) || !seen.clone().any(waits) {
+                if window.as_ref() == Some(&seen) || !laid.has_stale_in(seen.clone()) {
                     break laid;
                 }
                 (reuse, window) = (Some(laid.fresh()), Some(seen));
-                kept = Some(laid.blocks);
+                kept = Some(laid.into_blocks());
             };
             // 分帧排版和图片加载完成后，视口顶边所在块的屏幕位置不变。
             let anchored = width_changed || was_pending || laid.pending() || !loaded.is_empty();
             if let Some((i, off)) = held.filter(|_| anchored) {
-                let y = laid.tops[i] + off.min(room_below(&laid, i)) + pad;
+                let y = laid.top(i) + off.min(laid.room_below(i)) + pad;
                 app.preview.markdown.set_scroll(y);
                 still = None;
             }
-            app.preview.markdown.catch_up.pending = laid.pending();
+            app.preview.markdown.finish_catch_up(laid.pending());
             // 释放了要画的项的块不再使用排版缓存，缓存只保留其余的块用到的条目。
-            if laid.near.is_some() {
-                let used = laid.blocks.iter().map(|(_, block)| &*block.memo);
-                app.preview.markdown.memo.keep_only(used);
-            }
-            laid.hscroll = hscroll;
+            laid.sweep_memo(&mut app.preview.markdown.memo);
+            laid.restore_hscroll_from(old.as_ref());
             laid
         }
     };
-    laid.left = left;
-    laid.pad = pad;
-    laid.drawn_upstream = app.live_upstream();
+    laid.place(left, pad, app.live_upstream());
     app.note_links.footer_hits.clear();
     let footer = note_footer::height(app);
     app.preview.markdown.height = laid.height + pad * 2.0 + footer;
@@ -329,7 +359,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     if app.markdown_live() && app.preview.markdown.height > area.h {
         app.preview.markdown.height += area.h * crate::layout::OVERSCROLL;
     }
-    keep_caret_still(app, still, &laid);
+    app.keep_markdown_caret_still(still, &laid);
     app.preview.markdown.layout = Some(laid);
     app.follow_live_caret();
     // 分栏时右边跟着左边滚；刚换成只看预览时对齐一次。
@@ -347,10 +377,10 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
 
     let max = (app.preview.markdown.height - area.h).max(0.0);
     let scroll = app.preview.markdown.scroll().min(max);
-    let origin_y = area.y + pad - scroll;
+    let origin_y = laid.origin_y(area.y, scroll);
     if let Some((before, slide)) = before {
         let muted = p.text_muted;
-        let moves = before.motion(&laid, scroll, muted, slide);
+        let moves = laid.motion_from(&before, scroll, muted, slide);
         app.start_markdown_motion(moves);
     }
     let motion = app.preview.markdown.motion.take();
@@ -412,10 +442,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     let mut toolbar = None;
     // 可横向滚动的表格的滚动条，各块绘制完成后再绘制：（块，表格，显示区域，滚动位置）。
     let mut bars = Vec::new();
-    let first = laid
-        .tops
-        .partition_point(|&t| origin_y + t <= area.y)
-        .saturating_sub(1);
+    let first = laid.first_visible_block(origin_y, area.y);
     // 专注模式：光标所在的块以外画得淡一些。
     let focused = live_caret
         .filter(|_| focus)
@@ -427,13 +454,13 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             .property
             .as_ref()
             .is_some_and(|p| p.input == PropertyInput::Source);
-    for (i, (_, block)) in laid.blocks.iter().enumerate().skip(first) {
+    for (i, block_top, block) in laid.iter_blocks().skip(first) {
         let opacity = match focused {
             Some(b) if b != i => crate::theme::FOCUS_DIM,
             _ => 1.0,
         };
         let offset = |i: usize| motion.as_ref().map_or(0.0, |m| m.offset(i));
-        let top = origin_y + laid.tops[i] + offset(i);
+        let top = origin_y + block_top + offset(i);
         if top > area.bottom() {
             break;
         }
@@ -446,7 +473,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         let area = match &motion {
             Some(m) if m.moving() => {
                 let next = laid
-                    .tops
+                    .tops()
                     .get(i + 1)
                     .map_or(f32::INFINITY, |t| origin_y + t + offset(i + 1));
                 let (y0, y1) = (top.max(area.y), next.min(area.bottom()));
@@ -466,10 +493,10 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             &mut shown,
         );
         if let Some(leaving) = motion.as_ref().and_then(|m| m.leaving(i)) {
-            let at = origin_y + laid.tops[i] + leaving.offset * (1.0 - fade);
+            let at = origin_y + laid.top(i) + leaving.offset * (1.0 - fade);
             let clip = Rect::new(whole.x, whole.y, whole.w, (top - whole.y).max(0.0));
             let alpha = 1.0 - motion.as_ref().map_or(1.0, |m| m.clock.linear());
-            let source = &leaving.old.items[..leaving.items as usize];
+            let source = &leaving.old.items()[..leaving.items as usize];
             frame.with_opacity(alpha, |frame| draw_plain(frame, source, (left, at), clip));
         }
         // The inline YAML editor paints directly on the panel, replacing the preview text.
@@ -477,14 +504,12 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             .then(|| block.link_box(RAW))
             .flatten();
         frame.with_fade(p.editor_bg, opacity, |frame| {
+            let items = block.items();
             let row_selection = live_selection.filter(|_| {
                 inner.is_none()
                     && motion.as_ref().is_none_or(|m| !m.moving())
                     && !shown.iter().any(|&k| {
-                        matches!(
-                            block.items[k as usize],
-                            Item::Code { .. } | Item::Table { .. }
-                        )
+                        matches!(items[k as usize], Item::Code { .. } | Item::Table { .. })
                     })
             });
             if let Some(range) = row_selection {
@@ -511,7 +536,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             let hovered_property = (i == 0 && property_hover)
                 .then(|| {
                     shown.iter().find_map(|&index| {
-                        let Item::Link { rect, url } = &block.items[index as usize] else {
+                        let Item::Link { rect, url } = &items[index as usize] else {
                             return None;
                         };
                         let index = url.strip_prefix(PROPERTY)?.strip_prefix("row:")?;
@@ -523,15 +548,12 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                 })
                 .flatten();
             let active_property = app.overlays.picker.property.as_ref().and_then(|p| p.row());
-            for (k, item) in shown
-                .iter()
-                .map(|&k| (k as usize, &block.items[k as usize]))
-            {
+            for (k, item) in shown.iter().map(|&k| (k as usize, &items[k as usize])) {
                 let (top, area) = match inner {
                     Some((first, d)) if k >= first => (top + d, area),
                     Some((_, d)) => {
-                        let edge =
-                            (top + block.preview.map_or(0.0, |p| p.1) + d).min(area.bottom());
+                        let edge = (top + block.preview_split().map_or(0.0, |p| p.1) + d)
+                            .min(area.bottom());
                         (
                             top,
                             Rect::new(area.x, area.y, area.w, (edge - area.y).max(0.0)),
@@ -559,7 +581,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                             continue;
                         }
                         if let Some(span) = span {
-                            let from = laid.starts[i] + span.start;
+                            let from = laid.block_start(i) + span.start;
                             let to = from + span.advances.len();
                             let mut mark = |a: usize, b: usize, color: Color| {
                                 let (a, b) = (a.max(from), b.min(to));
@@ -586,7 +608,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                             if let Some((a, b)) = selection {
                                 mark(a, b, p.selection);
                             }
-                            let start = laid.ranges.get(i).map_or(0, |r| r.start);
+                            let start = laid.block_range(i).map_or(0, |r| r.start);
                             let local = |s: usize| span.chars_before(text, s.saturating_sub(start));
                             if let Some((rope, current)) = live_matches
                                 && let Some(first) = span.source_of(text, 0)
@@ -651,12 +673,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                         }
                         let scale = frame.scale();
                         let size = ((r.w * scale).round() as u32, (r.h * scale).round() as u32);
-                        let drawn = match md.images.get(path) {
-                            Some(ImageSlot::Ready { pixels, .. }) => {
-                                pixels.iter().find(|px| (px.width, px.height) == size)
-                            }
-                            _ => None,
-                        };
+                        let drawn = md.images.pixels_for(path, size);
                         match drawn {
                             Some(px) => {
                                 frame.pixels((r.x, r.y), px.width, px.height, &px.rgba, area)
@@ -665,7 +682,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                         }
                         images.push(path.clone());
                         // 本地图片可从右键菜单在新标签中打开。
-                        if md.urls.get(path).is_none_or(|u| !u.contains("://")) {
+                        if md.images.is_local(path) {
                             app.hits.markdown_pictures.push((r, path.clone()));
                         }
                     }
@@ -718,7 +735,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                         // 可点击范围比框向外扩展一圈，较小的框也易于点中。
                         let hit = r.inset(-3.0, -3.0).intersect(area);
                         if hit.w > 0.0 && hit.h > 0.0 {
-                            let start = laid.ranges.get(i).map_or(0, |r| r.start);
+                            let start = laid.block_range(i).map_or(0, |r| r.start);
                             let at = start.saturating_add(*source as usize);
                             app.hits.markdown_links.push((hit, format!("{TASK}{at}")));
                         }
@@ -775,14 +792,16 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                 }
             }
         });
-        for (s, scroller) in block.scrolls.iter().enumerate() {
+        for (s, scroller) in block.scrollers().iter().enumerate() {
             bars.push((i, s, fixed(&scroller.rect), laid.hscroll_of(i, s)));
         }
     }
     // 显示滚动条的表格：鼠标所在的表格，其次是最近一次横向滚动的表格。
     let mut chosen = None;
     for &(i, s, strip, off) in &bars {
-        let scroller = &laid.blocks[i].1.scrolls[s];
+        let Some(scroller) = laid.block_at(i).and_then(|b| b.scroller(s)) else {
+            continue;
+        };
         draw_table_fades(frame, p, scroller, strip, off, area);
         let bar = TableBar {
             key: (i, s),
@@ -839,10 +858,10 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         let block = laid.block_at_source(source);
         let shift = motion.as_ref().zip(block).map_or(0.0, |(m, b)| {
             // 光标位于刚显示原文的块的渲染结果中时，加上渲染结果的偏移。
-            let below = laid.blocks[b]
-                .1
-                .preview
-                .map(|(_, top)| top + laid.tops[b] + pad);
+            let below = laid
+                .block_at(b)
+                .and_then(|block| block.preview_split())
+                .map(|(_, top)| top + laid.top(b) + pad);
             let inner = m
                 .inner(b)
                 .filter(|_| below.is_some_and(|top| y + h / 2.0 >= top));
@@ -850,13 +869,13 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         });
         let point = (x, y + shift, h);
         // 正文中的组字文字已排入所在的行，不再在其上重复绘制。
-        let inline = laid.blocks.iter().any(|(_, b)| b.preedit);
+        let inline = laid.has_preedit();
         // 段落之后的空行上组字使用正文的字体，不沿用上方标题的字体。
         let body = (winc_render::FontKind::Ui, Default::default(), key.base);
         let font = if blank || gap_row {
             Some(body)
         } else {
-            font_at(&laid, source)
+            laid.font_at(source)
         };
         (point, (!inline).then_some(font))
     });
@@ -931,14 +950,6 @@ fn property_button(action: &str) -> bool {
 
 /// 表格被裁掉的一侧渐隐的宽度（逻辑像素），与标签栏两端的渐隐（`TAB_FADE`）相同。
 const TABLE_FADE: f32 = 24.0;
-
-/// 返回第 `i` 块的上沿到下一块上沿的距离（逻辑像素）。
-fn room_below(laid: &Laid, i: usize) -> f32 {
-    let top = laid.tops[i];
-    laid.tops
-        .get(i + 1)
-        .map_or(laid.blocks[i].1.height, |next| next - top)
-}
 
 /// mermaid 图的高度上限占预览区高度的比例。
 const TALL_SHARE: f32 = 0.66;

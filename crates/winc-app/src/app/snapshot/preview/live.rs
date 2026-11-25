@@ -37,7 +37,7 @@ fn split_preview_follows_edits_and_scrolls() {
 fn the_full_preview_edits_the_document() {
     let (mut app, dir) = readme("md-live", false, PreviewMode::Preview);
     // 刚打开时整篇按排版显示。
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(!shown.contains("**Rust**"));
     // 点击「启动快」：光标移到原文中对应的位置，被点击的文字位置不变。该段落仍按排版显示，
     // 只显示光标接触到的标记，即「启动快」两侧的 `*`；未接触的 `**Rust**` 不显示标记。
@@ -47,7 +47,7 @@ fn the_full_preview_edits_the_document() {
     assert_eq!(after_caret(&app, 3), "启动快");
     let before = caret_screen_y(&app);
     paint(&mut app);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(
         shown.contains("一个用 Rust 写的") && shown.contains("*启动快*"),
         "{shown}"
@@ -59,7 +59,9 @@ fn the_full_preview_edits_the_document() {
     app.run(winc_editor::Command::Insert("很".into()));
     paint(&mut app);
     assert!(
-        crate::app::preview::markdown::laid::full_text(&app)
+        app.preview
+            .markdown
+            .full_text()
             .unwrap()
             .contains("很启动快")
     );
@@ -93,7 +95,7 @@ fn enter_after_a_fence_closes_the_block() {
     settle(&mut app);
     app.run(winc_editor::Command::Insert("fn x() {}".into()));
     settle(&mut app);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(
         shown.contains("fn x() {}") && shown.contains("后文"),
         "{shown}"
@@ -318,7 +320,7 @@ fn shift_enter_keeps_a_visible_line_break_when_the_note_is_reopened() {
         paint(&mut reopened);
         reopened.set_preview_mode(PreviewMode::Preview);
         settle(&mut reopened);
-        let shown = crate::app::preview::markdown::laid::full_text(&reopened).unwrap();
+        let shown = reopened.preview.markdown.full_text().unwrap();
         assert!(shown.contains("甲\n乙"), "{name}: {shown:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -338,7 +340,7 @@ fn enter_at_an_existing_crlf_break_splits_the_paragraph_without_a_stray_lf() {
 fn code_fences_show_only_with_the_caret_on_them() {
     let (mut app, dir) = live_doc("md-fences", "前\n\n```rust\nfn x() {}\n```\n");
     put_caret(&mut app, "fn x", false);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(shown.contains("fn x") && !shown.contains("```"), "{shown}");
     // 按 ← 移到围栏行：显示围栏，可以修改语言标识。
     app.run(winc_editor::Command::MoveLeft {
@@ -346,7 +348,7 @@ fn code_fences_show_only_with_the_caret_on_them() {
         word: false,
     });
     settle(&mut app);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(shown.contains("```rust\nfn x"), "{shown}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -362,12 +364,12 @@ fn enter_in_a_list_puts_the_caret_in_the_new_empty_item() {
     settle(&mut app);
     assert_eq!(with_caret(&app), "1. 一\n2. 二\n3. |\n4. 三\n\n后文\n");
     assert!(caret_screen_y(&app) > before + 10.0);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(shown.contains("\n三\n") && !shown.contains("3."), "{shown}");
     // 在空项上输入的文字排在这一项里。
     app.run(winc_editor::Command::Insert("新".into()));
     settle(&mut app);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(shown.contains("二\n新\n三"), "{shown}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -483,7 +485,7 @@ fn task_items_can_be_typed() {
             _ => None,
         });
         assert_eq!(task, Some(false), "{typed:?}");
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         assert!(shown.contains("前文\n任务\n后文"), "{shown}");
         let _ = std::fs::remove_dir_all(&dir);
     }

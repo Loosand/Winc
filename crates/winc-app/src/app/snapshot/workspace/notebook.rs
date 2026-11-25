@@ -531,7 +531,7 @@ fn notebook_hides_the_backlinks_footer_when_the_last_reference_is_removed() {
     let no_footer = |app: &App| {
         let preview = &app.preview.markdown;
         let layout = preview.layout.as_ref().unwrap();
-        assert_eq!(preview.height, layout.height + layout.pad * 2.0);
+        assert_eq!(preview.height, layout.height());
         assert!(app.note_links.footer_hits.is_empty());
     };
     no_footer(&app);

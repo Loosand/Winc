@@ -172,11 +172,13 @@ impl App {
             let at = rope.byte_to_char((start + caret).min(rope.len_bytes()));
             doc.selection = winc_core::Selection::point(at);
             if doc.revision != previous_revision {
-                self.preview.markdown.table_edit_revision = Some((doc.id, doc.revision));
+                self.preview
+                    .markdown
+                    .live
+                    .record_table_edit(doc.id, doc.revision);
             }
         }
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         true
     }
 
@@ -256,8 +258,7 @@ impl App {
             doc.collapse_selections();
             doc.selection = winc_core::Selection::new(a, b);
         }
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         self.reset_blink();
         self.request_redraw();
         true
@@ -391,8 +392,7 @@ impl App {
         if opens_empty_paragraph {
             self.remember_empty_paragraph(previous_revision, a, trailing.len());
         }
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         true
     }
 
@@ -438,8 +438,7 @@ impl App {
         {
             doc.selection = winc_core::Selection::point(at);
         }
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         Some(true)
     }
 
@@ -533,8 +532,7 @@ impl App {
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = after;
         }
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         true
     }
 
@@ -628,8 +626,7 @@ impl App {
                     if let Some(doc) = self.editor.active_mut() {
                         doc.selection = winc_core::Selection::point(from);
                     }
-                    self.preview.markdown.goal = None;
-                    self.start_live_editing();
+                    self.finish_live_edit();
                     self.request_redraw();
                     return true;
                 }
@@ -639,8 +636,7 @@ impl App {
                 doc.selection = winc_core::Selection::new(from, to);
             }
             self.run_source_edit(winc_editor::Command::Insert(String::new()));
-            self.preview.markdown.goal = None;
-            self.start_live_editing();
+            self.finish_live_edit();
             return true;
         };
         let (a, b) = (
@@ -651,26 +647,22 @@ impl App {
             doc.selection = winc_core::Selection::new(a, b);
         }
         self.run_source_edit(winc_editor::Command::Insert(edit.text));
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         true
     }
 
     fn backspace_empty_paragraph(&mut self) -> bool {
-        let Some(paragraph) = self.preview.markdown.empty_paragraph.as_ref() else {
-            return false;
-        };
         let Some(doc) = self.editor.active_mut() else {
             return false;
         };
-        if doc.id != paragraph.document
-            || doc.revision != paragraph.revision
-            || doc.selection != winc_core::Selection::point(paragraph.caret)
-            || doc.has_cursors()
-        {
+        let Some((start, end, caret)) = self.preview.markdown.live.matching_empty_paragraph(
+            doc.id,
+            doc.revision,
+            doc.selection,
+            doc.has_cursors(),
+        ) else {
             return false;
-        }
-        let (start, end) = (paragraph.inserted.start, paragraph.inserted.end);
+        };
         let Some(removed) = doc.text_range(start, end) else {
             return false;
         };
@@ -680,15 +672,17 @@ impl App {
                 removed,
                 inserted: String::new(),
             }],
-            paragraph.caret,
+            caret,
             start,
         ) {
             return false;
         }
 
-        self.preview.markdown.empty_paragraph = None;
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        let doc_id = doc.id;
+        self.preview
+            .markdown
+            .live
+            .finish_empty_paragraph_backspace(Some(doc_id));
         self.relayout();
         self.ensure_caret_visible();
         self.reset_blink();
@@ -740,8 +734,7 @@ impl App {
         if prose {
             self.run_source_edit(winc_editor::Command::Insert(String::new()));
         }
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         self.request_redraw();
         true
     }
@@ -780,8 +773,7 @@ impl App {
             doc.selection = winc_core::Selection::new(a, b);
         }
         self.run_source_edit(winc_editor::Command::Insert(edit.text));
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         true
     }
 
@@ -831,8 +823,7 @@ impl App {
         {
             doc.selection = winc_core::Selection::point(at);
         }
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         true
     }
 
@@ -850,8 +841,7 @@ impl App {
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::point(a);
         }
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         self.request_redraw();
     }
 
@@ -937,8 +927,7 @@ impl App {
             doc.selection = winc_core::Selection::point(end);
         }
         self.run(winc_editor::Command::Insert("\n\n".to_owned()));
-        self.preview.markdown.goal = None;
-        self.start_live_editing();
+        self.finish_live_edit();
         true
     }
 
@@ -1034,9 +1023,7 @@ impl App {
         if let Some(doc) = self.editor.active_mut() {
             doc.selection = winc_core::Selection::new(select.0, select.1);
         }
-        self.preview.markdown.goal = None;
-        self.preview.markdown.line_end = None;
-        self.start_live_editing();
+        self.finish_live_edit_reset_line();
         self.reset_blink();
         self.request_redraw();
     }

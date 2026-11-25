@@ -4,7 +4,7 @@ use winc_editor::PreviewMode;
 
 use crate::app::input::context_menu::MenuCommand;
 use crate::app::preview::markdown::TocTarget;
-use crate::app::preview::markdown::laid::{MAX_WIDTH, WIDE_WIDTH, full_text, source_lines};
+use crate::app::preview::markdown::laid::{MAX_WIDTH, WIDE_WIDTH};
 use crate::layout::Setting;
 
 use super::*;
@@ -50,7 +50,14 @@ fn the_text_width_has_three_levels() {
     assert_eq!(app.config.markdown_text_width, Some(TextWidth::Wide));
     // 文档有标题列表：正文左侧为标题指示条和原文行号留出位置，右侧留白仍为 32 逻辑像素。
     let room = |app: &App| {
-        let left = app.preview.markdown.layout.as_ref().unwrap().left;
+        let left = app
+            .preview
+            .markdown
+            .layout
+            .as_ref()
+            .unwrap()
+            .column_bounds()
+            .0;
         (area.right() - 32.0 - left).floor()
     };
     assert_eq!(text_width(&app), WIDE_WIDTH.min(room(&app)));
@@ -81,8 +88,8 @@ fn shoot_writing_page() {
         let area = app.preview.markdown.area;
         assert!(
             laid.key.width <= MAX_WIDTH
-                && laid.left >= area.x
-                && laid.left + laid.key.width <= area.right()
+                && laid.column_bounds().0 >= area.x
+                && laid.column_bounds().0 + laid.key.width <= area.right()
         );
         shoot(&mut app, &format!("writing-page-{name}"));
     }
@@ -120,7 +127,7 @@ fn the_heading_list_can_be_pinned_open() {
         app.set_text_width(width);
         settle(&mut app);
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        let (left, body) = (laid.left, laid.key.width);
+        let (left, body) = (laid.column_bounds().0, laid.key.width);
         let row = find(&app, TocTarget::Heading(0)).expect("钉住的列表仍然展开");
         assert!(row.right() <= left, "{width:?}: {row:?} {left}");
         assert!(left - area.x >= 180.0 + 12.0, "{width:?}: {left}");
@@ -129,7 +136,10 @@ fn the_heading_list_can_be_pinned_open() {
         app.state.markdown_toc_pinned = false;
         settle(&mut app);
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        assert!(laid.left < left && laid.key.width >= body, "{width:?}");
+        assert!(
+            laid.column_bounds().0 < left && laid.key.width >= body,
+            "{width:?}"
+        );
         app.state.markdown_toc_pinned = true;
         settle(&mut app);
     }
@@ -160,7 +170,7 @@ fn the_editable_preview_numbers_source_lines() {
     let lines = || {
         let laid = app.preview.markdown.layout.as_ref().unwrap();
         let rope = app.editor.active().unwrap().text().rope().unwrap();
-        let found = source_lines(laid, rope, 0.0..laid.height);
+        let found = laid.source_lines(rope, 0.0..laid.height);
         found.into_iter().map(|(line, _)| line).collect::<Vec<_>>()
     };
     assert_eq!(lines(), [0, 2, 4, 8, 9, 10, 13, 15]);
@@ -183,7 +193,7 @@ fn code_blocks_are_numbered_in_the_read_only_preview() {
     settle(&mut app);
     assert_eq!(app.config.markdown_line_numbers, Some(true));
     assert!(key(&app));
-    let text = full_text(&app).unwrap();
+    let text = app.preview.markdown.full_text().unwrap();
     assert!(text.contains("fn a() {}\nlet b = 1;\nlet c = 2;"), "{text}");
     assert!(!text.contains("1fn") && !text.contains("2let"));
 
@@ -242,7 +252,7 @@ fn the_preview_follows_the_chosen_language() {
     ));
     settle(&mut app);
     assert_eq!(mode(&app), PreviewMode::Preview);
-    let text = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let text = app.preview.markdown.full_text().unwrap();
     assert!(text.contains("标题") && text.contains("小节"), "{text}");
 
     // 预览中换成不可预览的语言：回到源代码，文字正常显示。
@@ -321,7 +331,7 @@ fn a_heading_list_too_long_for_the_view_scrolls_by_the_wheel() {
 
     // 滚动条和其他区域的一样：鼠标在列表右边缘时显示，按住滑块拖到底列到最后一个标题，
     // 拖动期间列表不收起。
-    let track = app.preview.markdown.toc_list.track;
+    let track = app.preview.markdown.toc.track_rect();
     let x = track.right() - 4.0;
     app.on_mouse_move(x, track.y + track.h / 2.0);
     paint(&mut app);
@@ -348,7 +358,7 @@ fn a_heading_list_too_long_for_the_view_scrolls_by_the_wheel() {
     click(&mut app, (at.x + 30.0, at.y + at.h / 2.0));
     settle(&mut app);
     assert!(app.preview.markdown.scroll() > 0.0);
-    assert_eq!(app.preview.markdown.toc_list.shift, 0);
+    assert_eq!(app.preview.markdown.toc.shift_rows(), 0);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -375,11 +385,7 @@ fn a_long_document_is_laid_out_over_several_frames_after_its_width_changes() {
     settle(&mut app);
     let laid = |app: &App| {
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        (
-            laid.key.width,
-            laid.height,
-            laid.stale.iter().filter(|s| **s).count(),
-        )
+        (laid.key.width, laid.height, laid.stale_count())
     };
     let (wide, wide_height, waiting) = laid(&app);
     assert_eq!(waiting, 0);
@@ -389,34 +395,36 @@ fn a_long_document_is_laid_out_over_several_frames_after_its_width_changes() {
     paint(&mut app);
     let top = |app: &App| {
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        laid.place_at(app.preview.markdown.scroll() - laid.pad)
+        laid.place_at(laid.content_y(app.preview.markdown.scroll()))
             .unwrap()
     };
     let (held, _) = top(&app);
 
     // 不给补排的时间：收起侧栏使正文变宽，这一帧只排了看得见的块。
-    app.preview.markdown.catch_up.budget = Some(std::time::Duration::ZERO);
+    app.preview
+        .markdown
+        .set_catch_up_budget(Some(std::time::Duration::ZERO));
     app.toggle_sidebar();
     paint(&mut app);
     let (width, _, waiting) = laid(&app);
     assert!(width > wide && waiting > 300, "{width} {waiting}");
-    assert!(app.preview.markdown.catch_up.pending && app.animating());
+    assert!(app.preview.markdown.is_catch_up_pending() && app.animating());
     assert_eq!(top(&app).0, held);
     let area = app.preview.markdown.area;
     let shown = {
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        let y = app.preview.markdown.scroll() - laid.pad;
+        let y = laid.content_y(app.preview.markdown.scroll());
         laid.blocks_in(y, y + area.h)
     };
     let laid_now = app.preview.markdown.layout.as_ref().unwrap();
-    assert!(shown.clone().all(|i| !laid_now.stale[i]), "{shown:?}");
+    assert!(shown.clone().all(|i| !laid_now.is_stale(i)), "{shown:?}");
 
     // 给足时间：下一帧排完，顶边所在的块仍是那一块。
-    app.preview.markdown.catch_up.budget = None;
+    app.preview.markdown.set_catch_up_budget(None);
     paint(&mut app);
     let (_, height, waiting) = laid(&app);
     assert_eq!(waiting, 0);
-    assert!(!app.preview.markdown.catch_up.pending);
+    assert!(!app.preview.markdown.is_catch_up_pending());
     assert_eq!(top(&app).0, held);
 
     // 与一次排完的结果相同：换回原来的宽度再换回来，高度一致。
@@ -452,16 +460,18 @@ fn a_long_document_keeps_layout_only_near_the_viewport() {
     // （释放了要画的项的块数，视口内是否都排好了，总高度）
     let state = |app: &App| {
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        let y = app.preview.markdown.scroll() - laid.pad;
+        let y = laid.content_y(app.preview.markdown.scroll());
         let seen = laid.blocks_in(y, y + app.preview.markdown.area.h);
-        let shed = laid.blocks.iter().filter(|b| b.1.is_shed()).count();
-        let drawn = seen.clone().all(|i| !laid.blocks[i].1.is_shed());
+        let shed = laid.iter_blocks().filter(|(_, _, b)| b.is_shed()).count();
+        let drawn = seen.clone().all(|i| !laid.block_at(i).unwrap().is_shed());
         (shed, drawn, laid.height, seen)
     };
     let (shed, drawn, height, seen) = state(&app);
     assert!(shed > 1000 && drawn && seen.start == 0, "{shed} {seen:?}");
     let laid = app.preview.markdown.layout.as_ref().unwrap();
-    assert!(laid.blocks[1400].1.is_shed() && laid.blocks[1400].1.links_to("#p1400"));
+    assert!(
+        laid.block_at(1400).unwrap().is_shed() && laid.block_at(1400).unwrap().links_to("#p1400")
+    );
     assert!(app.preview.markdown.memo.len() < 600);
 
     // 滚到中间：视口内的块重新排好，开头的块释放，总高度不变。
@@ -471,13 +481,18 @@ fn a_long_document_keeps_layout_only_near_the_viewport() {
     assert!(shed > 1000 && drawn && seen.start > 500, "{shed} {seen:?}");
     assert_eq!(now, height);
     assert!(
-        app.preview.markdown.layout.as_ref().unwrap().blocks[0]
-            .1
+        app.preview
+            .markdown
+            .layout
+            .as_ref()
+            .unwrap()
+            .block_at(0)
+            .unwrap()
             .is_shed()
     );
 
     // 查找跳到靠后的一处：选中的文字所在的块排好，滚动到它附近。
-    let full = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let full = app.preview.markdown.full_text().unwrap();
     let at = full
         .find("Paragraph 1450 ")
         .map(|byte| full[..byte].chars().count())
@@ -488,7 +503,7 @@ fn a_long_document_keeps_layout_only_near_the_viewport() {
     assert!(drawn && seen.contains(&1450), "{seen:?}");
     assert_eq!(now, height);
     let laid = app.preview.markdown.layout.as_ref().unwrap();
-    assert!(!laid.blocks[1450].1.is_shed());
+    assert!(!laid.block_at(1450).unwrap().is_shed());
 
     // 改变宽度后分帧重排，排完后离视口远的块仍然释放。
     app.set_text_width(winc_config::TextWidth::Full);
@@ -498,10 +513,10 @@ fn a_long_document_keeps_layout_only_near_the_viewport() {
     assert!(
         shed > 1000 && drawn,
         "{shed} {seen:?}; retained: {:?}; pending: {}",
-        laid.near.as_ref().map(|near| &near.rows),
+        laid.near().map(|near| &near.rows),
         laid.pending()
     );
-    assert!(!app.preview.markdown.catch_up.pending);
+    assert!(!app.preview.markdown.is_catch_up_pending());
 
     // 可编辑的预览里光标跳到文末：光标所在的块排好，预览滚动到那里；回到开头同样如此。
     assert!(app.markdown_live());
@@ -511,7 +526,7 @@ fn a_long_document_keeps_layout_only_near_the_viewport() {
     let (_, drawn, _, seen) = state(&app);
     assert!(drawn && seen.end >= 1499, "{seen:?}");
     let laid = app.preview.markdown.layout.as_ref().unwrap();
-    assert!(!laid.blocks[1499].1.is_shed() && laid.blocks[0].1.is_shed());
+    assert!(!laid.block_at(1499).unwrap().is_shed() && laid.block_at(0).unwrap().is_shed());
     app.run(winc_editor::Command::DocStart { extend: false });
     settle(&mut app);
     let (shed, drawn, _, seen) = state(&app);

@@ -106,7 +106,14 @@ fn the_preview_scrollbar_can_be_dragged() {
         assert!(app.preview.markdown.scroll() > 0.0, "{name}");
 
         // 滚动条左侧仍然是选择文字。
-        let left = app.preview.markdown.layout.as_ref().unwrap().left;
+        let left = app
+            .preview
+            .markdown
+            .layout
+            .as_ref()
+            .unwrap()
+            .column_bounds()
+            .0;
         app.on_mouse_move(left + 20.0, area.y + 50.0);
         app.on_mouse_down(MouseButton::Left);
         assert!(matches!(app.pointer.drag, crate::app::Drag::MarkdownText));
@@ -130,7 +137,7 @@ fn switching_modes_keeps_the_place() {
         .collect();
     let (mut app, dir) = live_doc("md-switch", &text);
     // 预览滚动到第 30 节：切换为源代码后文字顶部是第 30 节的标题（第 120 行）。
-    let y = crate::app::preview::markdown::laid::anchor_top(&app, "第-30-节").unwrap();
+    let y = app.preview.markdown.anchor_top("第-30-节").unwrap();
     app.scroll_markdown_to(y);
     paint(&mut app);
     app.set_preview_mode(PreviewMode::Source);
@@ -141,15 +148,11 @@ fn switching_modes_keeps_the_place() {
     app.editor.active_mut().unwrap().scroll_line = 40.0;
     app.set_preview_mode(PreviewMode::Preview);
     settle(&mut app);
-    let y = crate::app::preview::markdown::laid::anchor_top(&app, "第-10-节").unwrap();
+    let y = app.preview.markdown.anchor_top("第-10-节").unwrap();
     // 差值来自预览顶部的留白，分栏同步滚动的映射同样包含这段留白。
     let pad = app.preview.markdown.scroll() - y;
     assert!((0.0..=40.0).contains(&pad), "{pad}");
-    assert!(
-        !crate::app::preview::markdown::laid::full_text(&app)
-            .unwrap()
-            .contains("## ")
-    );
+    assert!(!app.preview.markdown.full_text().unwrap().contains("## "));
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -210,7 +213,7 @@ fn preview_and_source_point_at_each_other() {
 
     let (mut app, dir) = readme("md-locate", false, PreviewMode::Split);
     assert!(press(&mut app, &["cmd"], Char('a')));
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     // 样式标记、嵌套列表、代码块、表格、引用中的软换行和脚注都能对应到原文；点击链接会打开
     // 链接，不在此列。
     for target in [
@@ -238,9 +241,8 @@ fn preview_and_source_point_at_each_other() {
         // 反向：光标所在的字在预览上落在点中的那一行。
         let source = app.markdown_caret_source().unwrap();
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        let (_, top, _) =
-            crate::app::preview::markdown::laid::point_of(laid, source).expect(target);
-        let line = crate::app::preview::markdown::laid::offset_top(&app, at).expect(target);
+        let (_, top, _) = laid.point_of(source).expect(target);
+        let line = app.preview.markdown.offset_top(at).expect(target);
         assert_eq!(top, line, "{target}");
     }
 

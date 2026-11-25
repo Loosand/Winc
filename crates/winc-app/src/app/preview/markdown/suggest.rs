@@ -302,8 +302,7 @@ impl App {
                 recent.truncate(super::slash::RECENT);
             }
             if self.markdown_live() {
-                self.preview.markdown.goal = None;
-                self.start_live_editing();
+                self.finish_live_edit();
             }
             self.request_redraw();
             return;
@@ -335,8 +334,7 @@ impl App {
         let suggest = &mut self.preview.markdown.suggest;
         suggest.dismissed = Some((id, start));
         if self.markdown_live() {
-            self.preview.markdown.goal = None;
-            self.start_live_editing();
+            self.finish_live_edit();
         }
         self.request_redraw();
     }

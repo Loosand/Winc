@@ -41,7 +41,8 @@ pub(crate) mod suggest;
 pub(crate) mod toolbar;
 mod viewer;
 mod writing;
-pub(crate) use laid::LiveLeaf;
+pub(crate) use laid::{Fading, LiveLeaf, Moves};
+pub(crate) use scroll::TocListLayout;
 pub(crate) use viewer::{DiagramLaid, DiagramTool, DiagramView, MAX_ZOOM, MIN_ZOOM};
 pub(crate) use writing::paragraph_lines;
 
@@ -124,25 +125,14 @@ pub(crate) struct MarkdownPreview {
     pub(crate) imported_property_types: properties::ImportedTypes,
     /// 排版缓存，见 `winc_typeset::Memo`。
     pub memo: crate::app::preview::markdown::laid::Memo,
-    /// 用到的图片，键为解析后的本地路径。
-    pub images: HashMap<PathBuf, ImageSlot>,
-    /// 各图片在文件中写的地址，键同 `images`：解码后的图片释放之后据此重新读取。
-    pub(crate) urls: HashMap<PathBuf, String>,
-    /// docx 包中的图片：键与 `images` 相同（按文档所在目录解析后的路径），值是图片文件的
-    /// 内容；读取这些图片时用这里的内容，不读磁盘。
-    embedded: HashMap<PathBuf, Arc<[u8]>>,
+    /// 图片缓存池（槽位、原始地址、内嵌媒体、待刷新队列和版本号）。
+    pub(crate) images: images::ImagePool,
     /// docx、EPUB 读取或转换失败的原因；没有失败时为 `None`。
     pub failed: Option<String>,
     /// EPUB 的目录，在侧栏的大纲中列出；不是 EPUB 或尚未转换完时为 `None`。
     pub contents: Option<Arc<[TocEntry]>>,
     /// 各本书的阅读位置。
     book: book::BookPlaces,
-    /// 图片全部作废的计数：联网设置改变时作废全部图片，整份重新排版。
-    ///
-    /// 每作废一次加 1。
-    pub images_version: u64,
-    /// 刚读取完成（或读取失败）的图片：只重排用到这些图片的块，无需整份重排。
-    pub loaded: Vec<PathBuf>,
     /// 被点击后开合状态与原文相反的折叠块（`<details>`），见 `view::markdown` 的 `DETAILS`。
     pub toggled: HashSet<u64>,
     /// 刚点击的折叠块标题的地址：只重排其所在的块。
@@ -152,38 +142,10 @@ pub(crate) struct MarkdownPreview {
     /// 最近一次横向滚动的表格：（顶层块序号，块中表格的序号），见 `view::markdown` 的
     /// `Laid::hscroll`。
     pub last_table: Option<(usize, usize)>,
-    /// 标题列表展开时淡入的时钟；不在淡入中时为 `None`。
-    pub toc_fade: Option<crate::app::animation::Clock>,
-    /// 鼠标进入标题指示条的时刻，满 `TOC_HOVER_DELAY` 后列表展开；
-    /// 不在指示条和标题列表上时为 `None`。
-    pub toc_rest: Option<std::time::Instant>,
-    /// 本次停留是否已展开标题列表。
-    pub toc_shown: bool,
-    /// 正文左边缘在钉住过渡结束后的位置（窗口坐标，逻辑像素）。
-    pub toc_left: f32,
-    /// 钉住过渡开始时正文左边缘的位置（窗口坐标，逻辑像素），终点是
-    /// [`Self::toc_left`]；不在过渡中时为 `None`。
-    pub toc_slide: Option<f32>,
-    /// 标题列表收起过渡的时钟；不在收起中时为 `None`。
-    pub toc_close: Option<crate::app::animation::Clock>,
-    /// 悬停展开的标题列表上边缘相对预览区域上边缘的位置（逻辑像素）：展开时确定，
-    /// 滚动预览时不变，收起后为 `None`。
-    pub toc_top: Option<f32>,
-    /// 标题列表钉住（`true`）或取消钉住（`false`）的过渡时钟；不在过渡中时为 `None`。
-    pub toc_pin: Option<(bool, crate::app::animation::Clock)>,
-    /// 在标题列表中点击过的标题（`toc_tops` 的序号）和点击后的滚动位置。
-    ///
-    /// 靠近文末的标题无法滚动到预览顶部，按滚动位置无法判定其为当前一节；点击之后、再次滚动
-    /// 之前，指示条将其视为当前所在的一节。
-    pub toc_picked: Option<(usize, f32)>,
-    /// 上一帧标题指示条标出的当前所在一节（`toc_tops` 的序号）；没有时为 `None`。
-    pub toc_current: Option<usize>,
-    /// 展开的标题列表列出的一段，供滚轮滚动。
-    pub toc_list: scroll::TocList,
+    /// 左侧标题指示条与展开目录的状态机。
+    pub(crate) toc: scroll::TocPanel,
     /// 分帧排版的状态。
-    pub catch_up: scroll::CatchUp,
-    /// 点击过的标题在正文中的底色：标题的序号与淡出的时钟。
-    pub toc_flash: Option<(usize, crate::app::animation::Clock)>,
+    catch_up: scroll::CatchUp,
     /// 跳转到的脚注或脚注引用在正文中的底色：范围（上边缘和高度，相对内容顶部，逻辑像素）与
     /// 淡出的时钟。
     pub anchor_flash: Option<((f32, f32), crate::app::animation::Clock)>,
@@ -212,31 +174,14 @@ pub(crate) struct MarkdownPreview {
     /// 左侧滚动（滚轮、光标移出屏幕、输入）或预览重排后，下一帧按左侧重新对齐右侧；
     /// 在右侧滚动时直接对齐左侧，并记录该状态。
     pub synced: Option<(DocumentId, f64, f32)>,
-    /// 可编辑的预览中拖动选择文字的状态。
+    /// 可编辑预览中拖动选择文字的状态。
     live_drag: Option<live_selection::LiveDrag>,
-    /// 最近一次用于单光标排版的位置，拖选和键盘扩选时继续使用。
-    layout_caret: Option<(DocumentId, u64, usize)>,
-    /// 回车刚创建的空段，按退格时可整段收回。
-    empty_paragraph: Option<live_caret::EmptyParagraph>,
-    /// 可编辑的预览中 ↑↓ 移动的目标横坐标（相对内容左边）和移动后光标的位置（字符偏移）：
-    /// 光标仍在该位置时继续按该横坐标移动，经过短行后仍能回到原来的列。
-    goal: Option<(f32, usize)>,
-    /// 可编辑的预览中按 End 移到折行处时光标的位置（字符偏移）和文档版本号。
-    ///
-    /// 折行处的原文位置同时是上一行的末尾和下一行的开头；光标仍在该位置、文字未修改时画在
-    /// 上一行的末尾，见 [`App::live_upstream`]。
-    line_end: Option<(usize, u64)>,
+    /// 可编辑预览的交互与导航状态（空段收回、目标列、折行归属、编辑态和光标跟随）。
+    pub(crate) live: live_caret::LiveState,
     /// 下一次重排时各块滑动到新位置（见 [`BlockMotion`]）：表格工具增删行列后置位。
     ///
     /// 输入文字引起的重排不滑动，内容直接到位。
     pub slide: bool,
-    /// 表格工具刚修改的文档版本。该版本的后台排版接手时保持页面滚动位置。
-    table_edit_revision: Option<(DocumentId, u64)>,
-    /// 可编辑的预览中上一帧的文档、光标位置和文档版本号：发生变化表示正在编辑，见
-    /// [`App::live_editing`]。
-    followed: Option<(DocumentId, usize, u64)>,
-    /// 在可编辑的预览中编辑过的文档：光标所在的块显示原文。
-    editing: Option<DocumentId>,
     /// 刚切换为只看预览的文档：排版完成后预览滚动到文字原来的滚动位置，见
     /// [`App::align_markdown_once`]。
     align: Option<DocumentId>,
@@ -249,9 +194,6 @@ pub(crate) struct MarkdownPreview {
     receiver: mpsc::Receiver<Done>,
     /// 补全链接地址的列表。
     pub(crate) suggest: suggest::Suggest,
-    /// 最近一次单击放下的光标（原文字节偏移）：因此重新排版时不为保持光标不动而滚动（见
-    /// `laid::old_caret`）。
-    pub(crate) clicked: Option<usize>,
     /// 鼠标选中文字后的选区，选区不变时显示格式工具栏。
     pub(crate) toolbar: Option<(DocumentId, winc_core::Selection)>,
     /// 正文链接的检查结果。
@@ -262,21 +204,6 @@ pub(crate) struct MarkdownPreview {
     pub(crate) menu_image: Option<resize::ImageAt>,
     /// 正在拖动把手的图片。
     pub(crate) resizing: Option<resize::Resizing>,
-}
-
-/// 淡入的项：所在顶层块的序号及块内各项的序号，按块的序号排序。
-pub(crate) type Fading = Vec<(usize, Box<[usize]>)>;
-
-/// 重排后各块从原位置到新位置的过渡，见 [`BlockMotion`]。
-pub(crate) struct Moves {
-    /// 各块起始时的偏移，同 [`BlockMotion::from`]。
-    pub from: Vec<f32>,
-    /// 淡入的项。
-    pub fading: Fading,
-    /// 刚显示原文的块：（块序号，渲染结果的第一项，渲染结果的起始偏移），按块序号排序。
-    pub inner: Vec<(usize, u32, f32)>,
-    /// 刚恢复排版的块原来的原文。
-    pub leaving: Vec<laid::Leaving>,
 }
 
 /// 可编辑的预览重排后的过渡动画。
@@ -347,30 +274,15 @@ impl Default for MarkdownPreview {
             imported_property_types: properties::ImportedTypes::default(),
             last_table: None,
             memo: Default::default(),
-            images: HashMap::new(),
-            urls: HashMap::new(),
-            embedded: HashMap::new(),
+            images: images::ImagePool::default(),
             failed: None,
             contents: None,
             book: book::BookPlaces::default(),
-            images_version: 0,
-            loaded: Vec::new(),
             toggled: HashSet::new(),
             toggled_now: None,
             pending_anchor: None,
-            toc_fade: None,
-            toc_rest: None,
-            toc_shown: false,
-            toc_left: 0.0,
-            toc_slide: None,
-            toc_close: None,
-            toc_top: None,
-            toc_pin: None,
-            toc_picked: None,
-            toc_current: None,
-            toc_list: scroll::TocList::default(),
+            toc: scroll::TocPanel::default(),
             catch_up: scroll::CatchUp::default(),
-            toc_flash: None,
             anchor_flash: None,
             diagram: None,
             code_hover: None,
@@ -383,14 +295,8 @@ impl Default for MarkdownPreview {
             find_serial: 0,
             synced: None,
             live_drag: None,
-            layout_caret: None,
-            empty_paragraph: None,
-            goal: None,
-            line_end: None,
+            live: live_caret::LiveState::default(),
             slide: false,
-            table_edit_revision: None,
-            followed: None,
-            editing: None,
             align: None,
             motion: None,
             #[cfg(test)]
@@ -403,7 +309,6 @@ impl Default for MarkdownPreview {
             menu_picture: None,
             menu_image: None,
             resizing: None,
-            clicked: None,
         }
     }
 }
@@ -448,9 +353,12 @@ impl MarkdownPreview {
 
     /// 丢弃已读取的图片（联网设置改变时调用）：下次绘制时重新排版并重新读取。
     pub fn forget_images(&mut self) {
-        self.images.clear();
-        self.urls.clear();
-        self.images_version += 1;
+        self.images.forget();
+    }
+
+    /// 解析结果是否与文档版本 `revision` 一致。
+    pub(crate) fn is_checked(&self, revision: u64) -> bool {
+        self.checked == Some(revision)
     }
 
     /// 将预览切换为文档 `doc`（不再显示预览时为 `None`）。
@@ -466,16 +374,13 @@ impl MarkdownPreview {
         self.pending = None;
         self.cost = None;
         self.layout = None;
-        self.empty_paragraph = None;
-        self.table_edit_revision = None;
+        self.live.reset_doc();
         self.memo = Default::default();
         self.find_doc = None;
         self.motion = None;
-        self.forget_images();
-        self.embedded.clear();
+        self.images.reset();
         self.failed = None;
         self.contents = None;
-        self.loaded.clear();
     }
 }
 
@@ -542,27 +447,36 @@ fn in_fence<'a>(lines: impl Iterator<Item = ropey::RopeSlice<'a>>) -> bool {
     open.is_some()
 }
 
-/// 返回当前标签显示 Markdown 预览的区域（分栏的右半边或整个编辑区）；不显示时返回 `None`。
-pub(crate) fn shown_area(app: &App) -> Option<winc_render::Rect> {
-    let doc = app.editor.active()?;
-    // docx、EPUB 和内容已取回的阅读标签没有源代码可切换，总是以整个编辑区显示阅读视图。
-    let reading = matches!(doc.reading, Some(winc_editor::Reading::Ready(_)));
-    let converted =
-        (doc.unsupported.as_ref()).is_some_and(winc_editor::Unsupported::reads_as_markdown);
-    if converted || reading {
-        return Some(app.layout.editor);
-    }
-    if doc.preview_kind() != Some(PreviewKind::Markdown) {
-        return None;
-    }
-    match doc.preview_mode() {
-        PreviewMode::Split if app.layout.split.w > 0.0 => Some(app.layout.split),
-        PreviewMode::Preview => Some(app.layout.editor),
-        _ => None,
-    }
-}
-
 impl App {
+    /// 返回当前标签显示 Markdown 预览的区域（分栏的右半边或整个编辑区）；不显示时返回 `None`。
+    pub(crate) fn markdown_shown_area(&self) -> Option<winc_render::Rect> {
+        let doc = self.editor.active()?;
+        // docx、EPUB 和内容已取回的阅读标签没有源代码可切换，总是以整个编辑区显示阅读视图。
+        let reading = matches!(doc.reading, Some(winc_editor::Reading::Ready(_)));
+        let converted =
+            (doc.unsupported.as_ref()).is_some_and(winc_editor::Unsupported::reads_as_markdown);
+        if converted || reading {
+            return Some(self.layout.editor);
+        }
+        if doc.preview_kind() != Some(PreviewKind::Markdown) {
+            return None;
+        }
+        match doc.preview_mode() {
+            PreviewMode::Split if self.layout.split.w > 0.0 => Some(self.layout.split),
+            PreviewMode::Preview => Some(self.layout.editor),
+            _ => None,
+        }
+    }
+
+    /// 横向滚动窗口坐标 `(x, y)` 处的可横向滚动表格，返回是否消费了该滚轮事件。
+    pub(in crate::app) fn scroll_markdown_table(&mut self, x: f32, y: f32, dx: f32) -> bool {
+        if self.preview.markdown.scroll_table(x, y, dx) {
+            self.request_redraw();
+            return true;
+        }
+        false
+    }
+
     /// 当前标签显示 Markdown 预览且解析结果落后于文字时，在后台解析最新的文字。
     ///
     /// 不再显示预览时释放预览占用的内存，见 [`MarkdownPreview::reset`]。
@@ -570,7 +484,7 @@ impl App {
     /// 编辑器核心 · 解析调度：每次绘制前检查版本。后台解析读取原文快照，不写回文档；
     /// 输入赶在结果之前时，光标所在块仍可参考当前原文即时排版。
     pub(crate) fn advance_markdown(&mut self) {
-        let shown = shown_area(self).is_some();
+        let shown = self.markdown_shown_area().is_some();
         let Some(doc) = self.editor.active().filter(|_| shown) else {
             if self.preview.markdown.doc.is_some() {
                 self.preview.markdown.reset(None);
@@ -695,7 +609,7 @@ impl App {
                     md.checked = Some(revision);
                     converted = true;
                     md.forget_images();
-                    md.embedded.clear();
+                    md.images.clear_embedded();
                     match result {
                         Ok((parsed, media, contents)) => {
                             // 本次打开后尚未滚动过的书，排版后回到记下的阅读位置。
@@ -705,12 +619,13 @@ impl App {
                             }
                             md.contents = contents;
                             let doc = self.editor.active().and_then(|d| d.path.as_deref());
-                            md.embedded = media
+                            let embedded = media
                                 .into_iter()
                                 .filter_map(|(url, bytes)| {
                                     Some((image_path(doc, &url, false)?, bytes))
                                 })
                                 .collect();
+                            md.images.replace_embedded(embedded);
                             md.failed = None;
                             md.parsed = Some(Arc::new(parsed));
                         }
@@ -722,40 +637,12 @@ impl App {
                 }
                 Done::Loaded(path, result) => {
                     // 读取期间图片已作废（切换了文档或联网设置变化），丢弃结果。
-                    if !matches!(md.images.get(&path), Some(ImageSlot::Loading)) {
+                    if !md.images.finish_load(path, result) {
                         continue;
                     }
-                    let slot = match result {
-                        Ok(picture) => ImageSlot::Ready {
-                            width: picture.width,
-                            height: picture.height,
-                            density: picture.density,
-                            picture: Some(picture),
-                            pixels: Vec::new(),
-                            drawing: Vec::new(),
-                        },
-                        Err(_) => ImageSlot::Failed,
-                    };
-                    md.images.insert(path.clone(), slot);
-                    md.loaded.push(path);
                 }
-                Done::Drawn(path, drawn) => {
-                    if let Some(ImageSlot::Ready {
-                        pixels, drawing, ..
-                    }) = md.images.get_mut(&path)
-                    {
-                        let size = (drawn.width, drawn.height);
-                        drawing.retain(|&d| d != size);
-                        pixels.retain(|p| (p.width, p.height) != size);
-                        pixels.insert(0, drawn);
-                        pixels.truncate(SIZES);
-                    }
-                }
-                Done::Undrawn(path, size) => {
-                    if let Some(ImageSlot::Ready { drawing, .. }) = md.images.get_mut(&path) {
-                        drawing.retain(|&d| d != size);
-                    }
-                }
+                Done::Drawn(path, drawn) => md.images.finish_draw(&path, drawn),
+                Done::Undrawn(path, size) => md.images.cancel_draw(&path, size),
             }
             changed = true;
         }
@@ -813,7 +700,7 @@ impl App {
     /// ⌘↑ / ⌘↓ 滚动到开头、末尾；Esc 清除选区。分栏时在预览上输入、回车、删除：焦点回到
     /// 左侧的文字，按普通编辑处理。可编辑的预览中按键作用于文档，见 [`App::live_key`]。
     pub(in crate::app) fn markdown_key(&mut self, key: &Key, cmd: bool) -> bool {
-        let Some(area) = shown_area(self) else {
+        let Some(area) = self.markdown_shown_area() else {
             return false;
         };
         if self.markdown_live() {
@@ -876,7 +763,7 @@ impl App {
     /// 分栏时取决于最近一次点击是否在预览上。只看预览时预览可以直接编辑，键盘作用于文档
     /// （见 [`App::markdown_live`]）；只读文档仍然作用于预览。
     pub(crate) fn markdown_focused(&self) -> bool {
-        shown_area(self).is_some_and(|a| {
+        self.markdown_shown_area().is_some_and(|a| {
             if a == self.layout.editor {
                 !self.markdown_live()
             } else {
@@ -892,7 +779,8 @@ impl App {
 
     /// 当前标签是否为可直接编辑的 Markdown 预览（只看预览）。
     pub(crate) fn markdown_live(&self) -> bool {
-        shown_area(self).is_some_and(|a| a == self.layout.editor)
+        self.markdown_shown_area()
+            .is_some_and(|a| a == self.layout.editor)
             && self
                 .editor
                 .active()
@@ -945,7 +833,7 @@ impl App {
     ) {
         self.focus = crate::app::Focus::Editor;
         // 内容一栏两侧的空白：分栏时将键盘焦点交给预览，但不放置光标、不开始选择，保留已有选区。
-        if !crate::app::preview::markdown::laid::in_content(self, x) {
+        if !self.preview.markdown.in_content(x) {
             if !self.markdown_live() {
                 self.preview.markdown.focused = true;
                 self.request_redraw();
@@ -958,7 +846,7 @@ impl App {
         }
         self.preview.markdown.focused = true;
         self.request_redraw();
-        let Some(at) = crate::app::preview::markdown::laid::offset_at(self, x, y) else {
+        let Some(at) = self.preview.markdown.offset_at(x, y) else {
             self.preview.markdown.selection = None;
             return;
         };
@@ -974,7 +862,9 @@ impl App {
         // 预览时光标不可见，不移动。
         if count == 1
             && !shift
-            && shown_area(self).is_some_and(|a| a == self.layout.split)
+            && self
+                .markdown_shown_area()
+                .is_some_and(|a| a == self.layout.split)
             && let Some(source) = self.current_source_at(x, y)
         {
             self.place_caret_at_source(source);
@@ -1005,7 +895,7 @@ impl App {
         if doc.unsupported.is_some() || self.preview.markdown.checked != Some(doc.revision) {
             return None;
         }
-        crate::app::preview::markdown::laid::source_at(self, x, y)
+        self.preview.markdown.source_at(x, y)
     }
 
     /// 将文字光标放到原文第 `source` 个字节处；光标所在行不可见时滚动到距顶部三分之一处。
@@ -1042,7 +932,7 @@ impl App {
         self.focus = crate::app::Focus::Editor;
         if self.markdown_live() {
             self.preview.markdown.menu_image = self.image_at(x, y);
-            if let Some(source) = crate::app::preview::markdown::laid::source_at(self, x, y)
+            if let Some(source) = self.preview.markdown.source_at(x, y)
                 && let Some(doc) = self.editor.active_mut()
                 && let Some(rope) = doc.text().rope()
             {
@@ -1056,7 +946,7 @@ impl App {
             return true;
         }
         self.preview.markdown.focused = true;
-        let at = crate::app::preview::markdown::laid::offset_at(self, x, y);
+        let at = self.preview.markdown.offset_at(x, y);
         let inside = self
             .preview
             .markdown
@@ -1118,7 +1008,7 @@ impl App {
             self.request_redraw();
             return;
         }
-        if let Some(at) = crate::app::preview::markdown::laid::offset_at(self, x, y)
+        if let Some(at) = self.preview.markdown.offset_at(x, y)
             && let Some((anchor, _)) = self.preview.markdown.selection
         {
             self.preview.markdown.selection = Some((anchor, at));
@@ -1155,7 +1045,7 @@ impl App {
     /// 尚未排版时返回 `None`。
     pub(crate) fn markdown_find_doc(&mut self) -> Option<&winc_editor::Document> {
         if self.preview.markdown.find_doc.is_none() {
-            let text = crate::app::preview::markdown::laid::full_text(self)?;
+            let text = self.preview.markdown.full_text()?;
             let md = &mut self.preview.markdown;
             md.find_serial += 1;
             // 与实际文档、差异所用的标识互不重叠。
@@ -1169,7 +1059,7 @@ impl App {
     /// 不滚动，否则滚动到距顶部三分之一屏处。
     pub(crate) fn select_in_markdown(&mut self, from: usize, to: usize) {
         self.preview.markdown.selection = Some((from, to));
-        if let Some(y) = crate::app::preview::markdown::laid::offset_top(self, from) {
+        if let Some(y) = self.preview.markdown.offset_top(from) {
             let md = &mut self.preview.markdown;
             let scroll = md.scroll();
             if y < scroll || y + 40.0 > scroll + md.area.h {
@@ -1188,8 +1078,7 @@ impl App {
     pub(in crate::app) fn leave_markdown_mode(&mut self, mode: PreviewMode) -> Option<f32> {
         let doc = self.editor.active()?;
         let old = doc.preview_mode();
-        self.preview.markdown.followed = None;
-        self.preview.markdown.editing = None;
+        self.preview.markdown.live.leave_mode();
         if old == mode || doc.preview_kind() != Some(PreviewKind::Markdown) {
             return None;
         }

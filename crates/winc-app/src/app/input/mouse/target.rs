@@ -716,15 +716,11 @@ impl App {
         // 预览（分栏时位于右侧，仅预览时占满编辑区）先于编辑区判断，仅预览时两者重叠。
         let preview = self.preview.markdown.area;
         // 标题列表覆盖在预览之上，先于预览判断；图钉按钮所在的位置不属于滚动条。
-        let list = &self.preview.markdown.toc_list;
         let pin = crate::app::preview::markdown::TocTarget::Pin;
-        if list.track.contains(x, y)
-            && x >= list.track.right() - SCROLLBAR_HIT
-            && hit(&self.hits.markdown_toc, x, y) != Some(pin)
-            && let Some((scroll, content)) = list.scrollbar()
+        if hit(&self.hits.markdown_toc, x, y) != Some(pin)
+            && let Some(grab) = self.preview.markdown.toc.scrollbar_hit(x, y, SCROLLBAR_HIT)
         {
-            let thumb = scrollbar_thumb(list.track, scroll, content)?;
-            return Some((Scrollbar::MarkdownToc, grab(y, thumb.y, thumb.h)));
+            return Some((Scrollbar::MarkdownToc, grab));
         }
         if preview.contains(x, y) {
             // 比正文宽的表格的水平滚动条：位于表格显示区域的底边。

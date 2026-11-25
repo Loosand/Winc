@@ -259,7 +259,7 @@ impl App {
             .unwrap_or(field.kind)
     }
 
-    pub(super) fn property_panel(&self, fields: &[Field]) -> winc_preview::markdown::Block {
+    pub(crate) fn property_panel(&self, fields: &[Field]) -> winc_preview::markdown::Block {
         let imported = self.imported_property_types();
         let mut fields = fields.to_owned();
         for field in &mut fields {

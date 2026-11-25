@@ -7,7 +7,7 @@ fn cross_block_drag_keeps_the_same_layout_and_endpoints_on_release() {
     let source = "### 标题\n\n- [第一项](https://a.example)\n- [第二项](https://b.example)\n";
     for reverse in [false, true] {
         let (mut app, dir) = live_doc("md-select-across-heading", source);
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         let point =
             |needle: &str| point_of(&app, shown[..shown.find(needle).unwrap()].chars().count());
         let heading = point("标题");
@@ -18,7 +18,14 @@ fn cross_block_drag_keeps_the_same_layout_and_endpoints_on_release() {
         } else {
             (heading, end)
         };
-        let tops = app.preview.markdown.layout.as_ref().unwrap().tops.clone();
+        let tops = app
+            .preview
+            .markdown
+            .layout
+            .as_ref()
+            .unwrap()
+            .tops()
+            .to_vec();
         app.on_mouse_move(from.0, from.1);
         app.on_mouse_down_with_click_count(MouseButton::Left, Some(1));
         app.on_mouse_move(to.0, to.1);
@@ -26,15 +33,12 @@ fn cross_block_drag_keeps_the_same_layout_and_endpoints_on_release() {
         let selection = app.editor.active().unwrap().selection;
         assert!(!selection.is_empty());
         assert_eq!(selection.anchor > selection.head, reverse);
-        assert_eq!(app.preview.markdown.layout.as_ref().unwrap().tops, tops);
+        assert_eq!(app.preview.markdown.layout.as_ref().unwrap().tops(), tops);
         app.on_mouse_up(MouseButton::Left);
         settle(&mut app);
         assert_eq!(app.editor.active().unwrap().selection, selection);
-        assert_eq!(app.preview.markdown.layout.as_ref().unwrap().tops, tops);
-        assert_eq!(
-            crate::app::preview::markdown::laid::full_text(&app).unwrap(),
-            shown
-        );
+        assert_eq!(app.preview.markdown.layout.as_ref().unwrap().tops(), tops);
+        assert_eq!(app.preview.markdown.full_text().unwrap(), shown);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
@@ -50,7 +54,7 @@ fn a_selection_crossing_a_paragraph_paints_to_the_margin_only_on_the_first_row()
     };
     let first_y = screen_y("文");
     let last_y = screen_y("最后");
-    let x = layout.left + layout.width() - 12.0;
+    let x = layout.column_bounds().0 + layout.width() - 12.0;
     let pixel = |app: &App, y| {
         let image = app.frame.renderer.as_ref().unwrap().image().unwrap();
         let (x, y) = ((x * SCALE) as usize, (y * SCALE) as usize);
@@ -76,12 +80,12 @@ fn a_selection_crossing_paragraphs_paints_each_seam_without_a_gap() {
     app.select(0, source.len());
     settle(&mut app);
     let laid = app.preview.markdown.layout.as_ref().unwrap();
-    assert_eq!(laid.tops.len(), 3);
-    let origin_y = app.preview.markdown.area.y + laid.pad - app.preview.markdown.scroll();
+    assert_eq!(laid.tops().len(), 3);
+    let origin_y = laid.origin_y(app.preview.markdown.area.y, app.preview.markdown.scroll());
     let image = app.frame.renderer.as_ref().unwrap().image().unwrap();
-    let x = ((laid.left + 4.0) * SCALE) as usize;
+    let x = ((laid.column_bounds().0 + 4.0) * SCALE) as usize;
     let pixel = |y: usize| image.pixels[y * image.width as usize + x];
-    for &top in &laid.tops[1..] {
+    for &top in &laid.tops()[1..] {
         let y = ((origin_y + top) * SCALE).round() as usize;
         let above = pixel(y - 1);
         assert!(
@@ -97,7 +101,7 @@ fn keyboard_selection_keeps_an_already_open_link_editable() {
     let source = "- [名字](https://a.example)\n";
     let (mut app, dir) = live_doc("md-select-open-link", source);
     put_caret(&mut app, "https", false);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(shown.contains("https://a.example"), "{shown}");
     app.run(winc_editor::Command::MoveRight {
         word: false,
@@ -107,10 +111,7 @@ fn keyboard_selection_keeps_an_already_open_link_editable() {
     settle(&mut app);
     let selected = app.editor.active().unwrap().selection;
     assert_eq!(selected.to(), selected.from() + 1);
-    assert_eq!(
-        crate::app::preview::markdown::laid::full_text(&app).unwrap(),
-        shown
-    );
+    assert_eq!(app.preview.markdown.full_text().unwrap(), shown);
     assert!(app.ime.cursor.is_none());
     app.run(winc_editor::Command::Backspace { word: false });
     assert_eq!(doc_text(&app), "- [名字](ttps://a.example)\n");
@@ -144,9 +145,10 @@ fn ordered_list_uses_its_display_numbers_in_selection_and_at_the_caret() {
     let (mut app, dir) = live_doc("md-order-kept", "3) 第一项\n9) 第二项\n");
     let displays_numbers = |app: &App| {
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        let numbers: Vec<_> = laid.blocks[0]
-            .1
-            .items
+        let numbers: Vec<_> = laid
+            .block_at(0)
+            .unwrap()
+            .items()
             .iter()
             .filter_map(|item| match item {
                 Item::Text {
@@ -169,7 +171,7 @@ fn ordered_list_uses_its_display_numbers_in_selection_and_at_the_caret() {
 fn quote_markers_are_editable_at_the_start_of_a_quote_row() {
     let source = ">> 引用开头\n>> 续行内容\n";
     let (mut app, dir) = live_doc("md-quote-marker", source);
-    let shown = |app: &App| crate::app::preview::markdown::laid::full_text(app).unwrap();
+    let shown = |app: &App| app.preview.markdown.full_text().unwrap();
     assert!(!shown(&app).contains('>'));
     put_caret(&mut app, "引用开头", false);
     assert!(shown(&app).contains(">> 引用开头"), "{}", shown(&app));
@@ -192,7 +194,7 @@ fn markdown_selection_uses_the_click_count_supplied_by_the_platform() {
     let paragraph = "前文 Markdown 后文\n接在同一段";
     let source = format!("{paragraph}\n\n下一段\n");
     let (mut app, dir) = live_doc("md-native-click-count", &source);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let offset = shown[..shown.find("Markdown").unwrap()].chars().count() + 2;
     let (x, y) = point_of(&app, offset);
     app.on_mouse_move(x, y);
@@ -213,7 +215,7 @@ fn copying_and_cutting_a_whole_list_item_include_hidden_syntax() {
     let source = format!("{first}\n- 未选择\n");
     for (reverse, count) in [(false, 1), (true, 1), (false, 3)] {
         let (mut app, dir) = live_doc("md-select-wiki-item", &source);
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         let point =
             |needle: &str| point_of(&app, shown[..shown.find(needle).unwrap()].chars().count());
         let from = point("链接");
@@ -232,10 +234,7 @@ fn copying_and_cutting_a_whole_list_item_include_hidden_syntax() {
         assert_eq!(app.editor.active().unwrap().selection, selection);
         assert!(selection.from() > 0, "{reverse} {count}");
         assert_eq!(selection.to(), first.chars().count(), "{reverse} {count}");
-        assert_eq!(
-            crate::app::preview::markdown::laid::full_text(&app).unwrap(),
-            shown
-        );
+        assert_eq!(app.preview.markdown.full_text().unwrap(), shown);
         assert!(app.run_action(crate::keymap::Action::MarkdownCopy));
         assert_eq!(app.clipboard.copied.as_deref(), Some(first.as_str()));
         assert_eq!(app.editor.active().unwrap().selection, selection);
@@ -252,7 +251,7 @@ fn copying_and_cutting_a_whole_list_item_include_hidden_syntax() {
 #[test]
 fn dragging_part_of_a_wikilink_keeps_the_selection_inside_the_label() {
     let (mut app, dir) = live_doc("md-select-part-of-link", "- [[链接标题]] 说明\n");
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let at = shown[..shown.find("链接标题").unwrap()].chars().count();
     let (x, y) = point_of(&app, at);
     let (to_x, to_y) = point_of(&app, at + 2);
@@ -273,7 +272,7 @@ fn triple_click_keeps_a_wrapped_list_item_selected_during_mouse_movement() {
     );
     let source = format!("- 前一项\n- {item}\n- 后一项\n");
     let (mut app, dir) = live_doc("md-triple-wrapped-item", &source);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let point = |needle: &str| point_of(&app, shown[..shown.find(needle).unwrap()].chars().count());
     let (x, y) = point("图赏");
     assert!(point("末尾").1 > y, "the list item should wrap");
@@ -305,7 +304,7 @@ fn triple_click_drag_extends_by_markdown_paragraphs_in_either_direction() {
         ("后段的开头", winc_core::Selection::new(start, source_end)),
     ] {
         let (mut app, dir) = live_doc("md-triple-source-lines", &source);
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         let point = |needle: &str| {
             point_of(
                 &app,
@@ -333,7 +332,7 @@ fn triple_click_uses_unchanged_paragraphs_while_the_current_revision_is_parsing(
         &format!("{first}\n\n中间段\n\n末段\n"),
     );
     put_caret(&mut app, "末段", true);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let at = shown[..shown.find("第二行").unwrap()].chars().count() + 1;
     let (x, y) = point_of(&app, at);
     app.preview.markdown.cost = Some(std::time::Duration::from_secs(1));
@@ -353,7 +352,7 @@ fn triple_click_uses_unchanged_paragraphs_while_the_current_revision_is_parsing(
 fn triple_click_drag_keeps_its_initial_range_when_parsing_catches_up() {
     let (mut app, dir) = live_doc("md-triple-parsing", "第一行文字\n第二行文字\n\n下一段\n");
     put_caret(&mut app, "第二行文字", true);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let at = shown[..shown.find("第二行").unwrap()].chars().count() + 1;
     let (x, y) = point_of(&app, at);
     app.preview.markdown.cost = Some(std::time::Duration::from_secs(1));
@@ -552,7 +551,7 @@ fn copying_across_blocks_keeps_only_the_visible_selection() {
     let (a, b) = (char_at('乙'), char_at('丁'));
     for reverse in [false, true] {
         let (mut app, dir) = live_doc(&format!("md-copy-across-{reverse}"), source);
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         let point = |ch| point_of(&app, shown[..shown.find(ch).unwrap()].chars().count());
         let (from, to) = (point('乙'), point('丁'));
         let ((x, y), (x2, y2), expected) = if reverse {
@@ -584,7 +583,7 @@ fn copying_across_blocks_keeps_only_the_visible_selection() {
 #[test]
 fn dragging_across_blocks_keeps_the_layout_still() {
     let (mut app, dir) = live_doc("md-drag", "第一段文字\n\n第二段文字\n\n第三段文字\n");
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let at = |s: &str| shown[..shown.find(s).unwrap()].chars().count();
     let (x, y) = point_of(&app, at("第一段") + 1);
     let (x2, y2) = point_of(&app, at("第三段") + 1);
@@ -592,14 +591,11 @@ fn dragging_across_blocks_keeps_the_layout_still() {
     app.on_mouse_down(MouseButton::Left);
     paint(&mut app);
     // 按住鼠标拖动期间排版不变（尚未开始编辑，全部按排版显示），鼠标下方的内容不移位。
-    assert!(app.preview.markdown.layout.as_ref().unwrap().live.is_none());
+    assert!(!app.preview.markdown.layout.as_ref().unwrap().has_live());
     app.on_mouse_move(x2, y2 + 1.0);
     paint(&mut app);
-    assert!(app.preview.markdown.layout.as_ref().unwrap().live.is_none());
-    assert_eq!(
-        crate::app::preview::markdown::laid::full_text(&app).unwrap(),
-        shown
-    );
+    assert!(!app.preview.markdown.layout.as_ref().unwrap().has_live());
+    assert_eq!(app.preview.markdown.full_text().unwrap(), shown);
     app.on_mouse_up(MouseButton::Left);
     paint(&mut app);
     let doc = app.editor.active().unwrap();
@@ -633,8 +629,8 @@ fn backward_drag_over_multiline_emphasis_deletes_hidden_markers_and_restores_sel
         let glyph = text.chars().position(|c| c == needle).unwrap();
         let leading: f32 = span.advances[..glyph].iter().sum();
         (
-            laid.left + x + leading + fraction * span.advances[glyph],
-            preview.area.y + laid.pad - preview.scroll() + top + baseline - size * 0.3,
+            laid.column_bounds().0 + x + leading + fraction * span.advances[glyph],
+            laid.origin_y(preview.area.y, preview.scroll()) + top + baseline - size * 0.3,
         )
     };
     let from = glyph_edge('乙', 0.75);

@@ -79,24 +79,26 @@ fn toc_dash(p: &Palette, i: usize, current: Option<usize>) -> (Color, f32) {
 /// 图钉使列表在正文左侧保持展开，放不下时仍显示为指示条（见 [`super::draw`]）。标题少于两个时不绘制。
 /// 可点击的区域写入 `app.hits.markdown_toc`。
 pub(super) fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f32) {
-    app.preview.markdown.toc_current = None;
     let (Some(parsed), Some(laid)) = (
         app.preview.markdown.parsed.clone(),
         app.preview.markdown.layout.as_ref(),
     ) else {
+        app.preview.markdown.toc.reset_inactive();
         return;
     };
     // 可编辑的预览在正文左侧显示原文行号，指示条位于行号左侧。
     let gutter = number_room(app, frame);
-    if laid.left - gutter - area.x < TOC_ROOM {
+    let col_left = laid.column_bounds().0;
+    if col_left - gutter - area.x < TOC_ROOM {
+        app.preview.markdown.toc.reset_inactive();
         return;
     }
     // 各标题：（级别，文字，所在顶层块的上边缘，块高）。
     let headings: Vec<(u8, String, f32, f32)> = parsed
         .blocks
         .iter()
-        .zip(laid.tops.iter().zip(&laid.blocks))
-        .filter_map(|(block, (&top, (_, laid)))| match block {
+        .zip(laid.iter_blocks())
+        .filter_map(|(block, (_, top, laid))| match block {
             winc_preview::markdown::Block::Heading(level, inline) => {
                 Some((*level, heading_title(&inline.text), top, laid.height))
             }
@@ -105,31 +107,20 @@ pub(super) fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f3
         .filter(|(_, title, ..)| !title.is_empty())
         .collect();
     if headings.len() < 2 {
+        app.preview.markdown.toc.reset_inactive();
         return;
     }
     let p = app.palette;
     let scroll = drawn_scroll(app.preview.markdown.scroll());
     let max = (app.preview.markdown.height - area.h).max(0.0);
+    let tops: Vec<f32> = headings.iter().map(|h| h.2).collect();
     // 当前所在的一节：顶边已经滚到预览顶上（或以上）的最后一个标题。滚到底时，文末几个标题
     // 滚不到顶上，取屏幕里看得到的最后一个；在标题列表里点过、之后没有再滚动时，取点的那一个。
-    let picked = app
-        .preview
-        .markdown
-        .toc_picked
-        .filter(|&(i, at)| i < headings.len() && (at - scroll).abs() < 0.5)
-        .map(|(i, _)| i);
-    if picked.is_none() {
-        app.preview.markdown.toc_picked = None;
-    }
-    let current = picked.or_else(|| {
-        if max > 0.0 && scroll >= max - 0.5 {
-            headings
-                .iter()
-                .rposition(|h| h.2 < scroll + area.h - pad * 2.0)
-        } else {
-            headings.iter().rposition(|h| h.2 <= scroll + 1.0)
-        }
-    });
+    let current =
+        app.preview
+            .markdown
+            .toc
+            .resolve_current(scroll, max, scroll + area.h - pad * 2.0, &tops);
     let top_level = headings.iter().map(|h| h.0).min().unwrap_or(1);
     let depth = |level: u8| f32::from(level.saturating_sub(top_level).min(3));
 
@@ -137,17 +128,16 @@ pub(super) fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f3
     let room = (area.h - pad * 2.0).max(0.0);
     let step = (room / headings.len() as f32).clamp(TOC_BAR + 2.0, TOC_STEP);
     let shown = ((room / step).floor() as usize).min(headings.len());
-    let x0 = (laid.left - gutter - TOC_GAP - TOC_CURRENT).max(area.x + TOC_X);
+    let x0 = (col_left - gutter - TOC_GAP - TOC_CURRENT).max(area.x + TOC_X);
     let y0 = area.y + pad;
-    let left = laid.left;
+    let left = col_left;
     let width = laid.key.width;
 
     // 点过的标题在正文里铺一层强调色的底色，慢慢淡出。底色与正文同宽，左右与表格、代码块的
     // 边缘对齐。
-    if let Some((i, clock)) = app.preview.markdown.toc_flash
+    if let Some((i, alpha)) = app.preview.markdown.toc.flash_highlight()
         && let Some(&(_, _, top, height)) = headings.get(i)
     {
-        let alpha = 0.14 * (1.0 - clock.linear());
         let band = Rect::new(left, y0 - scroll + top, width, height);
         frame.rect_clipped(
             band,
@@ -159,15 +149,15 @@ pub(super) fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f3
     let size = app.fonts.ui;
     // 行里的横线离卡片左边的距离；鼠标停留展开时与指示条在同一列。
     let inner = TOC_PAD + 8.0;
-    // 停留满 `TOC_HOVER_DELAY` 后展开；鼠标移过指示条时不展开。
-    let rested = (app.preview.markdown.toc_rest)
-        .is_some_and(|since| since.elapsed() >= crate::theme::TOC_HOVER_DELAY);
     let on_bar = app.scrollbar_active(crate::layout::Scrollbar::MarkdownToc);
-    let hovered = rested && (on_bar || matches!(app.pointer.hover, Hover::MarkdownToc(_)));
+    let on_toc = on_bar || matches!(app.pointer.hover, Hover::MarkdownToc(_));
     let pinned = app.state.markdown_toc_pinned;
-    // 收起过渡中的列表仍然绘制，展开程度从 1 降到 0。
-    let closing = (app.preview.markdown.toc_close).map(|clock| 1.0 - clock.progress());
-    let widest = (hovered || pinned || closing.is_some()).then(|| {
+    let display =
+        app.preview
+            .markdown
+            .toc
+            .display_state(pinned, on_toc, area.x, gutter, TOC_PINNED_MIN);
+    let widest = display.open.then(|| {
         (headings.iter())
             .map(|(level, title, ..)| {
                 depth(*level) * TOC_INDENT + frame.measure(FontKind::Ui, size, title)
@@ -182,20 +172,7 @@ pub(super) fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f3
     // 钉住的列表放在行号左边。
     let edge = left - gutter - 8.0;
     let room = (edge - (area.x + 4.0)).max(0.0);
-    // 正文过渡期间按过渡结束后的位置判断能否容纳列表；取消钉住时按过渡开始前的位置。
-    let fits_at = |left: f32| left - gutter - 8.0 - (area.x + 4.0) >= TOC_PINNED_MIN;
-    let fits = fits_at(app.preview.markdown.toc_left);
-    let fitted = app.preview.markdown.toc_slide.is_some_and(fits_at);
-    let stays = pinned && fits;
-    // 钉住的程度：0 是鼠标停留展开的样子（卡片盖在指示条上），1 是钉住常驻的样子（靠着正文、
-    // 没有卡片的底色和边框）。钉住、取消钉住时在两者之间过渡。
-    let pinning = match app.preview.markdown.toc_pin {
-        Some((to, clock)) if fits || (!to && fitted) => {
-            let t = clock.progress();
-            if to { t } else { 1.0 - t }
-        }
-        _ => f32::from(u8::from(stays)),
-    };
+    let pinning = display.pinning;
     let hover_x = (x0 - inner).max(area.x + 4.0);
     let x = hover_x + (edge - natural.unwrap_or(0.0).min(room) - hover_x) * pinning;
     let dash_x = (x0 - hover_x) + (inner - (x0 - hover_x)) * pinning;
@@ -205,10 +182,9 @@ pub(super) fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f3
         floating + (w.min(room) - floating) * pinning
     });
     // 列表展开着时，指示条的各条由列表里的横线接替（从原位滑到各行），这里不再画。
-    let open = hovered || stays || closing.is_some();
+    let open = display.open;
     if !open {
-        app.preview.markdown.toc_top = None;
-        app.preview.markdown.toc_list = Default::default();
+        app.preview.markdown.toc.close_list();
     }
     let bar_y = |i: usize| y0 + i as f32 * step + TOC_BAR / 2.0;
     for i in (0..shown).filter(|_| !open) {
@@ -233,36 +209,30 @@ pub(super) fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f3
             .unwrap_or(0)
             .saturating_sub(rows / 2)
             .min(headings.len() - rows);
-        let list = &mut app.preview.markdown.toc_list;
-        let start = list.start(natural, current, (rows, headings.len()));
-        let h = rows as f32 * TOC_ROW + TOC_PAD * 2.0;
-        // 列表展开时，当前所在一节那一行的横线落在指示条里同一条的位置上，其余各行向上下展开，
-        // 横线看起来没有移动；没有当前所在的一节时以第一行对齐第一条。超出预览时再挪进来。
-        let anchor = current
-            .filter(|&c| c < shown && (start..start + rows).contains(&c))
-            .unwrap_or(start);
-        let bar_mid = bar_y(anchor.min(shown.saturating_sub(1)));
-        let row_mid = TOC_PAD + (anchor - start) as f32 * TOC_ROW + TOC_ROW / 2.0;
-        let fit_in = |y: f32| y.min(area.bottom() - 8.0 - h).max(area.y + 8.0);
-        // 悬停展开的列表位置在展开时确定，滚动预览时不变；钉住的列表首行对齐指示条的第一条。
-        // 二者之间按钉住的程度过渡。
-        let floating = app.preview.markdown.toc_top;
-        let floating = floating.map_or(bar_mid - row_mid, |top| area.y + top);
-        if !stays {
-            app.preview.markdown.toc_top = Some(fit_in(floating) - area.y);
-        }
-        let docked = bar_y(0) - (TOC_PAD + TOC_ROW / 2.0);
-        let y = fit_in(floating + (docked - floating) * pinning);
-        let card = Rect::new(x, y, w.max(0.0), h);
-        app.preview.markdown.toc_list.card = card;
-        app.preview.markdown.toc_list.row = TOC_ROW;
+        let docked_y = bar_y(0) - (TOC_PAD + TOC_ROW / 2.0);
+        let list_frame = app.preview.markdown.toc.layout_list(
+            crate::app::preview::markdown::TocListLayout {
+                area,
+                x,
+                w,
+                rows,
+                total: headings.len(),
+                natural,
+                current,
+                docked_y,
+                pad: TOC_PAD,
+                row_h: TOC_ROW,
+                pinning,
+                stays: display.stays,
+                shown,
+            },
+            bar_y,
+        );
+        let start = list_frame.start;
+        let card = list_frame.card;
         // 展开时卡片从指示条处展开并淡入，各行的横线从指示条中对应的位置移到所在的行；收起时相反。
         // 钉住的列表始终显示，不参与悬停展开。
-        let progress = match (stays, hovered, closing) {
-            (true, ..) => 1.0,
-            (false, false, Some(left)) => left,
-            _ => app.preview.markdown.toc_fade.map_or(1.0, |c| c.progress()),
-        };
+        let progress = display.progress;
         // 过渡期间按展开程度裁剪卡片：从指示条所在的位置扩展到整张卡片。
         let grow = |from: f32, to: f32| from + (to - from) * progress;
         let seed = bars.intersect(card);
@@ -273,7 +243,7 @@ pub(super) fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f3
             grow(seed.h, card.h),
         );
         // 收起中的列表不再响应鼠标。
-        let live = hovered || stays;
+        let live = display.live;
         let mut dashes = Vec::with_capacity(rows);
         frame.with_opacity(progress, |frame| {
             // 钉住后列表与预览融为一体：卡片的底色、边框和阴影随钉住的程度淡出。
@@ -342,13 +312,10 @@ pub(super) fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f3
             }
         });
         // 标题没有全部列出时带滚动条。
-        let track = Rect::new(card.x, card.y + TOC_PAD, card.w, rows as f32 * TOC_ROW);
-        app.preview.markdown.toc_list.track = track;
-        if let Some((scroll, content)) = app.preview.markdown.toc_list.scrollbar().filter(|_| live)
-        {
+        if let Some((scroll, content)) = list_frame.scrollbar.filter(|_| live) {
             let owner = app.editor.active().map_or(0, |doc| doc.id.0);
             let area = ScrollArea::MarkdownToc;
-            crate::view::draw_scrollbar(app, frame, area, owner, track, scroll, content);
+            crate::view::draw_scrollbar(app, frame, area, owner, list_frame.track, scroll, content);
         }
         // 横线不随卡片淡入，始终不透明：展开的第一帧与指示条完全重合。
         for (i, mid) in dashes {
@@ -368,8 +335,7 @@ pub(super) fn draw_toc(app: &mut App, frame: &mut Frame<'_>, area: Rect, pad: f3
     }
     hits.push((bars, TocTarget::Bars));
     app.hits.markdown_toc = hits;
-    app.hits.markdown_toc_tops = headings.iter().map(|h| h.2).collect();
-    app.preview.markdown.toc_current = current;
+    app.hits.markdown_toc_tops = tops;
 }
 
 /// 标题列表里显示的标题文字：硬换行换成空格，去掉图片占位符和控制字符，首尾不留空白。

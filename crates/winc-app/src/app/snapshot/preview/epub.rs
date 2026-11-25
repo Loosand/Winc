@@ -180,11 +180,7 @@ fn contents_jumps_and_tab_switches_stay_put_when_the_layout_changes() {
         OutlineKind::Anchors(anchors) => anchors[2].clone().unwrap(),
         _ => panic!("EPUB 的大纲是目录"),
     };
-    let top = |app: &App| {
-        crate::app::preview::markdown::laid::anchor_box(app, &anchor)
-            .unwrap()
-            .0
-    };
+    let top = |app: &App| app.preview.markdown.anchor_box(&anchor).unwrap().0;
 
     // 目录：转到「歇脚」，排版变高之后仍对齐到那里。
     click_row(&mut app, 2);

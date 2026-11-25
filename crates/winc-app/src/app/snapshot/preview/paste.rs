@@ -188,7 +188,9 @@ fn pasting_a_web_table_restores_the_replaced_selection_on_undo() {
     assert!(app.live_leaf().is_none_or(|leaf| !leaf.table));
     assert!(caret_screen_y(&app).is_finite());
     assert!(
-        !crate::app::preview::markdown::laid::full_text(&app)
+        !app.preview
+            .markdown
+            .full_text()
             .unwrap()
             .contains("| --- |")
     );
@@ -220,7 +222,9 @@ fn pasting_a_web_table_places_ime_preedit_below_its_last_cell() {
     paint(&mut app);
     let laid = app.preview.markdown.layout.as_ref().unwrap();
     let caret = app.ime.cursor.expect("IME candidate position");
-    let table_bottom = app.preview.markdown.area.y + laid.pad + laid.blocks[0].1.height
+    let table_bottom = app.preview.markdown.area.y
+        + (laid.body_bottom() - laid.height)
+        + laid.block_at(0).unwrap().height
         - app.preview.markdown.scroll();
     assert!(
         caret.y >= table_bottom,

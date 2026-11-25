@@ -15,7 +15,7 @@ fn markdown_can_render_across_the_editing_area() {
     assert!(app.hits.markdown_links.len() >= 2);
     // 图片已读取，并按显示大小绘制。
     assert!(matches!(
-        app.preview.markdown.images.values().next(),
+        app.preview.markdown.images.first_slot(),
         Some(crate::app::preview::markdown::ImageSlot::Ready { pixels, .. }) if !pixels.is_empty()
     ));
 
@@ -96,7 +96,7 @@ fn math_and_diagrams_show_the_result_below_the_source() {
         put_caret(&mut app, "A", false);
         app.run(winc_editor::Command::Insert(" ".into()));
         settle(&mut app);
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         // 光标不在围栏行上时只显示围栏之间的原文，不显示围栏。
         assert!(shown.contains(" A") && !shown.contains("```"), "{shown}");
         assert!(!shown.contains("$$"), "{shown}");
@@ -127,15 +127,18 @@ fn clicking_an_anchor_link_scrolls_to_the_heading() {
     super::click(&mut app, (rect.x + 2.0, rect.y + 2.0));
     assert_eq!(app.preview.markdown.scroll(), 0.0);
     command_click(&mut app, (rect.x + 2.0, rect.y + 2.0));
-    let top = crate::app::preview::markdown::laid::anchor_top(&app, "安装").unwrap();
+    let top = app.preview.markdown.anchor_top("安装").unwrap();
     assert!(top > 0.0);
     // 标题滚动到顶部；其后的内容不足一屏时滚动到底为止。
     let max = app.preview.markdown.height - app.preview.markdown.area.h;
     assert_eq!(app.preview.markdown.scroll(), top.min(max));
     // 脚注的编号和末尾的 ↩ 能找到彼此。
-    let note = crate::app::preview::markdown::laid::anchor_top(&app, "fn-1").expect("脚注有锚点");
-    let back =
-        crate::app::preview::markdown::laid::anchor_top(&app, "fnref-1").expect("能跳回引用处");
+    let note = app.preview.markdown.anchor_top("fn-1").expect("脚注有锚点");
+    let back = app
+        .preview
+        .markdown
+        .anchor_top("fnref-1")
+        .expect("能跳回引用处");
     assert!(back > top && note > back);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -191,7 +194,7 @@ fn links_to_headings_in_other_files_open_there() {
     let doc = app.editor.active().unwrap();
     assert!(doc.path.as_ref().unwrap().ends_with("docs/guide.md"));
     assert_eq!(doc.preview_mode(), PreviewMode::Preview);
-    let top = crate::app::preview::markdown::laid::anchor_top(&app, "用法").unwrap();
+    let top = app.preview.markdown.anchor_top("用法").unwrap();
     assert!(top > 0.0);
     assert!(app.preview.markdown.pending_anchor.is_none());
     let max = app.preview.markdown.height - app.preview.markdown.area.h;
@@ -356,7 +359,10 @@ fn markdown_images_render_one_size_at_a_time() {
         pixels: Vec::new(),
         drawing: Vec::new(),
     };
-    app.preview.markdown.images.insert(path.clone(), slot);
+    app.preview
+        .markdown
+        .images
+        .insert_for_test(path.clone(), slot);
     // 拖动改变窗口大小：每帧需要一个新尺寸，正在绘制时不再提交，只有第一个在后台绘制。
     for width in 100..110 {
         app.request_markdown_pixels(&path, (width, 50));
@@ -412,10 +418,17 @@ fn the_preview_shows_a_heading_indicator() {
         app.hits.markdown_toc_tops[1].min(max)
     );
     paint(&mut app);
-    assert_eq!(app.preview.markdown.toc_current, Some(1));
+    assert_eq!(app.preview.markdown.toc.current_heading(), Some(1));
 
     // 指示条位于正文和原文行号的左侧，不与二者重叠，也不超出预览区域。
-    let left = app.preview.markdown.layout.as_ref().unwrap().left;
+    let left = app
+        .preview
+        .markdown
+        .layout
+        .as_ref()
+        .unwrap()
+        .column_bounds()
+        .0;
     let area = app.preview.markdown.area;
     // 列表展开着时卡片也记作 `Bars`，指示条本身总是最后一项。
     let bars = app.hits.markdown_toc.last().unwrap().0;
@@ -427,15 +440,22 @@ fn the_preview_shows_a_heading_indicator() {
     // 点击开头的标题后滚动到底：文末的标题无法滚动到顶部，当前所在的一节取屏幕里最后一个标题。
     app.press_toc(TocTarget::Heading(0));
     paint(&mut app);
-    assert_eq!(app.preview.markdown.toc_current, Some(0));
+    assert_eq!(app.preview.markdown.toc.current_heading(), Some(0));
     app.scroll_markdown_to(max);
     paint(&mut app);
-    assert_eq!(app.preview.markdown.toc_current, Some(1));
+    assert_eq!(app.preview.markdown.toc.current_heading(), Some(1));
 
     // 分栏时预览较窄：正文同样为指示条留出位置，二者不重叠。
     app.set_preview_mode(PreviewMode::Split);
     settle(&mut app);
-    let left = app.preview.markdown.layout.as_ref().unwrap().left;
+    let left = app
+        .preview
+        .markdown
+        .layout
+        .as_ref()
+        .unwrap()
+        .column_bounds()
+        .0;
     let area = app.preview.markdown.area;
     let bars = app.hits.markdown_toc.last().expect("分栏时也有指示条").0;
     assert!(bars.right() <= left && bars.x >= area.x, "{bars:?} {left}");
@@ -482,7 +502,7 @@ fn block_markers_take_effect_after_a_space() {
     let doc = app.editor.active_mut().unwrap();
     doc.selection = winc_core::Selection::point(4);
     settle(&mut app);
-    let shown = |app: &App| crate::app::preview::markdown::laid::full_text(app).unwrap();
+    let shown = |app: &App| app.preview.markdown.full_text().unwrap();
     for marker in ["-", "1.", "#", ">"] {
         app.run(winc_editor::Command::Insert(marker.into()));
         paint(&mut app);
@@ -556,7 +576,7 @@ fn code_blocks_are_created_and_removed_as_a_whole() {
     paint(&mut app);
     assert_eq!(with_caret(&app), "前文\n\n```|\n```\n\n后文\n");
     // 后文没有成为代码。
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(
         shown.ends_with("后文\n") || shown.ends_with("后文"),
         "{shown}"
@@ -726,7 +746,7 @@ fn the_heading_list_stays_put_while_the_preview_scrolls() {
         let top = app.hits.markdown_toc_tops[heading];
         app.scroll_markdown_to(top);
         paint(app);
-        assert_eq!(app.preview.markdown.toc_current, Some(heading));
+        assert_eq!(app.preview.markdown.toc.current_heading(), Some(heading));
     };
 
     let bars = card(&app);
@@ -742,7 +762,7 @@ fn the_heading_list_stays_put_while_the_preview_scrolls() {
     let area = app.preview.markdown.area;
     app.on_mouse_move(area.x + area.w / 2.0, area.y + area.h / 2.0);
     paint(&mut app);
-    assert_eq!(app.preview.markdown.toc_top, None);
+    assert_eq!(app.preview.markdown.toc.floating_top(), None);
 
     app.state.markdown_toc_pinned = true;
     settle(&mut app);

@@ -1,11 +1,11 @@
 //! 可编辑 Markdown 的源码行号。
 
-use super::{App, FontKind, Frame, Rect, drawn_scroll, source_lines};
+use super::{App, FontKind, Frame, Rect, drawn_scroll};
 
 /// 原文行号的右边离正文左边的距离（逻辑像素）：与编辑区行号栏和文字之间的间距相近。
 const NUMBER_GAP: f32 = 12.0;
 
-/// 在可编辑预览的左侧留白里写原文行号（见 `laid::source_lines`），光标所在的行颜色深一些。
+/// 在可编辑预览的左侧留白里写原文行号（见 `Laid::source_lines`），光标所在的行颜色深一些。
 ///
 /// 关闭行号设置时、只读的预览中不写；留白放不下最大的行号时也不写。
 pub(super) fn draw_source_numbers(app: &App, frame: &mut Frame<'_>, area: Rect) {
@@ -22,13 +22,14 @@ pub(super) fn draw_source_numbers(app: &App, frame: &mut Frame<'_>, area: Rect) 
     let p = app.palette;
     let size = app.fonts.code;
     let cell = frame.measure(FontKind::Mono, size, "0");
-    let right = laid.left - NUMBER_GAP;
-    if laid.left - number_room(app, frame) < area.x + 4.0 {
+    let col_left = laid.column_bounds().0;
+    let right = col_left - NUMBER_GAP;
+    if col_left - number_room(app, frame) < area.x + 4.0 {
         return;
     }
     let lit = selected_rows(laid, rope, &doc.selection);
-    let top = drawn_scroll(app.preview.markdown.scroll()) - laid.pad;
-    let lines = source_lines(laid, rope, top..top + area.h);
+    let top = laid.content_y(drawn_scroll(app.preview.markdown.scroll()));
+    let lines = laid.source_lines(rope, top..top + area.h);
     for (line, y) in lines {
         let number = (line + 1).to_string();
         let x = right - number.len() as f32 * cell;
@@ -67,14 +68,13 @@ fn selected_rows(
     rope: &ropey::Rope,
     selection: &winc_core::Selection,
 ) -> Lit {
-    use crate::app::preview::markdown::laid::point_of;
     let (from, to) = (
         selection.anchor.min(selection.head),
         selection.anchor.max(selection.head),
     );
     let byte = |c: usize| rope.char_to_byte(c.min(rope.len_chars()));
-    match (point_of(laid, byte(from)), point_of(laid, byte(to))) {
-        (Some((_, a, _)), Some((_, b, h))) => Lit::Rows(a - laid.pad, b + h - laid.pad),
+    match (laid.point_of(byte(from)), laid.point_of(byte(to))) {
+        (Some((_, a, _)), Some((_, b, h))) => Lit::Rows(laid.content_y(a), laid.content_y(b + h)),
         _ => {
             let line = |c: usize| rope.char_to_line(c.min(rope.len_chars()));
             Lit::Lines(line(from), line(to))

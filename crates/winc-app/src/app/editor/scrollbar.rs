@@ -232,7 +232,7 @@ impl App {
     /// 开始绘制新的一帧：清除上一帧记下的可滚动区域，由本帧绘制的滚动条重新登记。
     pub(crate) fn begin_scrollbars(&mut self) {
         self.text_content_w = 0.0;
-        self.preview.markdown.catch_up.pending = false;
+        self.preview.markdown.begin_frame();
         for reveal in &mut self.scroll.bars.reveals {
             reveal.area = None;
         }

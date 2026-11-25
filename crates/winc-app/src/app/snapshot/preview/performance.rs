@@ -248,7 +248,10 @@ fn time_large_markdown() {
     paint(&mut app);
     eprintln!("改一个字后重排加两帧 {:?}", started.elapsed());
     // 一张图片读取完成：只重排用到该图片的块。
-    app.preview.markdown.loaded.push(dir.join("other.png"));
+    app.preview
+        .markdown
+        .images
+        .mark_loaded_for_test(dir.join("other.png"));
     let started = std::time::Instant::now();
     paint(&mut app);
     eprintln!("读好一张图片后重排加两帧 {:?}", started.elapsed());

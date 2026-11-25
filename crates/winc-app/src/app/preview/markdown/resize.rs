@@ -97,7 +97,8 @@ impl App {
     pub(crate) fn start_image_resize(&mut self, image: ImageAt, x: f32) {
         let width = image.rect.w;
         let centered = (self.preview.markdown.layout.as_ref()).is_some_and(|l| {
-            let column = l.left + l.key.width / 2.0;
+            let (left, right) = l.column_bounds();
+            let column = (left + right) / 2.0;
             (image.rect.x + image.rect.w / 2.0 - column).abs() < 1.0 && width < l.key.width
         });
         self.preview.markdown.resizing = Some(Resizing {
@@ -172,7 +173,7 @@ impl App {
             _ => a,
         };
         let old = doc.selection;
-        let editing = self.preview.markdown.editing == Some(doc.id);
+        let editing = self.preview.markdown.live.caret_shown_for(Some(doc.id));
         doc.collapse_selections();
         doc.selection = winc_core::Selection::new(a, b);
         self.preview.markdown.slide = true;
@@ -181,11 +182,14 @@ impl App {
             doc.selection = winc_core::Selection::new(keep(old.anchor), keep(old.head));
         }
         // 改写不算作在预览中编辑：未在编辑时，光标所在的块不显示原文。
-        if !editing
-            && let (Some(source), Some(doc)) = (self.live_caret_source(), self.editor.active())
-        {
-            self.preview.markdown.followed = Some((doc.id, source, doc.revision));
-        }
+        let current = self
+            .live_caret_source()
+            .zip(self.editor.active())
+            .map(|(source, doc)| (doc.id, source, doc.revision));
+        self.preview
+            .markdown
+            .live
+            .sync_after_programmatic_edit(editing, false, current);
         true
     }
 
@@ -202,8 +206,6 @@ impl App {
         if md.checked != Some(revision) {
             return None;
         }
-        let at = laid.blocks.get(image.block)?.1.image_source(image.item)? as usize;
-        let range = laid.ranges.get(image.block)?;
-        Some((range.start + at, range.end, at == 0))
+        laid.image_source_at(image.block, image.item)
     }
 }

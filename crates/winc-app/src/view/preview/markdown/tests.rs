@@ -11,9 +11,8 @@ pub(crate) fn overflow(app: &App) -> f32 {
         return 0.0;
     };
     let right = laid
-        .blocks
-        .iter()
-        .flat_map(|block| block.1.items.iter())
+        .iter_blocks()
+        .flat_map(|(_, _, block)| block.items().iter())
         .filter_map(|item| match item {
             Item::Fill { rect, .. } | Item::Path { rect, .. } | Item::Polygon { rect, .. } => {
                 Some(rect.right())
@@ -29,9 +28,9 @@ pub(crate) fn table_cells(app: &App) -> Vec<Vec<Rect>> {
     let Some(laid) = app.preview.markdown.layout.as_ref() else {
         return Vec::new();
     };
-    let origin = app.preview.markdown.area.y + laid.pad - app.preview.markdown.scroll();
-    for (block, top) in laid.blocks.iter().zip(&laid.tops) {
-        for item in block.1.items.iter() {
+    let origin = laid.origin_y(app.preview.markdown.area.y, app.preview.markdown.scroll());
+    for (_, top, block) in laid.iter_blocks() {
+        for item in block.items() {
             if let Item::Table {
                 rect, cols, rows, ..
             } = item
@@ -40,7 +39,7 @@ pub(crate) fn table_cells(app: &App) -> Vec<Vec<Rect>> {
                 return rows
                     .iter()
                     .map(|h| {
-                        let mut x = laid.left + rect.x;
+                        let mut x = laid.column_bounds().0 + rect.x;
                         let row = cols
                             .iter()
                             .map(|w| {

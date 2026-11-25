@@ -208,20 +208,23 @@ fn shoot_preview_heading_indicator() {
         shoot(&mut app, open);
         // 展开到一半：横线正从指示条滑向各行，卡片和文字淡入到一半。
         let at = crate::app::animation::TOC_FADE;
-        app.preview.markdown.toc_fade = Some(crate::app::animation::Clock::frozen(at / 2, at));
+        app.preview
+            .markdown
+            .toc
+            .set_fade_for_test(Some(crate::app::animation::Clock::frozen(at / 2, at)));
         let half = if dark {
             "md-toc-opening-dark"
         } else {
             "md-toc-opening-light"
         };
         shoot(&mut app, half);
-        app.preview.markdown.toc_fade = None;
+        app.preview.markdown.toc.set_fade_for_test(None);
         // 点击最后一个标题：滚动到底，它成为当前所在的一节，正文里的底色淡出到三成。
         let last = app.hits.markdown_toc_tops.len() - 1;
         app.press_toc(TocTarget::Heading(last));
         let at = crate::app::animation::TOC_FLASH;
         let clock = crate::app::animation::Clock::frozen(at * 3 / 10, at);
-        app.preview.markdown.toc_flash = Some((last, clock));
+        app.preview.markdown.toc.set_flash_for_test(last, clock);
         app.on_mouse_move(900.0, 400.0);
         paint(&mut app);
         let picked = if dark {

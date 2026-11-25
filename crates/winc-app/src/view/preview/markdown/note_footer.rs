@@ -170,13 +170,7 @@ pub(super) fn follow_citation(app: &mut App) {
     }
     let md = &mut app.preview.markdown;
     if let Some(layout) = &md.layout
-        && let Some(top) = layout.caret_point(byte).map(|(_, top, _)| top).or_else(|| {
-            let i = layout
-                .ranges
-                .partition_point(|range| range.start <= byte)
-                .checked_sub(1)?;
-            Some(layout.tops[i] + layout.pad)
-        })
+        && let Some(top) = layout.source_top(byte)
     {
         md.scroll_to(top - md.area.h / 3.0);
     }

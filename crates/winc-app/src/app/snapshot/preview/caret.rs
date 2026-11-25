@@ -4,26 +4,25 @@ use super::*;
 
 #[test]
 fn the_caret_paragraph_keeps_its_look() {
-    use crate::app::preview::markdown::laid::full_text;
     use winit::keyboard::{Key, NamedKey};
 
     let (mut app, dir) = live_doc(
         "md-reveal",
         "第一段 **粗** 和 [链接](https://a.dev)。\n\n第二段\n",
     );
-    let laid = full_text(&app).unwrap();
+    let laid = app.preview.markdown.full_text().unwrap();
     // 光标未接触标记时保持排版后的外观，不显示原文。
     put_caret(&mut app, "第一段", true);
-    assert_eq!(full_text(&app).unwrap(), laid);
+    assert_eq!(app.preview.markdown.full_text().unwrap(), laid);
     // 只显示光标所接触元素的标记。
     put_caret(&mut app, "粗", false);
-    let shown = full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(
         shown.contains("**粗**") && !shown.contains("](https"),
         "{shown}"
     );
     put_caret(&mut app, "链接", true);
-    let shown = full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(
         shown.contains("[链接](https://a.dev)") && !shown.contains("**"),
         "{shown}"
@@ -38,18 +37,24 @@ fn the_caret_paragraph_keeps_its_look() {
     put_caret(&mut app, "粗", true);
     app.ime.preedit = "中文".into();
     paint(&mut app);
-    let shown = full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(shown.contains("粗中文** 和"), "{shown}");
     // 焦点移到终端后组字文字属于终端：预览不再显示，也不绘制光标、不占用候选窗的位置。
     app.focus = Focus::Terminal;
     app.ime.cursor = None;
     paint(&mut app);
-    let shown = full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(!shown.contains("中文"), "{shown}");
     assert!(app.ime.cursor.is_none());
     app.focus = Focus::Editor;
     paint(&mut app);
-    assert!(full_text(&app).unwrap().contains("粗中文** 和"));
+    assert!(
+        app.preview
+            .markdown
+            .full_text()
+            .unwrap()
+            .contains("粗中文** 和")
+    );
     assert!(app.ime.cursor.is_some());
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -75,7 +80,10 @@ fn repeated_enter_moves_the_visible_caret_down_one_row_at_a_time() {
                 .unwrap()
                 .caret_point(app.live_caret_source().unwrap())
                 .map_or(
-                    app.preview.markdown.layout.as_ref().unwrap().pad,
+                    {
+                        let l = app.preview.markdown.layout.as_ref().unwrap();
+                        l.body_bottom() - l.height
+                    },
                     |(_, y, _)| y,
                 )
         };
@@ -106,7 +114,7 @@ fn repeated_enter_moves_the_visible_caret_down_one_row_at_a_time() {
 fn intentional_blank_rows_stay_visible_after_leaving_the_gap_and_reopening() {
     use winit::keyboard::{Key, NamedKey};
     let (mut app, dir) = live_doc("md-keep-blank-rows", "第一段\n\n第二段\n");
-    let second = |app: &App| app.preview.markdown.layout.as_ref().unwrap().tops[1];
+    let second = |app: &App| app.preview.markdown.layout.as_ref().unwrap().tops()[1];
     let original = second(&app);
     put_caret(&mut app, "第一段", true);
     for _ in 0..3 {
@@ -160,11 +168,11 @@ fn block_separators_are_spacing_in_the_editable_preview() {
         let blank = first_end + eol.len();
         let (x, y) = {
             let laid = app.preview.markdown.layout.as_ref().unwrap();
-            let gap_top = laid.tops[0] + laid.blocks[0].1.height;
-            let gap_bottom = laid.tops[1];
+            let gap_top = laid.tops()[0] + laid.block_at(0).unwrap().height;
+            let gap_bottom = laid.tops()[1];
             (
-                laid.left + 15.0,
-                app.preview.markdown.area.y + laid.pad - app.preview.markdown.scroll()
+                laid.column_bounds().0 + 15.0,
+                laid.origin_y(app.preview.markdown.area.y, app.preview.markdown.scroll())
                     + (gap_top + gap_bottom) / 2.0,
             )
         };
@@ -220,11 +228,11 @@ fn heading_separators_are_clickable_empty_lines() {
         let (mut app, dir) = live_doc("md-heading-separator", &source);
         let (x, y) = {
             let laid = app.preview.markdown.layout.as_ref().unwrap();
-            let top = laid.tops[0] + laid.blocks[0].1.height;
+            let top = laid.tops()[0] + laid.block_at(0).unwrap().height;
             (
-                laid.left + 10.0,
-                app.preview.markdown.area.y + laid.pad - app.preview.markdown.scroll()
-                    + (top + laid.tops[1]) / 2.0,
+                laid.column_bounds().0 + 10.0,
+                laid.origin_y(app.preview.markdown.area.y, app.preview.markdown.scroll())
+                    + (top + laid.tops()[1]) / 2.0,
             )
         };
         super::click(&mut app, (x, y));
@@ -249,7 +257,7 @@ fn a_click_below_the_body_opens_one_empty_paragraph() {
         let below = |app: &App| {
             let laid = app.preview.markdown.layout.as_ref().unwrap();
             (
-                laid.left + 10.0,
+                laid.column_bounds().0 + 10.0,
                 app.preview.markdown.area.y + laid.height() - app.preview.markdown.scroll() + 20.0,
             )
         };
@@ -278,7 +286,7 @@ fn a_blank_paragraph_at_the_end_has_a_body_height_caret() {
     let body_caret = app.ime.cursor.unwrap();
     let area = app.preview.markdown.area;
     let layout = app.preview.markdown.layout.as_ref().unwrap();
-    let x = layout.left + 10.0;
+    let x = layout.column_bounds().0 + 10.0;
     let y = area.y + layout.height() - app.preview.markdown.scroll() + 20.0;
     super::click(&mut app, (x, y));
     settle(&mut app);
@@ -297,12 +305,12 @@ fn a_separator_after_properties_places_the_caret_in_the_body() {
     let body = source.find("##").unwrap();
     let (x, y) = {
         let laid = app.preview.markdown.layout.as_ref().unwrap();
-        let gap_top = laid.tops[0] + laid.blocks[0].1.height;
-        let gap_bottom = laid.tops[1];
+        let gap_top = laid.tops()[0] + laid.block_at(0).unwrap().height;
+        let gap_bottom = laid.tops()[1];
         assert!(gap_bottom > gap_top);
         (
-            laid.left + 15.0,
-            app.preview.markdown.area.y + laid.pad - app.preview.markdown.scroll()
+            laid.column_bounds().0 + 15.0,
+            laid.origin_y(app.preview.markdown.area.y, app.preview.markdown.scroll())
                 + gap_top
                 + (gap_bottom - gap_top) * 0.25,
         )
@@ -325,15 +333,18 @@ fn click_and_vertical_arrows_reach_each_blank_row() {
         let (mut app, dir) = live_doc(&format!("md-click-blank-{name}"), &source);
         let gap = |app: &App| {
             let laid = app.preview.markdown.layout.as_ref().unwrap();
-            (laid.tops[0] + laid.blocks[0].1.height, laid.tops[1])
+            (
+                laid.tops()[0] + laid.block_at(0).unwrap().height,
+                laid.tops()[1],
+            )
         };
         let (top, bottom) = gap(&app);
         let first = "甲".len();
         for row in 0..3 {
             put_caret(&mut app, "乙", false);
             let laid = app.preview.markdown.layout.as_ref().unwrap();
-            let x = laid.left + 45.0;
-            let y = app.preview.markdown.area.y + laid.pad - app.preview.markdown.scroll()
+            let x = laid.column_bounds().0 + 45.0;
+            let y = laid.origin_y(app.preview.markdown.area.y, app.preview.markdown.scroll())
                 + top
                 + (bottom - top) * (row as f32 + 0.5) / 3.0;
             super::click(&mut app, (x, y));
@@ -391,7 +402,7 @@ fn blank_rows_at_document_edges_and_after_properties_are_clickable() {
             let y = app.preview.markdown.area.y - app.preview.markdown.scroll() + top + h / 2.0;
             assert!(y > previous_y);
             previous_y = y;
-            let x = laid.left + 32.0;
+            let x = laid.column_bounds().0 + 32.0;
             super::click(&mut app, (x, y));
             settle(&mut app);
             assert_eq!(app.live_caret_source(), Some(offset), "{name}");
@@ -457,7 +468,7 @@ fn clicking_a_block_formula_puts_the_caret_in_its_source() {
     ] {
         let text = format!("前文\n\n{formula}\n\n后文\n");
         let (mut app, dir) = live_doc(name, &text);
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         let at = |c: &str| shown[..shown.find(c).unwrap()].chars().count();
         let (above, below) = (point_of(&app, at("前文")), point_of(&app, at("后文")));
         // 公式在两段之间居中显示：从上往下找第一处落在公式上的点（正文的字不会落到公式的原文处）。
@@ -466,9 +477,7 @@ fn clicking_a_block_formula_puts_the_caret_in_its_source() {
         let x = area.x + area.w / 2.0;
         let middle = (above.1 as usize..below.1 as usize)
             .map(|y| (x, y as f32))
-            .find(|&(x, y)| {
-                crate::app::preview::markdown::laid::source_at(&app, x, y) == Some(start)
-            })
+            .find(|&(x, y)| app.preview.markdown.source_at(x, y) == Some(start))
             .expect("点得到公式");
         app.on_mouse_move(middle.0, middle.1);
         app.on_mouse_down(MouseButton::Left);
@@ -481,7 +490,7 @@ fn clicking_a_block_formula_puts_the_caret_in_its_source() {
             with_caret(&app)
         );
         // 光标在公式里：公式显示原文，可以直接编辑。
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         assert!(shown.contains("x^2 + y^2 = z^2"), "{name}: {shown}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -492,7 +501,7 @@ fn clicking_a_block_formula_puts_the_caret_in_its_source() {
 fn clicking_inline_math_puts_the_caret_in_its_source() {
     let text = "前文\n\n$\\alpha\\beta\\gamma \\nabla\\partial\\infty$\n\n后文\n";
     let (mut app, dir) = live_doc("md-inline-math", text);
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let at = |c: &str| shown[..shown.find(c).unwrap()].chars().count();
     let (above, below) = (point_of(&app, at("前文")), point_of(&app, at("后文")));
     let tex = text.find("\\alpha").unwrap();
@@ -505,7 +514,7 @@ fn clicking_inline_math_puts_the_caret_in_its_source() {
                 .map(move |x| (x, y))
         })
         .map(|(x, y)| (x as f32, y as f32))
-        .find(|&(x, y)| crate::app::preview::markdown::laid::source_at(&app, x, y) == Some(tex))
+        .find(|&(x, y)| app.preview.markdown.source_at(x, y) == Some(tex))
         .expect("点得到公式");
     app.on_mouse_move(spot.0, spot.1);
     app.on_mouse_down(MouseButton::Left);
@@ -556,7 +565,7 @@ fn source_lookup_finds_footnotes_in_display_order() {
     let (app, dir) = live_doc("md-focus-footnote-source", source);
     let laid = app.preview.markdown.layout.as_ref().unwrap();
     let footnote = laid.block_at_source(source.find("note").unwrap());
-    assert_eq!(footnote, Some(laid.blocks.len() - 1));
+    assert_eq!(footnote, Some(laid.block_count() - 1));
     assert_eq!(laid.block_at_source(source.find("next").unwrap()), Some(1));
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -685,7 +694,7 @@ fn document_end_scrolls_an_offscreen_last_paragraph_into_view() {
     let (last_top, viewport_height) = {
         let laid = app.preview.markdown.layout.as_ref().unwrap();
         (
-            laid.tops.last().unwrap() + laid.pad,
+            laid.tops().last().unwrap() + (laid.body_bottom() - laid.height),
             app.preview.markdown.area.h,
         )
     };

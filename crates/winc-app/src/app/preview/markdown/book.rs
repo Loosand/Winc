@@ -26,19 +26,14 @@ pub(crate) struct BookPlaces {
 
 /// 排版结果 `laid` 中滚动位置 `scroll` 对应的阅读位置；没有块时为 `None`。
 fn place_at(laid: &Laid, scroll: f32) -> Option<Place> {
-    let block = laid
-        .tops
-        .partition_point(|&top| top <= scroll)
-        .checked_sub(1)?;
-    let top = laid.tops[block];
-    let bottom = laid.tops.get(block + 1).copied().unwrap_or(laid.height);
+    let block = laid.block_at_y(scroll)?;
+    let (top, bottom) = laid.block_span_y(block)?;
     Some((block, (scroll - top) / (bottom - top).max(1.0)))
 }
 
 /// 阅读位置 `place` 在排版结果 `laid` 中的滚动位置；块号超出块数（文件已被替换）时为 `None`。
 fn scroll_of(laid: &Laid, (block, at): Place) -> Option<f32> {
-    let top = *laid.tops.get(block)?;
-    let bottom = laid.tops.get(block + 1).copied().unwrap_or(laid.height);
+    let (top, bottom) = laid.block_span_y(block)?;
     Some(top + at * (bottom - top))
 }
 

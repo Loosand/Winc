@@ -201,9 +201,7 @@ impl App {
             doc.selection = winc_core::Selection::new(a, b);
         }
         if self.markdown_live() {
-            self.preview.markdown.goal = None;
-            self.preview.markdown.line_end = None;
-            self.start_live_editing();
+            self.finish_live_edit_reset_line();
             self.reset_blink();
         }
         self.ensure_caret_visible();

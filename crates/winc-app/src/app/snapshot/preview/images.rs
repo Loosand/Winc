@@ -16,7 +16,10 @@ fn split_sides_scroll_together() {
     app.set_preview_mode(PreviewMode::Split);
     settle(&mut app);
     let heading_y = |app: &App, i: usize| {
-        crate::app::preview::markdown::laid::anchor_top(app, &format!("第-{i}-节")).unwrap()
+        app.preview
+            .markdown
+            .anchor_top(&format!("第-{i}-节"))
+            .unwrap()
     };
 
     // 左侧滚到第 20 节的标题（第 80 行）：右侧的第 20 节也到达顶部。
@@ -49,7 +52,7 @@ fn clicking_an_image_shows_its_source_above_it() {
     app.set_preview_mode(PreviewMode::Preview);
     settle(&mut app);
     // 点击图片中部：光标进入图片的原文，原文显示在图片上方，图片另起一行。
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     let (x, top) = point_of(&app, shown.find('前').unwrap());
     let (_, bottom) = point_of(&app, shown.chars().position(|c| c == '后').unwrap());
     app.on_mouse_move(x + 20.0, (top + bottom) / 2.0 + 20.0);
@@ -60,7 +63,7 @@ fn clicking_an_image_shows_its_source_above_it() {
     let text = doc_text(&app);
     let image = text.find("![").unwrap();
     assert!((image..=text.find("后").unwrap() - 2).contains(&at), "{at}");
-    let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+    let shown = app.preview.markdown.full_text().unwrap();
     assert!(shown.contains("![标志](logo.svg)\n"), "{shown:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -205,7 +208,7 @@ fn markdown_keeps_only_the_images_on_screen() {
     // 返回（已知宽高的图片数，留有像素的图片，留有解码后图片的张数）。
     let held = |app: &App| {
         let (mut ready, mut drawn, mut decoded) = (0, Vec::new(), 0);
-        for (path, slot) in &app.preview.markdown.images {
+        for (path, slot) in app.preview.markdown.images.iter() {
             if let ImageSlot::Ready {
                 picture, pixels, ..
             } = slot

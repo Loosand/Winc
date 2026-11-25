@@ -192,7 +192,10 @@ fn an_outline_jump_during_reparse_stays_put_for_the_next_drag() {
     let laid = md.layout.as_ref().unwrap();
     let point = |byte| {
         let (x, y, h) = laid.caret_point(byte).unwrap();
-        (laid.left + x + 0.5, md.area.y + y + h / 2.0 - md.scroll())
+        (
+            laid.column_bounds().0 + x + 0.5,
+            md.area.y + y + h / 2.0 - md.scroll(),
+        )
     };
     let (from, to) = (point(end), point(start));
     app.on_mouse_move(from.0, from.1);
@@ -266,7 +269,7 @@ fn typing_wide_characters_keeps_the_following_blocks_in_place() {
     for c in ["a", "项", "，", "b"] {
         app.run(winc_editor::Command::Insert(c.into()));
         paint(&mut app);
-        let shown = crate::app::preview::markdown::laid::full_text(&app).unwrap();
+        let shown = app.preview.markdown.full_text().unwrap();
         assert!(
             shown.contains("第三") && shown.contains("第四"),
             "{c}：{shown}"
@@ -287,7 +290,7 @@ fn typing_shows_the_final_layout_in_the_same_frame() {
     let (mut app, dir) = live_doc("md-same-frame", "前文\n\n- 一\n- 二\n\n后文\n");
     app.preview.markdown.frozen = Some(crate::app::animation::MARKDOWN_MOTION / 2);
     let shown = |app: &App| {
-        let text = crate::app::preview::markdown::laid::full_text(app).unwrap();
+        let text = app.preview.markdown.full_text().unwrap();
         (text, app.preview.markdown.height, caret_screen_y(app))
     };
     let step = |app: &mut App, name: &str, act: &dyn Fn(&mut App)| {

@@ -1169,11 +1169,11 @@ impl App {
         };
         if toc(hover) != toc(self.pointer.hover) {
             // 鼠标离开时收起已展开的列表。
-            if self.preview.markdown.toc_shown {
-                self.preview.markdown.toc_close = self.clock(animation::TOC_FADE);
-            }
-            self.preview.markdown.toc_rest = toc(hover).then(Instant::now);
-            self.preview.markdown.toc_shown = false;
+            let clock = self.clock(animation::TOC_FADE);
+            self.preview
+                .markdown
+                .toc
+                .on_hover_change(toc(hover), || clock);
         }
         if hover != self.pointer.hover {
             self.leave_tooltip();

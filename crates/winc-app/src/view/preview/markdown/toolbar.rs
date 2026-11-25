@@ -37,7 +37,7 @@ pub(in crate::view) fn draw_selection_toolbar(app: &mut App, frame: &mut Frame<'
     };
     let top = area.y - app.preview.markdown.scroll();
     let groups = Tool::ALL.iter().filter(|t| t.starts_group()).count() as f32;
-    let (left, n) = (laid.left, Tool::ALL.len() as f32);
+    let (left, n) = (laid.column_bounds().0, Tool::ALL.len() as f32);
     let w = n * BUTTON + (n + 1.0) * GAP + groups * (SEPARATOR + GAP);
     let h = BUTTON + GAP * 2.0;
     if area.w < w + 16.0 {

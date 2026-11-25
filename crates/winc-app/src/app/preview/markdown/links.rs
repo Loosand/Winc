@@ -74,7 +74,8 @@ impl App {
                 let key = percent_decode(anchor).to_lowercase();
                 let parsed = self.preview.markdown.parsed.as_ref();
                 let titled = parsed.is_some_and(|p| p.heading_keys().contains(&Some(key)));
-                (laid::anchor_box(self, anchor).is_none() && !titled).then_some(Broken::Heading)
+                (self.preview.markdown.anchor_box(anchor).is_none() && !titled)
+                    .then_some(Broken::Heading)
             }
             None => match wiki {
                 Some(Wiki::Note(name, _)) => match self.wiki_note(name) {
@@ -294,9 +295,9 @@ impl App {
             "[x]" | "[X]" => " ",
             _ => return,
         };
-        let (id, pos) = (doc.id, rope.byte_to_char(at) + 1);
+        let pos = rope.byte_to_char(at) + 1;
         let (selections, primary) = doc.selections();
-        let editing = self.preview.markdown.editing == Some(id);
+        let editing = self.live_caret_shown();
         if let Some(doc) = self.editor.active_mut() {
             doc.collapse_selections();
             doc.selection = winc_core::Selection::new(pos, pos + 1);
@@ -306,13 +307,14 @@ impl App {
             // 替换的只有一个字符，其前后的位置均不变。
             doc.set_selections(selections, primary);
         }
-        if !editing {
-            self.preview.markdown.editing = None;
-            self.preview.markdown.followed = self
-                .live_caret_source()
-                .zip(self.editor.active())
-                .map(|(source, d)| (d.id, source, d.revision));
-        }
+        let current = self
+            .live_caret_source()
+            .zip(self.editor.active())
+            .map(|(source, d)| (d.id, source, d.revision));
+        self.preview
+            .markdown
+            .live
+            .sync_after_programmatic_edit(editing, true, current);
         self.request_redraw();
     }
 }

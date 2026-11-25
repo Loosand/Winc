@@ -4,7 +4,6 @@ use winc_core::{Lines, Selection, movement};
 use winc_editor::DocumentId;
 use winc_preview::markdown::{clipboard, enter};
 
-use super::laid;
 use crate::app::{App, Drag};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -31,6 +30,10 @@ pub(super) struct LiveDrag {
 }
 
 impl LiveDrag {
+    fn matches_doc(&self, document: DocumentId, revision: u64) -> bool {
+        self.document == document && self.revision == revision
+    }
+
     fn extend_to(&self, target: SelectionTarget) -> Selection {
         if self.unit != SelectionUnit::Character && target.position < self.origin.anchor {
             Selection::new(self.origin.head, target.selection.anchor)
@@ -44,7 +47,7 @@ impl App {
     /// 选择期间沿用起选时的语法显示位置。输入法组字仍跟随实际光标。
     pub(crate) fn live_layout_leaf(&mut self) -> Option<super::LiveLeaf> {
         if !self.live_editing() {
-            self.preview.markdown.layout_caret = None;
+            self.preview.markdown.live.clear_layout_caret();
             return None;
         }
         let doc = self.editor.active()?;
@@ -55,17 +58,21 @@ impl App {
             || (self.pointer.drag == Drag::MarkdownText
                 && preview
                     .live_drag
-                    .is_some_and(|drag| drag.document == doc.id && drag.revision == doc.revision));
+                    .is_some_and(|drag| drag.matches_doc(doc.id, doc.revision)));
         if selecting && !composing {
-            let (_, _, at) = preview
-                .layout_caret
-                .filter(|&(id, revision, _)| id == doc.id && revision == doc.revision)?;
+            let at = preview.live.layout_caret_for(doc.id, doc.revision)?;
             return self.live_leaf_at(at);
         }
         let leaf = self.live_leaf_at(caret);
         if !selecting {
-            self.preview.markdown.layout_caret =
-                leaf.as_ref().map(|_| (doc.id, doc.revision, caret));
+            if leaf.is_some() {
+                self.preview
+                    .markdown
+                    .live
+                    .set_layout_caret(doc.id, doc.revision, caret);
+            } else {
+                self.preview.markdown.live.clear_layout_caret();
+            }
         }
         leaf
     }
@@ -74,8 +81,7 @@ impl App {
     pub(super) fn click_live(&mut self, x: f32, y: f32, native_click_count: Option<u8>) {
         self.ime.preedit.clear();
         self.preview.markdown.selection = None;
-        self.preview.markdown.goal = None;
-        self.preview.markdown.line_end = None;
+        self.preview.markdown.live.clear_navigation();
         self.request_redraw();
 
         let count = if let Some(count) = native_click_count {
@@ -88,7 +94,7 @@ impl App {
             && self.pointer.modifiers.is_empty()
             && self.preview.markdown.layout.as_ref().is_some_and(|layout| {
                 let preview = &self.preview.markdown;
-                y >= preview.area.y + layout.height() - layout.pad - preview.scroll()
+                y >= preview.area.y + layout.body_bottom() - preview.scroll()
             });
         let source = if tail {
             self.editor
@@ -123,8 +129,13 @@ impl App {
             target.selection
         };
 
-        self.preview.markdown.line_end = upstream.then_some((target.position, doc.revision));
-        self.preview.markdown.clicked = Some(source);
+        self.preview.markdown.live.record_click(
+            doc.id,
+            source,
+            upstream,
+            target.position,
+            doc.revision,
+        );
         self.preview.markdown.live_drag = Some(LiveDrag {
             origin,
             unit,
@@ -133,7 +144,6 @@ impl App {
             tail_click: tail.then_some((x, y)),
         });
         self.pointer.drag = Drag::MarkdownText;
-        self.start_live_editing();
         self.reset_blink();
     }
 
@@ -142,11 +152,13 @@ impl App {
         let Some(doc) = self.editor.active() else {
             return;
         };
+        let (doc_id, doc_rev) = (doc.id, doc.revision);
         let Some(drag) = self
             .preview
             .markdown
             .live_drag
-            .filter(|drag| drag.document == doc.id && drag.revision == doc.revision)
+            .as_mut()
+            .filter(|drag| drag.matches_doc(doc_id, doc_rev))
         else {
             return;
         };
@@ -154,11 +166,10 @@ impl App {
             if (x - a).abs().max((y - b).abs()) <= 2.0 {
                 return;
             }
-            if let Some(drag) = &mut self.preview.markdown.live_drag {
-                drag.tail_click = None;
-            }
+            drag.tail_click = None;
         }
-        let Some(source) = laid::source_at(self, x, y) else {
+        let drag = *drag;
+        let Some(source) = self.preview.markdown.source_at(x, y) else {
             return;
         };
         let Some(target) = self.selection_target(source, drag.unit) else {
@@ -169,7 +180,10 @@ impl App {
         let Some(doc) = self.editor.active_mut() else {
             return;
         };
-        self.preview.markdown.line_end = upstream.then_some((target.position, doc.revision));
+        self.preview
+            .markdown
+            .live
+            .set_line_end(upstream, target.position, doc.revision);
         doc.selection = drag.extend_to(target);
         self.reset_blink();
     }
@@ -200,10 +214,7 @@ impl App {
         }
         let rope = doc.text().rope()?;
         let preview = &self.preview.markdown;
-        let revealed_at = preview
-            .layout_caret
-            .filter(|&(id, revision, _)| id == doc.id && revision == doc.revision)
-            .map(|(_, _, at)| at);
+        let revealed_at = preview.live.layout_caret_for(doc.id, doc.revision);
         let (from, to) = (
             rope.char_to_byte(selection.from()),
             rope.char_to_byte(selection.to()),
@@ -283,7 +294,9 @@ impl App {
             let rope = self.editor.active()?.text().rope()?;
             Some(rope.char_to_byte(at))
         });
-        laid::source_at(self, x, y)
+        self.preview
+            .markdown
+            .source_at(x, y)
             .map(|source| source.max(body_start.unwrap_or(0)))
             .or(body_start)
     }
