@@ -115,18 +115,6 @@ impl App {
         }
         false
     }
-
-    /// 当前标签是否处于备用屏；备用屏没有回滚缓冲，屏幕内容由程序管理。
-    fn terminal_alternate_screen(&self) -> bool {
-        self.terminal
-            .tab()
-            .is_some_and(|tab| tab.modes.has(Modes::ALT_SCREEN))
-    }
-
-    /// 回滚缓冲的键盘翻页是否可用；备用屏和终端应用优先时翻页键交给程序。
-    pub(in crate::app) fn terminal_scroll_keys(&self) -> bool {
-        self.config.terminal_application_priority != Some(true) && !self.terminal_alternate_screen()
-    }
 }
 
 /// 是否为单按 Ctrl 加字母：终端里是发给程序的控制字符。

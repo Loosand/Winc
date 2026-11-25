@@ -346,8 +346,42 @@ pub(crate) struct Leaving {
 /// 见 `LiveLeaf::edge`）。
 pub(crate) type LiveKey = (usize, std::ops::Range<usize>, u64, Option<usize>, String);
 
+/// 可编辑的预览中光标所在的叶子块（见 [`winc_preview::markdown::Markdown::leaves`]），该块显示原文。
+///
+/// 原文位置均按当前文字计算：解析之后输入的文字都位于该块内（光标在该块中），块的末尾
+/// 按文字长度的变化移动。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LiveLeaf {
+    /// 所在的顶层块（`Markdown::blocks` 的序号）。
+    pub block: usize,
+    /// 所在顶层块当前的范围（字节偏移）。
+    pub range: std::ops::Range<usize>,
+    /// 叶子块当前的范围（字节偏移）；光标位于其后的空行上时延伸到光标所在行，位于其前的
+    /// 块标记上时从光标所在行起算。
+    pub leaf: std::ops::Range<usize>,
+    /// 叶子块在解析结果中的终点（字节偏移）：输入之后、重新解析之前与 `leaf` 的终点不同。
+    pub parsed_end: usize,
+    /// 文档版本号：输入文字后该块需要重排。
+    pub revision: u64,
+    /// 是否为正文（段落、标题），见 `LeafRange::prose`。
+    pub prose: bool,
+    /// 是否为表格；表格按单元格编辑。
+    pub table: bool,
+    /// 光标是否位于段落、标题之后的空行上。
+    pub blank: bool,
+    /// 查找该块所用的位置（字节偏移）。
+    ///
+    /// 由调用者选择实际光标或起选时的排版位置。表格中该位置所在的单元格显示原文，
+    /// 正文中显示该位置接触到的标记。
+    pub at: usize,
+    /// 光标位于代码块、公式等叶子块的第一行或最后两行时，光标所在的行号。
+    ///
+    /// 围栏行只在光标位于其上时显示，因此光标进出这些行时需要重排；在中间各行移动时不重排。
+    pub edge: Option<usize>,
+}
+
 /// `preedit` 是输入法正在组合的文字，在正文中排入光标所在的行，因此其变化同样需要重排。
-pub(crate) fn live_key(live: &crate::app::preview::markdown::LiveLeaf, preedit: &str) -> LiveKey {
+pub(crate) fn live_key(live: &LiveLeaf, preedit: &str) -> LiveKey {
     (
         live.block,
         live.leaf.clone(),
@@ -425,7 +459,7 @@ pub(crate) fn lay_out(
     parsed: &winc_preview::markdown::Markdown,
     key: Key,
     source: usize,
-    live: Option<&crate::app::preview::markdown::LiveLeaf>,
+    live: Option<&LiveLeaf>,
     reuse: Vec<(u64, Arc<LaidBlock>)>,
     later: Option<Later<'_>>,
     near: Option<Near>,

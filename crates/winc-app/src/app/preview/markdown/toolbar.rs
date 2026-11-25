@@ -82,40 +82,6 @@ impl Tool {
 }
 
 impl App {
-    /// Inline formats act on one source line, and never mutate non-prose blocks.
-    /// Inside tables, allow keyboard formatting only within a single cell.
-    pub(in crate::app) fn inline_format_available(&self) -> bool {
-        let Some(doc) = self
-            .editor
-            .active()
-            .filter(|d| !d.has_cursors() && d.readonly_reason().is_none())
-        else {
-            return false;
-        };
-        let Some(rope) = doc.text().rope() else {
-            return false;
-        };
-        let (a, b) = (doc.selection.from(), doc.selection.to());
-        let line = rope.char_to_line(a);
-        if rope.char_to_line(b) != line {
-            return false;
-        }
-        match self.markdown_live().then(|| self.live_leaf()).flatten() {
-            Some(leaf) if leaf.table => {
-                let start = rope.line_to_byte(line);
-                let (a, b) = (rope.char_to_byte(a) - start, rope.char_to_byte(b) - start);
-                let text = rope.line(line).to_string();
-                let text = text.trim_end_matches(['\n', '\r']);
-                !markdown::cells::is_delimiter(text)
-                    && markdown::cells::cells(text)
-                        .into_iter()
-                        .any(|c| c.segment.start <= a && b <= c.segment.end)
-            }
-            Some(leaf) => leaf.prose,
-            None => true,
-        }
-    }
-
     /// 鼠标选中文字后记录选区，之后选区不变且能应用格式时显示工具栏。
     pub(in crate::app) fn offer_selection_toolbar(&mut self) {
         let enabled = self.config.markdown_selection_toolbar != Some(false);

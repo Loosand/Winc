@@ -6,70 +6,7 @@
 
 use super::*;
 
-pub(super) struct EmptyParagraph {
-    document: DocumentId,
-    revision: u64,
-    /// 本次回车插入的原文范围（字符偏移），包括光标后的分隔换行。
-    inserted: std::ops::Range<usize>,
-    caret: usize,
-}
-
-/// Find the boundaries of a parsed fence. A shorter run, or a run followed by
-/// literal code, is content and cannot be used as a destination outside the block.
-fn fenced_lines(rope: &ropey::Rope, range: std::ops::Range<usize>) -> Option<Fenced> {
-    let len = rope.len_bytes();
-    let start = range.start.min(len);
-    let first = rope.byte_to_line(start);
-    let opening = rope.byte_slice(start..rope.line_to_byte(first + 1));
-    let opening = std::borrow::Cow::<str>::from(opening);
-    let open = opening.trim();
-    let mark = open.bytes().next()?;
-    let min = match mark {
-        b'`' | b'~' => 3,
-        b'$' => 2,
-        _ => return None,
-    };
-    let count = open.bytes().take_while(|&b| b == mark).count();
-    if count < min {
-        return None;
-    }
-    let quotes = rope
-        .byte_slice(rope.line_to_byte(first)..start)
-        .chars()
-        .filter(|&c| c == '>')
-        .count();
-    let text = |line| {
-        let raw = std::borrow::Cow::<str>::from(rope.line(line));
-        let mut body = raw.as_ref();
-        for _ in 0..quotes {
-            let Some(rest) = body.trim_start_matches([' ', '\t']).strip_prefix('>') else {
-                break;
-            };
-            body = rest;
-        }
-        body.trim_matches([' ', '\t', '\r', '\n']).to_owned()
-    };
-    let end = range.end.min(len).saturating_sub(1).max(start);
-    let mut last = rope.byte_to_line(end);
-    while last > first && text(last).is_empty() {
-        last -= 1;
-    }
-    // Single-line display math has no separate closing line to navigate around.
-    if first == last && mark == b'$' && open[count..].ends_with("$$") {
-        return None;
-    }
-    let close = text(last);
-    let closed = last > first && close.len() >= count && close.bytes().all(|b| b == mark);
-    let content = first + 1..if closed { last } else { last + 1 };
-    Some(Fenced {
-        first,
-        last,
-        closed,
-        bare: count == open.len(),
-        empty: content.clone().all(|line| text(line).is_empty()),
-        content,
-    })
-}
+use super::live_structure::fenced_lines;
 
 impl App {
     /// 可编辑的预览中 ↑↓ 按显示行移动光标（加 ⇧ 扩展选区），`PageUp` / `PageDown` 移动一屏；
@@ -457,23 +394,6 @@ impl App {
         self.preview.markdown.goal = None;
         self.start_live_editing();
         true
-    }
-
-    fn remember_empty_paragraph(&mut self, previous_revision: u64, start: usize, trailing: usize) {
-        self.preview.markdown.empty_paragraph = self
-            .editor
-            .active()
-            .filter(|doc| doc.revision != previous_revision)
-            .map(|doc| {
-                let caret = doc.selection.head;
-                let end = caret + trailing * doc.line_ending.as_str().len();
-                EmptyParagraph {
-                    document: doc.id,
-                    revision: doc.revision,
-                    inserted: start..end,
-                    caret,
-                }
-            });
     }
 
     /// 补全闭围栏：在围栏行（```` ```rust ````、`$$`）末尾按回车时，光标移到两行围栏之间的空行。
@@ -916,13 +836,6 @@ impl App {
         true
     }
 
-    /// 返回光标所在的围栏代码块或 `$$` 公式各行的位置；光标不在这类块中时为 `None`。
-    pub(super) fn live_fenced(&self) -> Option<Fenced> {
-        let live = self.live_leaf().filter(|l| !l.prose && !l.table)?;
-        let rope = self.editor.active()?.text().rope()?;
-        fenced_lines(rope, live.leaf)
-    }
-
     /// 将围栏代码块 `fenced` 的全部各行替换为 `text`，光标放在其开头。
     pub(super) fn replace_fenced(&mut self, fenced: &Fenced, text: String) {
         let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
@@ -1029,60 +942,37 @@ impl App {
         true
     }
 
-    /// 单击正文下方时在文末放置一个可编辑的空段。
-    pub(super) fn open_paragraph_below_body(&mut self) {
-        let Some(doc) = self.editor.active() else {
-            return;
+    /// 行内格式只作用于单行正文或表格的单个单元格内，不改动代码块等非正文块。
+    pub(in crate::app) fn inline_format_available(&self) -> bool {
+        let Some(doc) = self
+            .editor
+            .active()
+            .filter(|d| !d.has_cursors() && d.readonly_reason().is_none())
+        else {
+            return false;
         };
         let Some(rope) = doc.text().rope() else {
-            return;
+            return false;
         };
-        let last = rope.len_lines() - 1;
-        let blank = |line| rope.line(line).chars().all(char::is_whitespace);
-        let ending = if blank(last) {
-            if last == 0 || blank(last - 1) {
-                return;
+        let (a, b) = (doc.selection.from(), doc.selection.to());
+        let line = rope.char_to_line(a);
+        if rope.char_to_line(b) != line {
+            return false;
+        }
+        match self.markdown_live().then(|| self.live_leaf()).flatten() {
+            Some(leaf) if leaf.table => {
+                let start = rope.line_to_byte(line);
+                let (a, b) = (rope.char_to_byte(a) - start, rope.char_to_byte(b) - start);
+                let text = rope.line(line).to_string();
+                let text = text.trim_end_matches(['\n', '\r']);
+                !markdown::cells::is_delimiter(text)
+                    && markdown::cells::cells(text)
+                        .into_iter()
+                        .any(|c| c.segment.start <= a && b <= c.segment.end)
             }
-            "\n"
-        } else {
-            "\n\n"
-        };
-        let (at, revision) = (rope.len_chars(), doc.revision);
-        if doc.selection != winc_core::Selection::point(at) {
-            return;
+            Some(leaf) => leaf.prose,
+            None => true,
         }
-        self.run(winc_editor::Command::Insert(ending.into()));
-        self.remember_empty_paragraph(revision, at, 0);
-    }
-
-    /// 文档的最后一行属于代码块、表格、分隔线等不是正文的块时，在文末另起一段并把光标移到
-    /// 该段，返回是否已处理。
-    ///
-    /// 文档以换行符结束时光标可以直接移到末尾的空行，不需要处理。
-    pub(super) fn live_append_paragraph(&mut self) -> bool {
-        let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
-            return false;
-        };
-        let chars = rope.len_chars();
-        if chars == 0 || rope.char(chars - 1) == '\n' {
-            return false;
-        }
-        if self.live_prose_at(rope.len_bytes()) != Some(false)
-            || self.live_fenced().is_some_and(|fence| !fence.closed)
-        {
-            return false;
-        }
-        if let Some(doc) = self.editor.active_mut() {
-            doc.collapse_selections();
-            doc.selection = winc_core::Selection::point(chars);
-        }
-        self.run(winc_editor::Command::Insert("\n\n".to_owned()));
-        self.preview.markdown.goal = None;
-        self.preview.markdown.line_end = None;
-        self.start_live_editing();
-        self.reset_blink();
-        self.request_redraw();
-        true
     }
 
     /// 对选区切换行内格式的标记 `mark`（`**`、`*`、`` ` ``、`~~`、`==`），规则见

@@ -9,34 +9,6 @@ use winc_preview::markdown::paragraph::{self, Kind};
 use super::*;
 
 impl App {
-    /// 当前标签是否在编辑 Markdown：可以修改的 Markdown 文件，显示着源代码，或者是可编辑的预览。
-    pub(crate) fn markdown_writing(&self) -> bool {
-        self.markdown_live()
-            || self.editor.active().is_some_and(|d| {
-                d.preview_kind() == Some(PreviewKind::Markdown)
-                    && d.edits_text()
-                    && d.readonly_reason().is_none()
-                    && d.preview_mode() != PreviewMode::Preview
-            })
-    }
-
-    /// 是否淡化光标所在段落以外的文字（专注模式，`markdown.focusMode`）。
-    pub(crate) fn markdown_focus(&self) -> bool {
-        self.config.markdown_focus == Some(true) && self.markdown_writing()
-    }
-
-    /// 是否让光标所在的行停在编辑区中间（打字机模式，`markdown.typewriterMode`）。
-    pub(crate) fn markdown_typewriter(&self) -> bool {
-        self.config.markdown_typewriter == Some(true) && self.markdown_writing()
-    }
-
-    /// 编辑区是否使用写作命令的快捷键：可编辑的预览中总是使用，Markdown 文件的源代码在
-    /// `markdown.shortcuts` 开着时使用。
-    pub(crate) fn markdown_keys(&self) -> bool {
-        self.markdown_live()
-            || (self.config.markdown_shortcuts != Some(false) && self.markdown_writing())
-    }
-
     /// 可编辑的预览中光标在代码块、公式、表格等按原文显示的块里，写作命令不改动它。
     fn in_raw_block(&mut self) -> bool {
         if !self.markdown_live() {

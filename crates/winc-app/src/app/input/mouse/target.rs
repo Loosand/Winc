@@ -136,8 +136,8 @@ impl App {
         &self,
         x: f32,
         y: f32,
-    ) -> Option<crate::app::input::touch::WindowTouch> {
-        use crate::app::input::touch::WindowTouch;
+    ) -> Option<crate::app::input::WindowTouch> {
+        use crate::app::input::WindowTouch;
         if self.touch_intercepted() || self.settings.open {
             return None;
         }
@@ -832,13 +832,6 @@ impl App {
 
     /// 窗口坐标 (`x`, `y`)（逻辑像素）是否位于文件树中显示不全的文件名
     /// 向右展开、覆盖到编辑区上方的区域内。
-    pub(in crate::app) fn in_tree_overflow(&self, x: f32, y: f32) -> bool {
-        self.panels
-            .tree
-            .overflow
-            .is_some_and(|(rect, _)| rect.contains(x, y))
-    }
-
     /// 按鼠标当前位置重新判断悬停目标和指针样式；每绘制完一帧调用一次。
     ///
     /// 悬停通常只在鼠标移动时判断。界面因按键而变化（`Esc` 关闭面板、提示条到时消失、输入使
@@ -861,18 +854,6 @@ impl App {
     /// `(x, y)` 是否位于编辑区右上角的卡片（冲突卡片、提示条）上。
     ///
     /// 卡片浮于文字之上，点击、右键和指针样式都不应作用于下方的文字。
-    pub(in crate::app) fn over_corner_card(&self, x: f32, y: f32) -> bool {
-        self.hits
-            .notice_card
-            .is_some_and(|card| card.contains(x, y))
-            || self.hits.merge_card.is_some_and(|card| card.contains(x, y))
-            || self
-                .hits
-                .conflict_card
-                .as_ref()
-                .is_some_and(|(card, _)| card.contains(x, y))
-    }
-
     /// 根据鼠标位置和拖动状态更新鼠标指针的样式；鼠标在其他窗格上时按那个窗格判断。
     pub(in crate::app) fn update_cursor_icon(&mut self) {
         self.in_hovered_pane(Self::place_cursor_icon);

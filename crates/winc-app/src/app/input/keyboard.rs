@@ -15,7 +15,7 @@ use winc_editor::{Command, EntryKind, segment_name};
 
 use crate::app::{App, Focus, ResultRow};
 use crate::field::{TextField, Unit};
-use crate::keymap::{self, Action, Context, Lookup, Os, Stroke};
+use crate::keymap::{self, Context, Lookup, Os, Stroke};
 use crate::theme::KEYS_ROW;
 
 /// 文件树键入跳转的重置间隔（毫秒，经验值）。
@@ -283,17 +283,6 @@ impl App {
     ///
     /// macOS 上没有打开的标签时，「关闭标签页」的快捷键改为关闭窗口：关掉最后一个标签后再按
     /// 一次 `⌘W` 关闭窗口。只对按键生效，在命令面板里选「关闭标签页」不会关闭窗口。
-    pub(super) fn keyboard_action(&self, action: Action) -> Action {
-        if cfg!(target_os = "macos")
-            && action == Action::CloseTab
-            && self.editor.documents.is_empty()
-        {
-            Action::CloseWindow
-        } else {
-            action
-        }
-    }
-
     /// 编辑器核心 · 输入入口：方向键、换行、缩进、删除和键入。
     ///
     /// Markdown 先经 `markdown_key` 处理结构键和屏幕行移动；没被接管的按键才走通用
@@ -1221,16 +1210,4 @@ impl App {
     }
 }
 
-/// 输入法的状态：正在组字的文字，以及候选框的定位。
-#[derive(Default)]
-pub struct ImeState {
-    /// 编辑区中输入法正在组字的文字。
-    pub preedit: String,
-    /// 输入框中输入法正在组字的文字。
-    pub field_preedit: String,
-    /// 输入法候选框应出现的位置。
-    pub(crate) cursor: Option<winc_render::Rect>,
-    pub(in crate::app) last_area: Option<winc_render::Rect>,
-    /// 上一次告知窗口的输入法是否启用；尚未告知时为 `None`。
-    pub(in crate::app) allowed: Option<bool>,
-}
+pub use super::ImeState;

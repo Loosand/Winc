@@ -4,35 +4,6 @@ use super::*;
 use winit::keyboard::PhysicalKey;
 
 impl App {
-    /// 把字节写给正在看的标签里的程序：回到最新的输出；程序的输出到了下一帧马上能发，不等这一帧
-    /// 画完。
-    pub(in crate::app) fn terminal_input(&mut self, bytes: Vec<u8>) {
-        let t = &mut self.terminal;
-        let (Some(client), Some(tab)) = (&t.client, t.tabs.get_mut(t.active)) else {
-            return;
-        };
-        if tab.ended.is_some() || bytes.is_empty() {
-            return;
-        }
-        tab.scroll = 0;
-        tab.scroll_frac = 0.0;
-        tab.jump = None;
-        let mut rest = bytes.len() as u64;
-        for chunk in bytes.chunks(INPUT_CHUNK) {
-            rest -= chunk.len() as u64;
-            client.send(&ToHelper::Input {
-                tab: tab.id,
-                bytes: chunk.to_vec(),
-                rest,
-            });
-        }
-        if tab.credit_due {
-            tab.credit_due = false;
-            client.send(&ToHelper::Credit { tab: tab.id });
-        }
-        self.request_redraw();
-    }
-
     /// 粘贴到终端（括号粘贴见 [`input::paste`]）。
     ///
     /// 程序没有开启括号粘贴、要粘贴的文字不止一行时先确认（[`input::paste_needs_confirm`]）：
@@ -63,44 +34,6 @@ impl App {
             }
         }
         self.confirmed_terminal_paste(id, text);
-    }
-
-    /// 把 `text` 粘贴到标签 `id`；该标签已不是当前标签（确认期间切换或关闭了）时不粘贴。
-    pub(crate) fn confirmed_terminal_paste(&mut self, id: u16, text: String) {
-        let Some(modes) = self.terminal.tab().filter(|t| t.id == id).map(|t| t.modes) else {
-            return;
-        };
-        let mut bytes = Vec::new();
-        input::paste(&text, modes, &mut bytes);
-        self.terminal_input(bytes);
-    }
-
-    /// 复制选区；`clear` 为真时复制后清除选区。
-    ///
-    /// 没有选区时什么也不做；选区里有还没取回的历史行时先要，回来再复制。
-    pub(in crate::app) fn terminal_copy(&mut self, clear: bool) {
-        let t = &mut self.terminal;
-        let Some(tab) = t.tabs.get_mut(t.active) else {
-            return;
-        };
-        match tab.selected_text() {
-            Ok(Some(text)) => {
-                if clear {
-                    tab.selection = None;
-                }
-                self.set_clipboard(text, false);
-                self.flash(winc_i18n::t!("terminal-selection-copied"));
-            }
-            Ok(None) => {}
-            Err(range) => {
-                let id = tab.id;
-                tab.clear_after_copy |= clear;
-                if !t.waiting(id, Request::Copy) {
-                    t.request(id, range, Request::Copy);
-                }
-            }
-        }
-        self.request_redraw();
     }
 
     /// 选中全部（⌘A）：回滚缓冲加屏幕。
@@ -161,18 +94,6 @@ impl App {
         if let (Some(client), Some(tab)) = (&self.terminal.client, self.terminal.tab()) {
             client.send(&ToHelper::Clear { tab: tab.id });
         }
-    }
-
-    /// 往上（`lines` 为正）或往下翻回滚缓冲。
-    pub(in crate::app) fn scroll_terminal(&mut self, lines: isize) {
-        let Some(tab) = self.terminal.tab_mut() else {
-            return;
-        };
-        tab.scroll = tab.scroll.saturating_add_signed(lines);
-        tab.scroll_frac = 0.0;
-        tab.clamp_scroll();
-        self.fetch_terminal_history();
-        self.request_redraw();
     }
 
     /// 焦点在终端时的按键（快捷键已经先处理过）。
@@ -257,30 +178,6 @@ impl App {
         }
         let empty = self.clipboard_text().is_none_or(|text| text.is_empty());
         self.upload_paste(id, &cwd, empty)
-    }
-
-    /// 返回编码终端按键和鼠标上报时使用的修饰键。
-    ///
-    /// Alt 是否视为 Meta 按平台区分：
-    /// - macOS：⌥ 参与输入字符（如 ⌥e 输入重音符），视为 Meta 的一侧由
-    ///   `terminal.optionAsMeta` 指定。
-    /// - 其他平台：Alt 不参与输入字符，一律视为 Meta；winit 在这些平台上不报告左右 Alt 的状态。
-    ///   `AltGr` 不计入 Alt，按其输入的字符发送。
-    pub(super) fn terminal_mods(&self) -> Mods {
-        let m = self.pointer.modifiers;
-        let meta = m.alt_key()
-            && (!cfg!(target_os = "macos")
-                || match self.config.option_as_meta.unwrap_or(OptionAsMeta::Left) {
-                    OptionAsMeta::Left => self.pointer.option_side.0,
-                    OptionAsMeta::Right => self.pointer.option_side.1,
-                    OptionAsMeta::Both => true,
-                    OptionAsMeta::None => false,
-                });
-        Mods {
-            shift: m.shift_key(),
-            alt: meta,
-            ctrl: m.control_key(),
-        }
     }
 
     /// 把一次按键编码成写给终端的字节；这个键在终端里没有意义时返回 `None`。

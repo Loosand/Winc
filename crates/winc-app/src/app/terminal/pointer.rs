@@ -6,7 +6,8 @@
 
 use winit::event::MouseButton;
 
-use winc_pty::input::{self, Button, MouseAction};
+use winc_config::OptionAsMeta;
+use winc_pty::input::{self, Button, Mods, MouseAction};
 use winc_pty::protocol::Modes;
 
 use super::tab::{Selection, Unit, ViewRow};
@@ -352,6 +353,29 @@ impl App {
                 input::encode(key, input::Mods::default(), modes, 0, &mut bytes);
             }
             self.terminal_input(bytes);
+        }
+    }
+
+    /// 当前按下的修饰键，按平台决定 Alt/⌥ 是否视为 Meta：
+    ///
+    /// - macOS：⌥ 参与输入字符（如 ⌥e 输入重音符），视为 Meta 的一侧由
+    ///   `terminal.optionAsMeta` 指定。
+    /// - 其他平台：Alt 不参与输入字符，一律视为 Meta；winit 在这些平台上不报告左右 Alt 的状态。
+    ///   `AltGr` 不计入 Alt，按其输入的字符发送。
+    pub(super) fn terminal_mods(&self) -> Mods {
+        let m = self.pointer.modifiers;
+        let meta = m.alt_key()
+            && (!cfg!(target_os = "macos")
+                || match self.config.option_as_meta.unwrap_or(OptionAsMeta::Left) {
+                    OptionAsMeta::Left => self.pointer.option_side.0,
+                    OptionAsMeta::Right => self.pointer.option_side.1,
+                    OptionAsMeta::Both => true,
+                    OptionAsMeta::None => false,
+                });
+        Mods {
+            shift: m.shift_key(),
+            alt: meta,
+            ctrl: m.control_key(),
         }
     }
 }

@@ -1,16 +1,98 @@
 //! 可编辑 Markdown 的光标移动、折行归属和视口跟随。
 
 use winc_core::{Selection, movement};
+use winc_editor::DocumentId;
 
 use super::{laid, line_end};
 use crate::app::{App, ScrollTarget};
 
+/// 刚插入的可编辑空段（光标离开或按退格时自动收回）。
+pub(super) struct EmptyParagraph {
+    pub(super) document: DocumentId,
+    pub(super) revision: u64,
+    /// 本次回车插入的原文范围（字符偏移），包括光标后的分隔换行。
+    pub(super) inserted: std::ops::Range<usize>,
+    pub(super) caret: usize,
+}
+
 impl App {
-    /// 可编辑的预览中文字光标的原文位置（字节偏移，按当前文字计算）。
-    pub(crate) fn live_caret_source(&self) -> Option<usize> {
-        let doc = self.editor.active()?;
-        let rope = doc.text().rope()?;
-        Some(rope.char_to_byte(doc.selection.head.min(rope.len_chars())))
+    /// 记录刚插入的可编辑空段，供光标移出时自动收回。
+    pub(super) fn remember_empty_paragraph(
+        &mut self,
+        previous_revision: u64,
+        start: usize,
+        trailing: usize,
+    ) {
+        self.preview.markdown.empty_paragraph = self
+            .editor
+            .active()
+            .filter(|doc| doc.revision != previous_revision)
+            .map(|doc| {
+                let caret = doc.selection.head;
+                let end = caret + trailing * doc.line_ending.as_str().len();
+                EmptyParagraph {
+                    document: doc.id,
+                    revision: doc.revision,
+                    inserted: start..end,
+                    caret,
+                }
+            });
+    }
+
+    /// 单击正文下方时在文末放置一个可编辑的空段。
+    pub(super) fn open_paragraph_below_body(&mut self) {
+        let Some(doc) = self.editor.active() else {
+            return;
+        };
+        let Some(rope) = doc.text().rope() else {
+            return;
+        };
+        let last = rope.len_lines() - 1;
+        let blank = |line| rope.line(line).chars().all(char::is_whitespace);
+        let ending = if blank(last) {
+            if last == 0 || blank(last - 1) {
+                return;
+            }
+            "\n"
+        } else {
+            "\n\n"
+        };
+        let (at, revision) = (rope.len_chars(), doc.revision);
+        if doc.selection != winc_core::Selection::point(at) {
+            return;
+        }
+        self.run(winc_editor::Command::Insert(ending.into()));
+        self.remember_empty_paragraph(revision, at, 0);
+    }
+
+    /// 文档的最后一行属于代码块、表格、分隔线等不是正文的块时，在文末另起一段并把光标移到
+    /// 该段，返回是否已处理。
+    ///
+    /// 文档以换行符结束时光标可以直接移到末尾的空行，不需要处理。
+    pub(super) fn live_append_paragraph(&mut self) -> bool {
+        let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
+            return false;
+        };
+        let chars = rope.len_chars();
+        if chars == 0 || rope.char(chars - 1) == '\n' {
+            return false;
+        }
+        if self.live_prose_at(rope.len_bytes()) != Some(false)
+            || self.live_fenced().is_some_and(|fence| !fence.closed)
+        {
+            return false;
+        }
+        if let Some(doc) = self.editor.active_mut() {
+            doc.collapse_selections();
+            doc.selection = winc_core::Selection::point(chars);
+        }
+        self.run(winc_editor::Command::Insert("\n\n".to_owned()));
+        self.preview.markdown.goal = None;
+        self.preview.markdown.line_end = None;
+        self.start_live_editing();
+        self.reset_blink();
+        self.request_redraw();
+        true
     }
 
     /// ←→ 略过不显示的块标记和块间分隔行。普通文字和可编辑的空行交给编辑区处理。

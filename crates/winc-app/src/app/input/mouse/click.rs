@@ -152,6 +152,23 @@ impl App {
                 return;
             }
             if self.finish_property_picker() {
+                // 应用绘制标题栏时，顶栏空白处的右键弹出系统的窗口菜单；窗口系统不支持时没有菜单。
+                if self.window.controls && self.over_title_bar(x, y) {
+                    if self.panels.name_input.is_some()
+                        && !self.name_input_rect().is_some_and(|r| r.contains(x, y))
+                    {
+                        self.submit_name_input();
+                    }
+                    if let Some(window) = &self.window.handle {
+                        let zoom = f64::from(self.zoom());
+                        let at = winit::dpi::LogicalPosition::new(
+                            f64::from(x) * zoom,
+                            f64::from(y) * zoom,
+                        );
+                        window.show_window_menu(at);
+                    }
+                    return;
+                }
                 self.context_click(x, y);
             }
             return;

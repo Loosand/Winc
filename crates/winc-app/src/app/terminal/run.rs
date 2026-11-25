@@ -16,7 +16,7 @@ use winc_i18n::t;
 use winc_pty::protocol::ToHelper;
 
 use super::HeaderHit;
-use super::helper::{Integration, Launch, default_shell_applies, environment, launch, os_bytes};
+use super::shells::{Integration, Launch, default_shell_applies, environment, launch, os_bytes};
 use crate::app::NoticeKind;
 use crate::app::input::context_menu::menu_below;
 use crate::app::input::context_menu::{MenuButton, MenuTarget};
@@ -325,7 +325,7 @@ impl App {
     pub(in crate::app) fn start_run(&mut self, config: RunConfig) {
         // 辅助进程退出了：先恢复其他标签，运行配置的旧标签随之消失。
         if self.terminal.crashed {
-            self.restart_terminal_tab();
+            self.recover_crashed_terminal();
         }
         let t = &mut self.terminal;
         let old = (t.tabs.iter().enumerate())

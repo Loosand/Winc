@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 
 use winit::dpi::PhysicalPosition;
 use winit::event::{DeviceId, MouseButton, MouseScrollDelta, Touch, TouchPhase};
-use winit::window::ResizeDirection;
 
 use super::*;
 
@@ -18,25 +17,10 @@ mod tests;
 
 type Point = (f32, f32);
 
-/// 在顶栏或窗口边缘落指时交由系统执行的窗口操作。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::app) enum WindowTouch {
-    /// 拖动顶栏移动窗口。
-    Move,
-    /// 拖动边缘或角落改变窗口大小。
-    Resize(ResizeDirection),
-}
+pub(in crate::app) use super::WindowTouch;
 
-/// 点按与滚动的分界距离（逻辑像素）。
-///
-/// 接触点偏离落指位置超过该距离后开始滚动；距离以内的移动视为点按和长按时的手指抖动。
-const SLOP: f32 = 8.0;
 /// 长按的判定时长：落指后在 [`SLOP`] 范围内保持达到该时长即打开右键菜单。
 const LONG_PRESS: Duration = Duration::from_millis(500);
-/// 两次点按判定为双击时允许的落指位置偏差（逻辑像素）。
-///
-/// 两次落指的位置偏差通常大于鼠标连击的偏差，因此取点按与滚动分界距离 [`SLOP`] 的两倍。
-pub(in crate::app) const TAP_SLOP: f32 = 2.0 * SLOP;
 /// 接触点的失效时长：超过该时长未收到新的触摸事件时，未结束的接触点视为已失效。
 ///
 /// 由触摸提升的鼠标事件紧随对应的触摸事件到达，间隔远小于该时长；系统接管窗口拖动时

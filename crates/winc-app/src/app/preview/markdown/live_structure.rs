@@ -7,43 +7,81 @@ use winc_core::{Lines, Selection};
 use winc_editor::Document;
 use winc_preview::markdown::{self, LeafRange, Markdown};
 
+use super::Fenced;
+use super::laid::LiveLeaf;
 use crate::app::App;
 
-/// 可编辑的预览中光标所在的叶子块（见 [`Markdown::leaves`](winc_preview::markdown::Markdown::leaves)），该块显示原文。
-///
-/// 原文位置均按当前文字计算：解析之后输入的文字都位于该块内（光标在该块中），块的末尾
-/// 按文字长度的变化移动。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LiveLeaf {
-    /// 所在的顶层块（`Markdown::blocks` 的序号）。
-    pub block: usize,
-    /// 所在顶层块当前的范围（字节偏移）。
-    pub range: std::ops::Range<usize>,
-    /// 叶子块当前的范围（字节偏移）；光标位于其后的空行上时延伸到光标所在行，位于其前的
-    /// 块标记上时从光标所在行起算。
-    pub leaf: std::ops::Range<usize>,
-    /// 叶子块在解析结果中的终点（字节偏移）：输入之后、重新解析之前与 `leaf` 的终点不同。
-    pub parsed_end: usize,
-    /// 文档版本号：输入文字后该块需要重排。
-    pub revision: u64,
-    /// 是否为正文（段落、标题），见 `LeafRange::prose`。
-    pub prose: bool,
-    /// 是否为表格；表格按单元格编辑。
-    pub table: bool,
-    /// 光标是否位于段落、标题之后的空行上。
-    pub blank: bool,
-    /// 查找该块所用的位置（字节偏移）。
-    ///
-    /// 由调用者选择实际光标或起选时的排版位置。表格中该位置所在的单元格显示原文，
-    /// 正文中显示该位置接触到的标记。
-    pub at: usize,
-    /// 光标位于代码块、公式等叶子块的第一行或最后两行时，光标所在的行号。
-    ///
-    /// 围栏行只在光标位于其上时显示，因此光标进出这些行时需要重排；在中间各行移动时不重排。
-    pub edge: Option<usize>,
+/// 查找已解析围栏代码块或公式块的边界；较短或后跟代码的围栏行视为内容。
+pub(super) fn fenced_lines(rope: &ropey::Rope, range: std::ops::Range<usize>) -> Option<Fenced> {
+    let len = rope.len_bytes();
+    let start = range.start.min(len);
+    let first = rope.byte_to_line(start);
+    let opening = rope.byte_slice(start..rope.line_to_byte(first + 1));
+    let opening = std::borrow::Cow::<str>::from(opening);
+    let open = opening.trim();
+    let mark = open.bytes().next()?;
+    let min = match mark {
+        b'`' | b'~' => 3,
+        b'$' => 2,
+        _ => return None,
+    };
+    let count = open.bytes().take_while(|&b| b == mark).count();
+    if count < min {
+        return None;
+    }
+    let quotes = rope
+        .byte_slice(rope.line_to_byte(first)..start)
+        .chars()
+        .filter(|&c| c == '>')
+        .count();
+    let text = |line| {
+        let raw = std::borrow::Cow::<str>::from(rope.line(line));
+        let mut body = raw.as_ref();
+        for _ in 0..quotes {
+            let Some(rest) = body.trim_start_matches([' ', '\t']).strip_prefix('>') else {
+                break;
+            };
+            body = rest;
+        }
+        body.trim_matches([' ', '\t', '\r', '\n']).to_owned()
+    };
+    let end = range.end.min(len).saturating_sub(1).max(start);
+    let mut last = rope.byte_to_line(end);
+    while last > first && text(last).is_empty() {
+        last -= 1;
+    }
+    // Single-line display math has no separate closing line to navigate around.
+    if first == last && mark == b'$' && open[count..].ends_with("$$") {
+        return None;
+    }
+    let close = text(last);
+    let closed = last > first && close.len() >= count && close.bytes().all(|b| b == mark);
+    let content = first + 1..if closed { last } else { last + 1 };
+    Some(Fenced {
+        first,
+        last,
+        closed,
+        bare: count == open.len(),
+        empty: content.clone().all(|line| text(line).is_empty()),
+        content,
+    })
 }
 
 impl App {
+    /// 可编辑的预览中文字光标的原文位置（字节偏移，按当前文字计算）。
+    pub(crate) fn live_caret_source(&self) -> Option<usize> {
+        let doc = self.editor.active()?;
+        let rope = doc.text().rope()?;
+        Some(rope.char_to_byte(doc.selection.head.min(rope.len_chars())))
+    }
+
+    /// 返回光标所在的围栏代码块或 `$$` 公式各行的位置；光标不在这类块中时为 `None`。
+    pub(super) fn live_fenced(&self) -> Option<Fenced> {
+        let live = self.live_leaf().filter(|l| !l.prose && !l.table)?;
+        let rope = self.editor.active()?.text().rope()?;
+        fenced_lines(rope, live.leaf)
+    }
+
     /// 返回可编辑的预览中光标所在的叶子块，见 [`LiveLeaf`]；尚未解析或没有叶子块时为 `None`。
     ///
     pub(crate) fn live_leaf(&self) -> Option<LiveLeaf> {

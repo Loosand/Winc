@@ -21,7 +21,7 @@ pub(crate) mod strip;
 mod tab;
 pub(crate) mod upload;
 
-use helper::*;
+use shells::*;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -30,10 +30,10 @@ use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
-use winc_config::{OptionAsMeta, TerminalSession};
+use winc_config::TerminalSession;
 use winc_i18n::t;
 use winc_pty::client::{Client, Poll};
-use winc_pty::input::{self, Key as TermKey, Mods};
+use winc_pty::input::{self, Key as TermKey};
 use winc_pty::protocol::{Event, FromHelper, MAGIC, Modes, Size, Theme, ToHelper, VERSION};
 use winc_render::{Color, Rect};
 
@@ -42,11 +42,11 @@ use super::{App, CloseRequest, Focus, UserEvent};
 use crate::theme::{Palette, TOP_BAR, TOP_BAR_END};
 
 pub(crate) use blocks::{ErrorNav, format_duration};
-#[cfg(any(target_os = "macos", all(test, unix)))]
-pub(crate) use editor::shell_quote;
 pub(crate) use find::{FIND_OPTIONS_MIN, FindPart, TermFind};
 pub(crate) use link::TermLink;
 pub(crate) use pointer::BlockHit;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+pub(crate) use shells::shell_quote;
 #[cfg(all(test, unix))]
 pub(crate) use tab::{Point, Selection, Unit};
 pub(crate) use tab::{SETTLE, TabEnd, TermSplit, TermTab, ViewRow};
@@ -516,7 +516,7 @@ impl App {
         // 不换算会在本机启动 shell。
         let dirs: Vec<PathBuf> = (session.tabs.iter())
             .map(|dir| match &root {
-                Some(root) => helper::terminal_path(root, dir.clone()),
+                Some(root) => shells::terminal_path(root, dir.clone()),
                 None => dir.clone(),
             })
             .collect();
@@ -1176,5 +1176,273 @@ impl App {
             line: row.line(tab),
             col,
         })
+    }
+
+    /// 竖向终端列表的区域，包含新建入口和终端条目。
+    pub(crate) fn terminal_tab_list(&self) -> Option<Rect> {
+        self.terminal_tab_list_in(self.layout.terminal)
+    }
+
+    /// 面板在 `card` 时竖向终端列表的区域。
+    fn terminal_tab_list_in(&self, card: Rect) -> Option<Rect> {
+        let shown = self
+            .terminal
+            .strip
+            .position
+            .share(self.config.terminal_vertical_tabs == Some(true));
+        if shown <= 0.0 {
+            return None;
+        }
+        let top = card.y + header_height(card);
+        let width = (card.w / 3.0).min(144.0).floor();
+        (width > 0.0 && card.bottom() > top).then(|| {
+            Rect::new(
+                card.right() - width * shown,
+                top,
+                width,
+                card.bottom() - top,
+            )
+        })
+    }
+
+    /// 竖向列表中的终端条目区域，顶部留给新建入口。
+    pub(crate) fn terminal_tab_rows(&self) -> Option<Rect> {
+        let list = self.terminal_tab_list()?;
+        let top =
+            (list.y + crate::theme::TREE_ROW + strip::TAB_GAP + strip::LIST_GAP).min(list.bottom());
+        Some(Rect::new(list.x, top, list.w, list.bottom() - top))
+    }
+
+    /// 终端内容使用的面板范围，含顶部工具栏的高度，扣除竖向标签列表。
+    pub(crate) fn terminal_content_card(&self) -> Rect {
+        self.terminal_content_card_in(self.layout.terminal)
+    }
+
+    /// 面板在 `card` 时终端内容使用的范围（见 [`Self::terminal_content_card`]）。
+    pub(crate) fn terminal_content_card_in(&self, card: Rect) -> Rect {
+        let card = self.terminal_whole_card_in(card);
+        let Some(tab) = self.terminal.tab().filter(|t| t.pane_count() > 1) else {
+            return card;
+        };
+        let cards = split::pane_cards(card, tab.pane_count(), self.terminal_right());
+        cards.get(tab.pane_at()).copied().unwrap_or(card)
+    }
+
+    /// 面板中除去竖排标签列表的部分，拆分前的整块。
+    pub(crate) fn terminal_whole_card(&self) -> Rect {
+        self.terminal_whole_card_in(self.layout.terminal)
+    }
+
+    fn terminal_whole_card_in(&self, card: Rect) -> Rect {
+        Rect {
+            w: (self.terminal_tab_list_in(card)).map_or(card.w, |list| list.x - card.x),
+            ..card
+        }
+    }
+
+    /// 面板里放网格的区域。
+    pub(crate) fn terminal_grid(&self) -> Rect {
+        let card = self.terminal_content_card();
+        let grid = grid_rect(card, self.fonts.terminal_line_height);
+        let below = |tab: &TermTab| tab.view_top() > 0 && !tab.modes.has(Modes::ALT_SCREEN);
+        if self.terminal.tab().is_some_and(below) {
+            return grid;
+        }
+        Rect {
+            y: card.y + header_height(card),
+            ..grid
+        }
+    }
+
+    /// 显示终端内容的区域：从标签栏下沿到网格下沿，左右与网格相同。
+    pub(crate) fn terminal_view(&self) -> Rect {
+        let grid = self.terminal_grid();
+        let top = self.layout.terminal.y + header_height(self.layout.terminal);
+        Rect::new(grid.x, top, grid.w, grid.bottom() - top)
+    }
+
+    /// 视口最上面露出的显示行和它上沿的窗口坐标（对齐物理像素，文字不因滚动变模糊）。
+    pub(crate) fn terminal_origin(&self) -> (u64, f32) {
+        let top = self.layout.terminal.y + header_height(self.layout.terminal);
+        let Some((first, cut)) = self.terminal.tab().map(TermTab::viewport) else {
+            return (0, top);
+        };
+        let scale = (self.frame.renderer.as_ref()).map_or(1.0, winc_render::Renderer::scale_factor);
+        let y = top - cut * self.fonts.terminal_line_height;
+        (first, (y * scale).round() / scale)
+    }
+
+    /// 吸顶行露出的区域：紧贴标签栏，被下一条命令的提示符顶上去时变矮。
+    pub(crate) fn terminal_sticky_band(&self) -> Rect {
+        let card = self.terminal_content_card();
+        let lh = self.fonts.terminal_line_height;
+        let push = self.terminal.tab().map_or(0.0, TermTab::sticky_push);
+        Rect::new(
+            card.x,
+            card.y + header_height(card),
+            card.w,
+            lh * (1.0 - push),
+        )
+    }
+
+    /// 启动辅助进程（已经在跑时什么也不做）。
+    pub(super) fn start_terminal(&mut self) {
+        self.detect_terminal_shells();
+        if self.terminal.client.is_some() {
+            return;
+        }
+        #[cfg(windows)]
+        if !crate::windows::has_conpty() {
+            self.terminal.error = Some(winc_i18n::t!("terminal-needs-conpty").into());
+            return;
+        }
+        let Some(path) = helper_path() else {
+            eprintln!("winc: 未找到 winc-pty（开发环境下请先运行 cargo build -p winc-pty）");
+            self.terminal.error = Some(winc_i18n::t!("terminal-helper-missing").into());
+            return;
+        };
+        let proxy = self.link.proxy.clone();
+        let wake = move || {
+            if let Some(proxy) = &proxy {
+                let _ = proxy.send_event(UserEvent::Terminal);
+            }
+        };
+        match Client::start(&path, wake) {
+            Ok(client) => {
+                client.send(&ToHelper::Theme(theme_colors(self.palette)));
+                self.terminal.client = Some(client);
+                self.terminal.error = None;
+            }
+            Err(error) => {
+                let error = error.to_string();
+                self.terminal.error =
+                    Some(winc_i18n::t!("terminal-helper-start-failed", error = error));
+            }
+        }
+    }
+
+    /// 辅助进程异常退出后，在原目录重新拉起普通终端标签并恢复辅助进程。
+    pub(super) fn recover_crashed_terminal(&mut self) {
+        let t = &mut self.terminal;
+        t.crashed = false;
+        let before = t.tabs.iter().take(t.active).filter(|tab| tab.run.is_some());
+        t.want_active = Some(t.active - before.count());
+        t.tabs.retain(|tab| tab.run.is_none());
+        t.want_names = t.tabs.iter().map(|tab| tab.name.clone()).collect();
+        t.want_shells = t.tabs.iter().map(|tab| tab.shell.clone()).collect();
+        t.want_into.clear();
+        t.want = t.tabs.drain(..).map(|tab| tab.cwd).collect();
+        if t.want.is_empty() {
+            t.want.push(Vec::new());
+        }
+        t.active = 0;
+        self.start_terminal();
+        self.relayout();
+        self.request_redraw();
+    }
+
+    /// 往上翻着、缺历史行时向辅助进程要。
+    pub(super) fn fetch_terminal_history(&mut self) {
+        let t = &mut self.terminal;
+        let Some(tab) = t.tabs.get_mut(t.active) else {
+            return;
+        };
+        let Some(range) = tab.missing() else {
+            return;
+        };
+        if tab.requested == Some(range) {
+            return;
+        }
+        tab.requested = Some(range);
+        let id = tab.id;
+        t.request(id, range, Request::View);
+    }
+
+    /// 把字节写给正在看的标签里的程序：回到最新的输出。
+    pub(in crate::app) fn terminal_input(&mut self, bytes: Vec<u8>) {
+        let t = &mut self.terminal;
+        let (Some(client), Some(tab)) = (&t.client, t.tabs.get_mut(t.active)) else {
+            return;
+        };
+        if tab.ended.is_some() || bytes.is_empty() {
+            return;
+        }
+        tab.scroll = 0;
+        tab.scroll_frac = 0.0;
+        tab.jump = None;
+        let mut rest = bytes.len() as u64;
+        for chunk in bytes.chunks(INPUT_CHUNK) {
+            rest -= chunk.len() as u64;
+            client.send(&ToHelper::Input {
+                tab: tab.id,
+                bytes: chunk.to_vec(),
+                rest,
+            });
+        }
+        if tab.credit_due {
+            tab.credit_due = false;
+            client.send(&ToHelper::Credit { tab: tab.id });
+        }
+        self.request_redraw();
+    }
+
+    /// 把 `text` 粘贴到标签 `id`；该标签已不是当前标签（确认期间切换或关闭了）时不粘贴。
+    pub(crate) fn confirmed_terminal_paste(&mut self, id: u16, text: String) {
+        let Some(modes) = self.terminal.tab().filter(|t| t.id == id).map(|t| t.modes) else {
+            return;
+        };
+        let mut bytes = Vec::new();
+        input::paste(&text, modes, &mut bytes);
+        self.terminal_input(bytes);
+    }
+
+    /// 复制选区；`clear` 为真时复制后清除选区。
+    pub(in crate::app) fn terminal_copy(&mut self, clear: bool) {
+        let t = &mut self.terminal;
+        let Some(tab) = t.tabs.get_mut(t.active) else {
+            return;
+        };
+        match tab.selected_text() {
+            Ok(Some(text)) => {
+                if clear {
+                    tab.selection = None;
+                }
+                self.set_clipboard(text, false);
+                self.flash(winc_i18n::t!("terminal-selection-copied"));
+            }
+            Ok(None) => {}
+            Err(range) => {
+                let id = tab.id;
+                tab.clear_after_copy |= clear;
+                if !t.waiting(id, Request::Copy) {
+                    t.request(id, range, Request::Copy);
+                }
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// 往上（`lines` 为正）或往下翻回滚缓冲。
+    pub(in crate::app) fn scroll_terminal(&mut self, lines: isize) {
+        let Some(tab) = self.terminal.tab_mut() else {
+            return;
+        };
+        tab.scroll = tab.scroll.saturating_add_signed(lines);
+        tab.scroll_frac = 0.0;
+        tab.clamp_scroll();
+        self.fetch_terminal_history();
+        self.request_redraw();
+    }
+
+    /// 当前标签是否处于备用屏；备用屏没有回滚缓冲，屏幕内容由程序管理。
+    pub(super) fn terminal_alternate_screen(&self) -> bool {
+        self.terminal
+            .tab()
+            .is_some_and(|tab| tab.modes.has(Modes::ALT_SCREEN))
+    }
+
+    /// 回滚缓冲的键盘翻页是否可用；备用屏和终端应用优先时翻页键交给程序。
+    pub(in crate::app) fn terminal_scroll_keys(&self) -> bool {
+        self.config.terminal_application_priority != Some(true) && !self.terminal_alternate_screen()
     }
 }

@@ -41,7 +41,7 @@ pub(crate) mod suggest;
 pub(crate) mod toolbar;
 mod viewer;
 mod writing;
-pub(crate) use live_structure::LiveLeaf;
+pub(crate) use laid::LiveLeaf;
 pub(crate) use viewer::{DiagramLaid, DiagramTool, DiagramView, MAX_ZOOM, MIN_ZOOM};
 pub(crate) use writing::paragraph_lines;
 
@@ -217,7 +217,7 @@ pub(crate) struct MarkdownPreview {
     /// 最近一次用于单光标排版的位置，拖选和键盘扩选时继续使用。
     layout_caret: Option<(DocumentId, u64, usize)>,
     /// 回车刚创建的空段，按退格时可整段收回。
-    empty_paragraph: Option<live::EmptyParagraph>,
+    empty_paragraph: Option<live_caret::EmptyParagraph>,
     /// 可编辑的预览中 ↑↓ 移动的目标横坐标（相对内容左边）和移动后光标的位置（字符偏移）：
     /// 光标仍在该位置时继续按该横坐标移动，经过短行后仍能回到原来的列。
     goal: Option<(f32, usize)>,
@@ -1424,6 +1424,36 @@ pub(crate) fn percent_decode(text: &str) -> String {
         }
     }
     String::from_utf8(out).unwrap_or_else(|_| text.to_owned())
+}
+
+impl App {
+    /// 当前标签是否在编辑 Markdown：可以修改的 Markdown 文件，显示着源代码，或者是可编辑的预览。
+    pub(crate) fn markdown_writing(&self) -> bool {
+        self.markdown_live()
+            || self.editor.active().is_some_and(|d| {
+                d.preview_kind() == Some(PreviewKind::Markdown)
+                    && d.edits_text()
+                    && d.readonly_reason().is_none()
+                    && d.preview_mode() != PreviewMode::Preview
+            })
+    }
+
+    /// 是否淡化光标所在段落以外的文字（专注模式，`markdown.focusMode`）。
+    pub(crate) fn markdown_focus(&self) -> bool {
+        self.config.markdown_focus == Some(true) && self.markdown_writing()
+    }
+
+    /// 是否让光标所在的行停在编辑区中间（打字机模式，`markdown.typewriterMode`）。
+    pub(crate) fn markdown_typewriter(&self) -> bool {
+        self.config.markdown_typewriter == Some(true) && self.markdown_writing()
+    }
+
+    /// 编辑区是否使用写作命令的快捷键：可编辑的预览中总是使用，Markdown 文件的源代码在
+    /// `markdown.shortcuts` 开着时使用。
+    pub(crate) fn markdown_keys(&self) -> bool {
+        self.markdown_live()
+            || (self.config.markdown_shortcuts != Some(false) && self.markdown_writing())
+    }
 }
 
 #[cfg(test)]

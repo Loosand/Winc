@@ -9,6 +9,8 @@
     reason = "只访问本机：列出本机安装的 shell；远端的由连接上的命令列出"
 )]
 
+use std::path::PathBuf;
+
 use super::HeaderHit;
 use crate::app::input::context_menu::{MenuButton, MenuTarget, menu_below};
 use crate::app::{App, UserEvent};
@@ -337,6 +339,263 @@ impl App {
             self.new_terminal_tab_with(Vec::new(), Some(shell.command));
         }
     }
+}
+
+/// 字符 `c` 在 shell 中是否不需要引号。
+pub(crate) fn shell_safe(c: char) -> bool {
+    c.is_alphanumeric()
+        || matches!(
+            c,
+            '/' | '.' | '_' | '-' | '+' | ',' | ':' | '@' | '%' | '=' | '~'
+        )
+}
+
+/// 给 shell 用的路径：只有安全的字符（[`shell_safe`]）时原样，否则用单引号包起来（里面的
+/// 单引号写成 `'\''`）。
+pub(crate) fn shell_quote(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy();
+    if !text.is_empty() && text.chars().all(shell_safe) {
+        return text.into_owned();
+    }
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('\'');
+    for c in text.chars() {
+        if c == '\'' {
+            out.push_str(r"'\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// 辅助进程 `winc-pty` 的路径：优先用环境变量 `WINC_PTY`，否则在主程序同目录查找。
+#[allow(
+    clippy::disallowed_methods,
+    reason = "只访问本机：辅助进程与主程序在同一目录"
+)]
+pub(super) fn helper_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("WINC_PTY") {
+        return Some(path.into());
+    }
+    let exe = std::env::current_exe().ok()?;
+    let path = exe
+        .parent()?
+        .join(format!("winc-pty{}", std::env::consts::EXE_SUFFIX));
+    path.exists().then_some(path)
+}
+
+/// 设置中的默认 shell 是否用于在目录 `dir` 新建的终端：目录在远端主机上，或在 Windows 上位于
+/// WSL 发行版中时不用。菜单中明确选择的 shell 不受此限制。
+pub(super) fn default_shell_applies(dir: &[u8], windows: bool) -> bool {
+    let dir = bytes_path(dir);
+    let in_distro = windows && winc_editor::wsl::locate(&dir).is_some();
+    !winc_backend::is_remote(&dir) && !in_distro
+}
+
+/// 把 shell 报告的工作目录 `path` 转换为编辑器使用的路径（见 [`terminal_path`]）。重启标签和
+/// 恢复现场都使用该目录。
+pub(super) fn local_cwd(root: Option<&std::path::Path>, path: Vec<u8>) -> Vec<u8> {
+    match root {
+        Some(root) => os_bytes(terminal_path(root, bytes_path(&path)).as_os_str()),
+        None => path,
+    }
+}
+
+/// 把终端中的路径 `path` 转换为编辑器使用的路径：打开的目录 `root` 在远端主机上时，`/` 开头的
+/// 路径是那台主机上的路径；位于 WSL 发行版中时属于同一发行版。其余路径原样返回。
+///
+/// 已经是远端主机上的路径时原样返回：标签记下的目录、恢复的现场都是换算过的，Unix 上这种路径
+/// 同样以 `/` 开头，再换算一次会指向错误的位置。
+pub(in crate::app) fn terminal_path(root: &std::path::Path, path: PathBuf) -> PathBuf {
+    if winc_backend::is_remote(&path) {
+        return path;
+    }
+    let bytes = os_bytes(path.as_os_str());
+    match winc_backend::locate(root) {
+        Some(at) if bytes.first() == Some(&b'/') => winc_backend::virtual_path(&at.target, &bytes),
+        Some(_) => path,
+        None => winc_editor::wsl::from_terminal(root, path),
+    }
+}
+
+/// shell 集成脚本放在哪里（配置目录下的 `shell`）；`terminal.shellIntegration` 关了时不注入。
+pub(super) fn integration_dir(config: &winc_config::Config) -> Option<Vec<u8>> {
+    if config.terminal_shell_integration == Some(false) {
+        return None;
+    }
+    let config = winc_config::config_path()?;
+    Some(os_bytes(config.parent()?.join("shell").as_os_str()))
+}
+
+/// 远端主机上的 shell 是否注入集成脚本；本机的 shell 由辅助进程按脚本目录决定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Integration {
+    /// 不注入：设置里关了，或要运行的是一条命令。
+    Off,
+    /// 注入；`prompt` 为假时不换上 winc 的提示符（`terminal.prompt`），`python` 为假时不加载
+    /// 启动目录中的 Python 环境。
+    On { prompt: bool, python: bool },
+}
+
+/// 新终端的启动方式：程序、参数和工作目录。
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Launch {
+    /// 要运行的程序；`None` 表示用户的默认 shell。
+    pub(super) program: Option<Vec<u8>>,
+    pub(super) args: Vec<Vec<u8>>,
+    pub(super) login: bool,
+    pub(super) cwd: Vec<u8>,
+}
+
+/// 返回在目录 `cwd` 新建终端时的启动方式。
+///
+/// `cwd` 在远端主机上时运行 `ssh` 登录那台主机并进入该目录，见 [`remote_launch`]。
+///
+/// 设置了 `shell` 时运行该命令（分词见 [`command_words`]）。在 Windows（`windows`）
+/// 上且 `cwd` 位于 WSL 发行版中时，进入对应的发行版和目录：目录由 `wsl.exe` 的参数指定，进程本身
+/// 从家目录启动。其余情况运行默认 shell。
+pub(super) fn launch(
+    shell: Option<&str>,
+    cwd: Vec<u8>,
+    windows: bool,
+    integration: Integration,
+) -> Launch {
+    if let Some(at) = winc_backend::locate(&bytes_path(&cwd)) {
+        let ready = crate::app::remote::shell_ready(&at.target);
+        // 只接受那台主机上的绝对路径（由调用方按检测到的 shell 确认）；本机的命令不适用。
+        let shell = shell
+            .and_then(program_path)
+            .filter(|path| path.starts_with('/'));
+        return remote_launch(&at, integration, ready, shell.as_deref());
+    }
+    // Windows 上 `/` 开头的目录来自 WSL 中的 shell，不是 Windows 程序可用的工作目录。
+    let cwd = if windows && cwd.first() == Some(&b'/') {
+        Vec::new()
+    } else {
+        cwd
+    };
+    let mut words = shell.map(command_words).unwrap_or_default().into_iter();
+    if let Some(program) = words.next() {
+        return Launch {
+            program: Some(program.into_bytes()),
+            args: words.map(String::into_bytes).collect(),
+            login: !windows,
+            cwd,
+        };
+    }
+    let dir = String::from_utf8_lossy(&cwd);
+    let place = windows
+        .then(|| winc_editor::wsl::locate(std::path::Path::new(dir.as_ref())))
+        .flatten();
+    let Some(place) = place else {
+        return Launch {
+            program: None,
+            args: Vec::new(),
+            login: true,
+            cwd,
+        };
+    };
+    let args = ["-d", place.distro.as_str(), "--cd", place.path.as_str()];
+    Launch {
+        program: Some(b"wsl.exe".to_vec()),
+        args: args.iter().map(|arg| arg.as_bytes().to_vec()).collect(),
+        login: false,
+        cwd: Vec::new(),
+    }
+}
+
+/// 返回在远端主机上的目录 `at` 新建终端时的启动方式：在本机的终端里运行 `ssh`，登录后进入该
+/// 目录并换成那台主机上用户的登录 shell；启用了 shell 集成时一并注入（命令块、当前目录）。
+pub(super) fn remote_launch(
+    at: &winc_backend::Location,
+    integration: Integration,
+    ready: bool,
+    shell: Option<&str>,
+) -> Launch {
+    let start = match (integration, shell) {
+        (Integration::On { prompt, python }, _) if ready => {
+            winc_pty::scripts::remote_command(prompt, python, shell)
+        }
+        (_, Some(shell)) => format!("exec {} -l", winc_pty::scripts::single_quoted(shell)),
+        (_, None) => "exec $SHELL -l".to_owned(),
+    };
+    let dir = String::from_utf8_lossy(&at.path).replace('\'', r"'\''");
+    let mut args: Vec<String> = ["-t", "-o", "RemoteCommand=none"].map(str::to_owned).into();
+    if let Some(options) = winc_backend::remote::shared(&at.target) {
+        args.extend(options);
+    }
+    if let Some(key) = winc_backend::remote::identity(&at.target) {
+        args.extend(["-i".to_owned(), key]);
+    }
+    if let Some(port) = at.target.port() {
+        args.extend(["-p".to_owned(), port.to_string()]);
+    }
+    args.extend([
+        at.target.host().to_owned(),
+        "--".to_owned(),
+        format!("cd '{dir}' && {start}"),
+    ]);
+    Launch {
+        program: Some(b"ssh".to_vec()),
+        args: args.into_iter().map(String::into_bytes).collect(),
+        login: false,
+        cwd: Vec::new(),
+    }
+}
+
+/// 返回给终端的环境变量；`prompt`、`python` 为假时分别加上 `WINC_PROMPT=0`、`WINC_PYTHON=0`，
+/// 集成脚本据此不替换默认提示符、不加载启动目录中的 Python 环境。
+pub(super) fn environment(prompt: bool, python: bool) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut env: Vec<_> = std::env::vars_os()
+        .filter(|(k, _)| k != "WINC_PROMPT" && k != "WINC_PYTHON")
+        .map(|(k, v)| (os_bytes(&k), os_bytes(&v)))
+        .collect();
+    if !prompt {
+        env.push((b"WINC_PROMPT".to_vec(), b"0".to_vec()));
+    }
+    if !python {
+        env.push((b"WINC_PYTHON".to_vec(), b"0".to_vec()));
+    }
+    #[cfg(target_os = "macos")]
+    if !env
+        .iter()
+        .any(|(k, _)| matches!(&k[..], b"LANG" | b"LC_ALL" | b"LC_CTYPE"))
+        && let Some(name) = winc_i18n::Locale::system_posix()
+        && winc_backend::fs::is_dir(
+            std::path::Path::new("/usr/share/locale").join(format!("{name}.UTF-8")),
+        )
+    {
+        env.push((b"LANG".to_vec(), format!("{name}.UTF-8").into_bytes()));
+    }
+    env
+}
+
+/// 路径、环境变量按原样的字节传给辅助进程（它们不一定是 UTF-8）。
+#[cfg(unix)]
+pub(super) fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    s.as_bytes().to_vec()
+}
+
+/// 路径、环境变量按原样的字节传给辅助进程；非 Unix 平台只能先按 UTF-8 有损转换。
+#[cfg(not(unix))]
+pub(super) fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
+    s.to_string_lossy().into_owned().into_bytes()
+}
+
+/// [`os_bytes`] 反过来：辅助进程报的目录换成路径。
+#[cfg(unix)]
+pub(super) fn bytes_path(bytes: &[u8]) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+}
+
+/// [`os_bytes`] 反过来：辅助进程报的目录换成路径；非 Unix 平台按 UTF-8 有损转换。
+#[cfg(not(unix))]
+pub(super) fn bytes_path(bytes: &[u8]) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
 #[cfg(test)]

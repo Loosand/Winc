@@ -74,7 +74,7 @@ fn percent_decode(text: &str) -> String {
 /// 把终端里的路径换成本机路径：打开的目录位于 WSL 发行版中时，绝对路径属于同一发行版。
 fn in_project(root: Option<&Path>, path: PathBuf) -> PathBuf {
     match root {
-        Some(root) => super::helper::terminal_path(root, path),
+        Some(root) => super::shells::terminal_path(root, path),
         None => path,
     }
 }

@@ -7,36 +7,8 @@ use winc_core::Lines;
 use winc_pty::input;
 use winc_pty::protocol::Modes;
 
+use super::shells::shell_quote;
 use super::{App, Focus, os_bytes};
-
-/// 字符 `c` 在 shell 中是否不需要引号。
-pub(crate) fn shell_safe(c: char) -> bool {
-    c.is_alphanumeric()
-        || matches!(
-            c,
-            '/' | '.' | '_' | '-' | '+' | ',' | ':' | '@' | '%' | '=' | '~'
-        )
-}
-
-/// 给 shell 用的路径：只有安全的字符（[`shell_safe`]）时原样，否则用单引号包起来（里面的
-/// 单引号写成 `'\''`）。
-pub(crate) fn shell_quote(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    if !text.is_empty() && text.chars().all(shell_safe) {
-        return text.into_owned();
-    }
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push('\'');
-    for c in text.chars() {
-        if c == '\'' {
-            out.push_str(r"'\''");
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('\'');
-    out
-}
 
 impl App {
     /// 模块开着时「在终端中打开」用内置的终端：在 `dir` 新建一个标签。

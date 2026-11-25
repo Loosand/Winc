@@ -459,7 +459,7 @@ impl App {
         };
         // 打开的目录在远端主机上或位于 WSL 发行版中时，命令报告的绝对路径属于那里。
         let local = |path| match &root {
-            Some(root) => super::helper::terminal_path(root, path),
+            Some(root) => super::shells::terminal_path(root, path),
             None => path,
         };
         let cwd = if block.cwd.is_empty() {

@@ -15,7 +15,7 @@ use winc_backend::Target;
 use winc_backend::remote::{self, Exec};
 use winc_i18n::t;
 
-use super::editor::{shell_quote, shell_safe};
+use super::shells::{shell_quote, shell_safe};
 use super::*;
 use crate::app::NoticeKind;
 use crate::app::editor::clipboard::ClipImage;
