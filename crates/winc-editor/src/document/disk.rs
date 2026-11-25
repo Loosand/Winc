@@ -189,11 +189,9 @@ enum Outcome {
 }
 
 impl DiskRead {
-    /// 读的时候文档还和 `doc` 一样：版本、路径都没变，也没有未保存的修改。
-    pub fn applies_to(&self, doc: &Document) -> bool {
-        doc.revision == self.revision
-            && doc.path.as_deref() == Some(self.path.as_path())
-            && !doc.is_dirty()
+    /// 读的时候目标路径和版本号是否与当前一致。
+    fn matches(&self, path: Option<&Path>, revision: u64) -> bool {
+        revision == self.revision && path == Some(self.path.as_path())
     }
 }
 
@@ -564,6 +562,11 @@ impl Document {
         })
     }
 
+    /// 后台读回的 `reread` 是否仍然适用于当前文档：版本、路径都没变，也没有未保存的修改。
+    pub fn accepts_reread(&self, reread: &DiskRead) -> bool {
+        reread.matches(self.path.as_deref(), self.revision) && !self.is_dirty()
+    }
+
     /// 换上后台读好的内容 `reread`（见 [`Document::check_disk`]）：整个重读的返回
     /// [`DiskChange::Reloaded`]，只读末尾追加部分的接上后返回 [`DiskChange::Appended`]。
     ///
@@ -573,7 +576,7 @@ impl Document {
     ///
     /// 重读失败（读取出错、内容变成二进制或超过大小上限）时返回 [`OpenError`]，文档不变。
     pub fn apply_reread(&mut self, reread: DiskRead) -> Result<DiskChange, OpenError> {
-        if !reread.applies_to(self) {
+        if !self.accepts_reread(&reread) {
             return Ok(DiskChange::Unchanged);
         }
         match reread.outcome {

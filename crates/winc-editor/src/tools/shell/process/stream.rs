@@ -99,7 +99,7 @@ impl Stream {
         std::os::unix::process::CommandExt::process_group(command, 0);
         #[cfg(windows)]
         std::os::windows::process::CommandExt::creation_flags(command, 0x0800_0000);
-        crate::wsl::drop_unset(command);
+        super::drop_unset_wslenv(command);
         let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

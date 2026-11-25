@@ -514,7 +514,7 @@ pub fn complete(text: &str) -> Option<Completion> {
     if cmd == Cmd::Set {
         let prefix = word.trim_start_matches("no").trim_start_matches("inv");
         let start = text.len() - prefix.len();
-        let candidates: Vec<String> = crate::vim::option_names()
+        let candidates: Vec<String> = option_names()
             .filter(|name| name.starts_with(prefix))
             .map(str::to_owned)
             .collect();
@@ -534,6 +534,84 @@ pub fn complete(text: &str) -> Option<Completion> {
         start,
         candidates: Vec::new(),
     })
+}
+
+/// 选项保存的位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OptionTarget {
+    /// 由宿主保存。
+    Host(crate::host::HostOption),
+    /// `ignorecase`。
+    IgnoreCase,
+    /// `smartcase`。
+    SmartCase,
+    /// `hlsearch`。
+    HlSearch,
+    /// `incsearch`。
+    IncSearch,
+    /// `wrapscan`。
+    WrapScan,
+    /// `gdefault`。
+    GDefault,
+    /// `scrolloff`。
+    ScrollOff,
+    /// `timeoutlen`。
+    TimeoutLen,
+    /// `clipboard`。
+    Clipboard,
+}
+
+/// 选项的全名、缩写、保存的位置，以及是否为开关。
+pub(crate) const OPTIONS: &[(&str, &str, OptionTarget, bool)] = {
+    use crate::host::HostOption;
+    &[
+        ("number", "nu", OptionTarget::Host(HostOption::Number), true),
+        (
+            "relativenumber",
+            "rnu",
+            OptionTarget::Host(HostOption::RelativeNumber),
+            true,
+        ),
+        ("wrap", "wrap", OptionTarget::Host(HostOption::Wrap), true),
+        ("list", "list", OptionTarget::Host(HostOption::List), true),
+        (
+            "tabstop",
+            "ts",
+            OptionTarget::Host(HostOption::TabStop),
+            false,
+        ),
+        (
+            "shiftwidth",
+            "sw",
+            OptionTarget::Host(HostOption::ShiftWidth),
+            false,
+        ),
+        (
+            "expandtab",
+            "et",
+            OptionTarget::Host(HostOption::ExpandTab),
+            true,
+        ),
+        ("ignorecase", "ic", OptionTarget::IgnoreCase, true),
+        ("smartcase", "scs", OptionTarget::SmartCase, true),
+        ("hlsearch", "hls", OptionTarget::HlSearch, true),
+        ("incsearch", "is", OptionTarget::IncSearch, true),
+        ("wrapscan", "ws", OptionTarget::WrapScan, true),
+        ("gdefault", "gd", OptionTarget::GDefault, true),
+        ("scrolloff", "so", OptionTarget::ScrollOff, false),
+        ("timeoutlen", "tm", OptionTarget::TimeoutLen, false),
+        ("clipboard", "cb", OptionTarget::Clipboard, false),
+    ]
+};
+
+/// 返回各选项的全名与缩写，供帮助页列出。
+pub fn option_list() -> impl Iterator<Item = (&'static str, &'static str)> {
+    OPTIONS.iter().map(|(name, short, _, _)| (*name, *short))
+}
+
+/// 返回各选项的全名，供补全使用。
+pub(crate) fn option_names() -> impl Iterator<Item = &'static str> {
+    OPTIONS.iter().map(|(name, _, _, _)| *name)
 }
 
 #[cfg(test)]

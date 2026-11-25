@@ -178,9 +178,7 @@ impl Terminal {
     ///
     /// 主屏按新宽度重排，备用屏只截断或补齐。
     pub fn resize(&mut self, size: Size) {
-        self.emu.pixels = (size.width, size.height);
-        self.emu
-            .resize(usize::from(size.cols).max(1), usize::from(size.rows).max(1));
+        self.emu.resize(size);
     }
 
     /// 清空屏幕和回滚缓冲，光标所在行（一般是提示符）保留并移到第一行（⌘K）。
@@ -192,11 +190,7 @@ impl Terminal {
     ///
     /// 程序用模式 2031 要求过通知、明暗发生变化时，回答新的明暗。
     pub fn set_theme(&mut self, theme: Option<Theme>) {
-        let before = self.emu.theme.as_ref().map(Theme::is_dark);
-        self.emu.theme = theme;
-        if self.emu.scheme_reports && self.emu.theme.as_ref().map(Theme::is_dark) != before {
-            self.emu.report_color_scheme();
-        }
+        self.emu.set_theme(theme);
     }
 
     /// 设置 shell 集成脚本报告命令行时附带的随机数。
@@ -204,7 +198,7 @@ impl Terminal {
     /// 只记录附带该随机数的命令行（OSC 133 `C`），程序输出中伪造的命令行不记录；没有设置随机数
     /// 时不记录任何命令行。
     pub fn set_nonce(&mut self, nonce: String) {
-        self.emu.nonce = Some(nonce);
+        self.emu.set_nonce(nonce);
     }
 
     /// 列数。
@@ -224,28 +218,17 @@ impl Terminal {
 
     /// 命令块（shell 集成）；与上次取出时相同则返回 `None`。
     pub fn take_blocks(&mut self) -> Option<Vec<Block>> {
-        let emu = &mut self.emu;
-        let base = emu.history.range().1;
-        let screen: Vec<(u64, Marks)> = emu
-            .primary
-            .rows
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| !row.marks.is_empty())
-            .map(|(i, row)| (base + i as u64, row.marks))
-            .collect();
-        emu.blocks
-            .take(emu.history.range().0, &screen, emu.history.marks())
+        self.emu.take_blocks()
     }
 
     /// 取出积攒的事件，取走后列表清空。
     pub fn take_events(&mut self) -> Vec<Event> {
-        std::mem::take(&mut self.emu.events)
+        self.emu.take_events()
     }
 
     /// 取出要写回伪终端的字节（对查询的回答），取走后清空。
     pub fn take_responses(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.emu.responses)
+        self.emu.take_responses()
     }
 
     /// 是否因重排或清空回滚缓冲改变了行号，且变化尚未随帧发出。
@@ -595,6 +578,40 @@ impl Emulator {
         let mut modes = self.modes;
         modes.set(Modes::ALT_SCREEN, self.alt);
         modes
+    }
+
+    fn set_theme(&mut self, theme: Option<Theme>) {
+        let before = self.theme.as_ref().map(Theme::is_dark);
+        self.theme = theme;
+        if self.scheme_reports && self.theme.as_ref().map(Theme::is_dark) != before {
+            self.report_color_scheme();
+        }
+    }
+
+    fn set_nonce(&mut self, nonce: String) {
+        self.nonce = Some(nonce);
+    }
+
+    fn take_blocks(&mut self) -> Option<Vec<Block>> {
+        let base = self.history.range().1;
+        let screen: Vec<(u64, Marks)> = self
+            .primary
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| !row.marks.is_empty())
+            .map(|(i, row)| (base + i as u64, row.marks))
+            .collect();
+        self.blocks
+            .take(self.history.range().0, &screen, self.history.marks())
+    }
+
+    fn take_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.events)
+    }
+
+    fn take_responses(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.responses)
     }
 
     fn keyboard(&self) -> u8 {

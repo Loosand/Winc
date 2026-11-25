@@ -49,7 +49,7 @@ mod raw;
 mod table;
 
 pub use memo::Memo;
-pub use memo::{key as memo_key, shift};
+pub use memo::key as memo_key;
 
 /// Stable foreground and background for a select label in either theme.
 pub fn property_chip_colors(label: &str, dark: bool) -> (Color, Color) {
@@ -387,6 +387,126 @@ impl Item {
             | Item::Path { rect, .. }
             | Item::Polygon { rect, .. } => (rect.x, rect.right()),
         }
+    }
+
+    /// 挪到 `(dx, dy)`，文字的位置往后挪 `dc` 个字符。
+    pub(crate) fn moved(&self, dx: f32, dy: f32, dc: usize) -> Item {
+        let rect = |r: &Rect| Rect::new(r.x + dx, r.y + dy, r.w, r.h);
+        match self {
+            Item::Text {
+                x,
+                baseline,
+                text,
+                font,
+                faux,
+                size,
+                color,
+                span,
+            } => Item::Text {
+                x: x + dx,
+                baseline: baseline + dy,
+                text: Arc::clone(text),
+                font: *font,
+                faux: *faux,
+                size: *size,
+                color: *color,
+                span: span.as_ref().map(|s| Span {
+                    start: s.start + dc,
+                    advances: Arc::clone(&s.advances),
+                    source: s.source,
+                    jumps: s.jumps.clone(),
+                }),
+            },
+            Item::Fill {
+                rect: r,
+                color,
+                radius,
+            } => Item::Fill {
+                rect: rect(r),
+                color: *color,
+                radius: *radius,
+            },
+            Item::Corners {
+                rect: r,
+                color,
+                radii,
+            } => Item::Corners {
+                rect: rect(r),
+                color: *color,
+                radii: *radii,
+            },
+            Item::Image { rect: r, path, at } => Item::Image {
+                rect: rect(r),
+                path: path.clone(),
+                at: at.map(|(c, s)| (c + dc, s)),
+            },
+            Item::Link { rect: r, url } => Item::Link {
+                rect: rect(r),
+                url: Arc::clone(url),
+            },
+            Item::Spot { rect: r, at } => Item::Spot {
+                rect: rect(r),
+                at: (at.0 + dc, at.1),
+            },
+            Item::Check {
+                rect: r,
+                checked,
+                source,
+            } => Item::Check {
+                rect: rect(r),
+                checked: *checked,
+                source: *source,
+            },
+            Item::Table {
+                rect: r,
+                align,
+                cols,
+                rows,
+            } => Item::Table {
+                rect: rect(r),
+                align: *align,
+                cols: Arc::clone(cols),
+                rows: Arc::clone(rows),
+            },
+            Item::Code {
+                rect: r,
+                text,
+                diagram,
+            } => Item::Code {
+                rect: rect(r),
+                text: Arc::clone(text),
+                diagram: *diagram,
+            },
+            Item::Path {
+                rect: r,
+                strokes,
+                width,
+                color,
+            } => Item::Path {
+                rect: rect(r),
+                strokes: strokes.iter().map(|&s| shift(s, dx, dy)).collect(),
+                width: *width,
+                color: *color,
+            },
+            Item::Polygon {
+                rect: r,
+                points,
+                color,
+            } => Item::Polygon {
+                rect: rect(r),
+                points: points.iter().map(|&(x, y)| (x + dx, y + dy)).collect(),
+                color: *color,
+            },
+        }
+    }
+}
+
+/// 线 `s` 挪 `(dx, dy)`。
+pub fn shift(s: Stroke, dx: f32, dy: f32) -> Stroke {
+    match s {
+        Stroke::Line(ax, ay, bx, by) => Stroke::Line(ax + dx, ay + dy, bx + dx, by + dy),
+        Stroke::Circle(cx, cy, r) => Stroke::Circle(cx + dx, cy + dy, r),
+        Stroke::Arc(cx, cy, r, from, to) => Stroke::Arc(cx + dx, cy + dy, r, from, to),
     }
 }
 

@@ -11,9 +11,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use winc_preview::markdown::Inline;
-use winc_render::{Rect, Stroke};
 
-use super::{Cx, Flow, Item, Para, Span};
+use super::{Cx, Flow, Item, Para};
 
 /// 清理前允许保留的旧条目数（条）。
 ///
@@ -27,11 +26,11 @@ pub struct Memo {
     /// 排出这些结果时的条件签名。
     key: u64,
     /// 段落的排版结果。
-    pub(crate) flows: HashMap<u64, Arc<Piece>>,
+    flows: HashMap<u64, Arc<Piece>>,
     /// 代码块每一行的排版结果和行末的词法状态。
-    pub(crate) lines: HashMap<u64, (Arc<Piece>, winc_syntax::LineState)>,
+    lines: HashMap<u64, (Arc<Piece>, winc_syntax::LineState)>,
     /// 量出的（最长词宽，整段宽），都是逻辑像素。
-    pub(crate) measures: HashMap<u64, (f32, f32)>,
+    measures: HashMap<u64, (f32, f32)>,
     /// 上次调用 [`Memo::take_touched`] 之后读取或写入的条目。
     touched: Vec<u64>,
 }
@@ -94,6 +93,40 @@ impl Memo {
         self.lines.shrink_to_fit();
         self.measures.shrink_to_fit();
     }
+
+    pub(crate) fn get_flow(&mut self, key: u64) -> Option<Arc<Piece>> {
+        self.touch(key);
+        self.flows.get(&key).map(Arc::clone)
+    }
+
+    pub(crate) fn insert_flow(&mut self, key: u64, piece: Arc<Piece>) {
+        self.flows.insert(key, piece);
+    }
+
+    pub(crate) fn get_line(&mut self, key: u64) -> Option<(Arc<Piece>, winc_syntax::LineState)> {
+        self.touch(key);
+        self.lines
+            .get(&key)
+            .map(|(piece, state)| (Arc::clone(piece), *state))
+    }
+
+    pub(crate) fn insert_line(
+        &mut self,
+        key: u64,
+        piece: Arc<Piece>,
+        state: winc_syntax::LineState,
+    ) {
+        self.lines.insert(key, (piece, state));
+    }
+
+    pub(crate) fn get_measure(&mut self, key: u64) -> Option<(f32, f32)> {
+        self.touch(key);
+        self.measures.get(&key).copied()
+    }
+
+    pub(crate) fn insert_measure(&mut self, key: u64, measured: (f32, f32)) {
+        self.measures.insert(key, measured);
+    }
 }
 
 /// 单独排好的一段：坐标从 0 起，文字的位置从块文字的第 0 个字符起。
@@ -124,128 +157,6 @@ impl Para {
         }
         self.bold.hash(h);
         self.align.hash(h);
-    }
-}
-
-impl Item {
-    /// 挪到 `(dx, dy)`，文字的位置往后挪 `dc` 个字符。
-    pub(crate) fn moved(&self, dx: f32, dy: f32, dc: usize) -> Item {
-        let rect = |r: &Rect| Rect::new(r.x + dx, r.y + dy, r.w, r.h);
-        match self {
-            Item::Text {
-                x,
-                baseline,
-                text,
-                font,
-                faux,
-                size,
-                color,
-                span,
-            } => Item::Text {
-                x: x + dx,
-                baseline: baseline + dy,
-                text: Arc::clone(text),
-                font: *font,
-                faux: *faux,
-                size: *size,
-                color: *color,
-                span: span.as_ref().map(|s| Span {
-                    start: s.start + dc,
-                    advances: Arc::clone(&s.advances),
-                    source: s.source,
-                    jumps: s.jumps.clone(),
-                }),
-            },
-            Item::Fill {
-                rect: r,
-                color,
-                radius,
-            } => Item::Fill {
-                rect: rect(r),
-                color: *color,
-                radius: *radius,
-            },
-            Item::Corners {
-                rect: r,
-                color,
-                radii,
-            } => Item::Corners {
-                rect: rect(r),
-                color: *color,
-                radii: *radii,
-            },
-            Item::Image { rect: r, path, at } => Item::Image {
-                rect: rect(r),
-                path: path.clone(),
-                at: at.map(|(c, s)| (c + dc, s)),
-            },
-            Item::Link { rect: r, url } => Item::Link {
-                rect: rect(r),
-                url: Arc::clone(url),
-            },
-            Item::Spot { rect: r, at } => Item::Spot {
-                rect: rect(r),
-                at: (at.0 + dc, at.1),
-            },
-            Item::Check {
-                rect: r,
-                checked,
-                source,
-            } => Item::Check {
-                rect: rect(r),
-                checked: *checked,
-                source: *source,
-            },
-            Item::Table {
-                rect: r,
-                align,
-                cols,
-                rows,
-            } => Item::Table {
-                rect: rect(r),
-                align: *align,
-                cols: Arc::clone(cols),
-                rows: Arc::clone(rows),
-            },
-            Item::Code {
-                rect: r,
-                text,
-                diagram,
-            } => Item::Code {
-                rect: rect(r),
-                text: Arc::clone(text),
-                diagram: *diagram,
-            },
-            Item::Path {
-                rect: r,
-                strokes,
-                width,
-                color,
-            } => Item::Path {
-                rect: rect(r),
-                strokes: strokes.iter().map(|&s| shift(s, dx, dy)).collect(),
-                width: *width,
-                color: *color,
-            },
-            Item::Polygon {
-                rect: r,
-                points,
-                color,
-            } => Item::Polygon {
-                rect: rect(r),
-                points: points.iter().map(|&(x, y)| (x + dx, y + dy)).collect(),
-                color: *color,
-            },
-        }
-    }
-}
-
-/// 线 `s` 挪 `(dx, dy)`。
-pub fn shift(s: Stroke, dx: f32, dy: f32) -> Stroke {
-    match s {
-        Stroke::Line(ax, ay, bx, by) => Stroke::Line(ax + dx, ay + dy, bx + dx, by + dy),
-        Stroke::Circle(cx, cy, r) => Stroke::Circle(cx + dx, cy + dy, r),
-        Stroke::Arc(cx, cy, r, from, to) => Stroke::Arc(cx + dx, cy + dy, r, from, to),
     }
 }
 
@@ -315,15 +226,14 @@ impl Cx<'_, '_> {
             para.hash_into(h);
         });
         let source = u32::try_from(inline.source).unwrap_or(0);
-        self.memo.touch(key);
-        let piece = match self.memo.flows.get(&key) {
-            Some(piece) => Arc::clone(piece),
+        let piece = match self.memo.get_flow(key) {
+            Some(piece) => piece,
             None => {
                 let mut piece =
                     self.isolated(|cx, out| cx.flow_at(inline, 0.0, 0.0, width, para, out));
                 piece.source = source;
                 let piece = Arc::new(piece);
-                self.memo.flows.insert(key, Arc::clone(&piece));
+                self.memo.insert_flow(key, Arc::clone(&piece));
                 piece
             }
         };
@@ -343,12 +253,11 @@ impl Cx<'_, '_> {
             inline.hash(h);
             para.hash_into(h);
         });
-        self.memo.touch(key);
-        if let Some(&hit) = self.memo.measures.get(&key) {
+        if let Some(hit) = self.memo.get_measure(key) {
             return hit;
         }
         let measured = self.measure_raw(inline, para);
-        self.memo.measures.insert(key, measured);
+        self.memo.insert_measure(key, measured);
         measured
     }
 }

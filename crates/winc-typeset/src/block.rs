@@ -122,11 +122,11 @@ impl Cx<'_, '_> {
         out: &mut Out,
     ) -> Flow {
         let base = self.base;
-        let mut b = self.math(tex, base, true, env.color);
+        let mut b = crate::math::layout(self.frame, self.dark, tex, base, true, env.color);
         // 比一行宽的缩小（最多缩到一半），还宽就让它超出去。
         if b.w > width {
             let size = base * (width / b.w).max(0.5);
-            b = self.math(tex, size, true, env.color);
+            b = crate::math::layout(self.frame, self.dark, tex, size, true, env.color);
         }
         let pad = base * 0.5;
         let (dx, baseline) = (x + ((width - b.w) / 2.0).max(0.0), y + pad + b.asc);

@@ -309,14 +309,14 @@ impl Emulator {
                 // shell 重画提示符时不再发送 `A`，命令块仍依赖该标记。
                 if let Some(marks) = marks {
                     self.primary.rows[self.primary.cursor.row].marks = marks;
-                    self.blocks.dirty = true;
+                    self.blocks.mark_dirty();
                 }
             }
             3 => {
                 self.history_erased = true;
                 self.last_kept = None;
                 self.history.clear();
-                self.blocks.dirty = true;
+                self.blocks.mark_dirty();
                 self.damage.reset = true;
                 self.damage.all();
             }
@@ -402,7 +402,7 @@ impl Emulator {
         }
         self.last_kept = None;
         self.history.clear();
-        self.blocks.dirty = true;
+        self.blocks.mark_dirty();
         self.damage.reset = true;
         self.damage.all();
     }

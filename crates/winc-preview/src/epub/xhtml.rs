@@ -165,6 +165,11 @@ impl Targets {
             .or_insert_with(|| format!("c{chapter}-{next}"));
     }
 
+    /// 返回第 `chapter` 章中 `id` 对应的锚点（如果该元素被某处链接指向）。
+    fn anchor(&self, chapter: usize, id: &str) -> Option<&str> {
+        self.named[chapter].get(id).map(String::as_str)
+    }
+
     /// `path` 中片段标识为 `fragment` 的位置的锚点：元素不存在或没有片段标识时为该章的开头；
     /// `path` 不是书中的一章时为 `None`。
     fn find(&self, path: &str, fragment: Option<&str>) -> Option<String> {
@@ -279,9 +284,9 @@ impl<'b, 'a> Writer<'b, 'a> {
     /// 转换元素 `node`。
     fn element(&mut self, node: Node<'_, '_>, depth: usize) {
         if let Some(id) = element_id(node)
-            && let Some(anchor) = self.targets.named[self.chapter].get(id)
+            && let Some(anchor) = self.targets.anchor(self.chapter, id)
         {
-            self.anchors.push(anchor.clone());
+            self.anchors.push(anchor.to_owned());
         }
         if depth > MAX_DEPTH {
             let nodes = node.descendants().filter(Node::is_text);

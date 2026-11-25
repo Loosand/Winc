@@ -98,20 +98,15 @@ fn crew_in(pool: &'static Pool, helpers: usize, work: Arc<dyn Fn() + Send + Sync
     for _ in 0..helpers {
         let (shared, work) = (Arc::clone(&shared), Arc::clone(&work));
         pool.spawn(Box::new(move || {
-            {
-                let mut count = shared.lock();
-                if count.closed {
-                    return;
-                }
-                count.started += 1;
+            if !shared.try_start() {
+                return;
             }
             // 帮手发生 panic 时（unwind 构建，如测试）也要计为已完成，否则 `Crew::wait`
             // 会一直等待。
             struct Done(Arc<CrewState>);
             impl Drop for Done {
                 fn drop(&mut self) {
-                    self.0.lock().finished += 1;
-                    self.0.done.notify_all();
+                    self.0.finish();
                 }
             }
             let _done = Done(shared);
@@ -146,6 +141,31 @@ impl CrewState {
     fn lock(&self) -> std::sync::MutexGuard<'_, CrewCount> {
         self.count.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn try_start(&self) -> bool {
+        let mut count = self.lock();
+        if count.closed {
+            return false;
+        }
+        count.started += 1;
+        true
+    }
+
+    fn finish(&self) {
+        self.lock().finished += 1;
+        self.done.notify_all();
+    }
+
+    fn wait(&self) {
+        let mut count = self.lock();
+        count.closed = true;
+        while count.finished < count.started {
+            count = self
+                .done
+                .wait(count)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
 }
 
 impl Crew {
@@ -153,15 +173,7 @@ impl Crew {
     ///
     /// 在调用线程自己的那份工作做完之后调用。
     pub fn wait(self) {
-        let mut count = self.shared.lock();
-        count.closed = true;
-        while count.finished < count.started {
-            count = self
-                .shared
-                .done
-                .wait(count)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
+        self.shared.wait();
     }
 }
 

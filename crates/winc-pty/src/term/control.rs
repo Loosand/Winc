@@ -143,7 +143,10 @@ impl Emulator {
     }
 
     /// 修改尺寸：主屏按新宽度重排，备用屏只截断或补齐，光标跟随所在的字符移动。
-    pub(super) fn resize(&mut self, cols: usize, rows: usize) {
+    pub(super) fn resize(&mut self, size: crate::protocol::Size) {
+        self.pixels = (size.width, size.height);
+        let cols = usize::from(size.cols).max(1);
+        let rows = usize::from(size.rows).max(1);
         if cols == self.cols && rows == self.rows {
             return;
         }
@@ -171,24 +174,26 @@ impl Emulator {
             reflow::resize_rows(&mut self.history, screen, at, self.cleared, cols, rows)
         } else {
             let (first, last) = self.history.range();
-            let history = self.history.take_all();
-            let result = reflow::reflow(
-                history,
-                screen,
-                at,
-                cursor.pending_wrap,
-                (self.cleared.clamp(first, last) - first) as usize,
-                old_cols,
-                cols,
-                rows,
-            );
+            let cleared = (self.cleared.clamp(first, last) - first) as usize;
+            let (rows, moved, new_cleared) = self.history.replace_with(|history| {
+                let result = reflow::reflow(
+                    history,
+                    screen,
+                    at,
+                    cursor.pending_wrap,
+                    cleared,
+                    old_cols,
+                    cols,
+                    rows,
+                );
+                (result.history, (result.rows, result.cursor, result.cleared))
+            });
             // 重排后行号从原来的起点继续排列。
-            self.cleared = first + result.cleared as u64;
-            self.history.extend(result.history);
-            (result.rows, result.cursor)
+            self.cleared = first + new_cleared as u64;
+            (rows, moved)
         };
         self.primary.rows = screen;
-        self.blocks.dirty = true;
+        self.blocks.mark_dirty();
         let pending_wrap = cursor.pending_wrap && moved.1 >= cols;
         let new = Pos {
             row: moved.0,
@@ -278,7 +283,7 @@ impl Emulator {
     /// 仅在 shell 停在会自行重画的提示符上时执行（[`Blocks::redraws_prompt`]）。不擦除时重排会把
     /// 用点填满的提示符第一行折成两行，shell 收到 SIGWINCH 后无法退回顶部，旧提示符留在屏幕上。
     fn clear_prompt(&mut self, cols: usize) {
-        if self.alt || !self.blocks.at_prompt || !self.blocks.redraws_prompt {
+        if self.alt || !self.blocks.should_clear_prompt() {
             return;
         }
         let (new_cols, cols) = (cols, self.cols);
@@ -302,6 +307,6 @@ impl Emulator {
         }
         primary.cursor.pending_wrap = false;
         primary.cursor.col = primary.cursor.col.min(new_cols.saturating_sub(1));
-        self.blocks.dirty = true;
+        self.blocks.mark_dirty();
     }
 }

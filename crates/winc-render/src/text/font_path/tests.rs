@@ -1,6 +1,7 @@
 //! 字体名解析的测试：路径与名字的检查、CoreText 查询，以及系统保留名的处理。
 
 use super::*;
+use crate::text::font_list::{FontError, FontSpec};
 
 #[test]
 fn path_spec_requires_an_existing_file() {

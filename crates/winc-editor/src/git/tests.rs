@@ -885,7 +885,7 @@ fn unset_wsl_variables_do_not_select_an_empty_index() {
     // 取空字符串。
     let mut command = git.command(&dir);
     command.env("WSLENV", crate::wsl::GIT_ENV);
-    crate::wsl::drop_unset(&mut command);
+    crate::tools::shell::process::drop_unset_wslenv(&mut command);
     let list = (command.get_envs())
         .find(|(key, _)| *key == "WSLENV")
         .and_then(|(_, value)| value)

@@ -47,9 +47,9 @@ pub(super) struct Blocks {
     /// 最近一次 OSC 7 报告的目录。
     ///
     /// 各个块共用同一份，程序连续输出数万个提示符时，长路径不会被复制数万份。
-    pub cwd: Rc<[u8]>,
+    cwd: Rc<[u8]>,
     /// 标记是否已变化（新标记、重排、清空回滚缓冲），为真时下次取出重新计数。
-    pub dirty: bool,
+    dirty: bool,
     /// 上次看到的屏幕标记指纹，由行号和标记算出，清屏擦掉标记时随之变化。
     signature: u64,
     /// 上次发送的块，内容不变时不重复发送。
@@ -60,10 +60,35 @@ pub(super) struct Blocks {
     ///
     /// 由 `A` 的 `redraw=1` 参数置位，winc 的 zsh、fish 集成会发送该参数；为真时改宽度先擦掉
     /// 提示符、不重排提示符所在的行（见 `Emulator::clear_prompt`）。
-    pub redraws_prompt: bool,
+    redraws_prompt: bool,
 }
 
 impl Blocks {
+    /// 更新最近一次 OSC 7 报告的目录。
+    pub fn set_cwd(&mut self, cwd: &[u8]) {
+        self.cwd = cwd.into();
+    }
+
+    /// 标记命令块需要重新计数。
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// 改宽度时是否应先擦掉当前提示符再重排。
+    pub fn should_clear_prompt(&self) -> bool {
+        self.at_prompt && self.redraws_prompt
+    }
+
+    /// 根据 OSC 133 `A` 的参数更新提示符重画标记。
+    pub fn update_prompt_params(&mut self, params: &[&[u8]]) {
+        for param in params {
+            match *param {
+                b"redraw=1" => self.redraws_prompt = true,
+                b"redraw=0" => self.redraws_prompt = false,
+                _ => {}
+            }
+        }
+    }
     /// 开始新提示符对应的块，返回块编号，编号记在提示符所在的行上。
     pub fn prompt(&mut self) -> u32 {
         self.next_id = self.next_id.wrapping_add(1).max(1);

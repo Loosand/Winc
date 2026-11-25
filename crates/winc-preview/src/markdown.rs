@@ -598,22 +598,7 @@ pub fn parse(text: &str) -> Markdown {
         ..Builder::default()
     };
     for (event, range) in crate::note_links::events(text, options()) {
-        // 顶层块开始的地方：不在任何容器、段落、代码块、HTML 块里。分隔线没有开始、结束两个
-        // 事件，只有一个。
-        if matches!(event, Event::Start(_) | Event::Rule)
-            && builder.stack.is_empty()
-            && builder.inline.is_none()
-            && builder.code.is_none()
-            && builder.html.is_none()
-        {
-            builder.start_at = range.start;
-        }
-        (builder.start, builder.cursor, builder.end) = (range.start, range.start, range.end);
-        builder.event(event);
-        if builder.inline.is_some() {
-            let leaf = builder.leaf.get_or_insert(range.clone());
-            *leaf = leaf.start.min(range.start)..leaf.end.max(range.end);
-        }
+        builder.step(event, range);
     }
     builder.finish(text)
 }
@@ -704,6 +689,25 @@ struct Builder<'s> {
 }
 
 impl Builder<'_> {
+    fn step(&mut self, event: Event<'_>, range: Range<usize>) {
+        // 顶层块开始的地方：不在任何容器、段落、代码块、HTML 块里。分隔线没有开始、结束两个
+        // 事件，只有一个。
+        if matches!(event, Event::Start(_) | Event::Rule)
+            && self.stack.is_empty()
+            && self.inline.is_none()
+            && self.code.is_none()
+            && self.html.is_none()
+        {
+            self.start_at = range.start;
+        }
+        (self.start, self.cursor, self.end) = (range.start, range.start, range.end);
+        self.event(event);
+        if self.inline.is_some() {
+            let leaf = self.leaf.get_or_insert(range.clone());
+            *leaf = leaf.start.min(range.start)..leaf.end.max(range.end);
+        }
+    }
+
     fn style(&self) -> Style {
         self.styles.last().copied().unwrap_or_default()
     }

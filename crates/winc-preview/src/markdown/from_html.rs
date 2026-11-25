@@ -155,6 +155,14 @@ struct Table {
 }
 
 impl Writer {
+    fn in_pre(&self) -> bool {
+        self.pre.is_some()
+    }
+
+    fn open_link(&mut self, href: String) {
+        self.spans.push((Span::Link(href), self.inline.len()));
+    }
+
     fn open(&mut self, name: &str, attrs: &str) {
         // 只按同类的开始、结束标签计层数，其中的其他标签不计入。
         if is_skipped(name) {

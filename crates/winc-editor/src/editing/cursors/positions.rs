@@ -41,7 +41,7 @@ fn member_after(command: &Command, selection: Selection, transaction: &Transacti
 /// 一个字就是上亿次；只有紧挨着修改的几个选区按 [`shift_selection`] 的边界规则逐个映射，更远的平移
 /// 同样的距离。修改吞掉相邻选区时（如按词退格越过前一个光标）选区可能不再有序，此后改回逐个映射。
 pub(super) struct Positions {
-    pub(super) selections: Vec<Selection>,
+    selections: Vec<Selection>,
     /// 差分数组：第 `j` 个选区还要平移 `pending[..=j]` 之和，比选区多一项，避免处处判断越界。
     ///
     /// 只有已处理过的选区（某一组之后的那些）上有值。
@@ -63,6 +63,19 @@ impl Positions {
             pending,
             forward,
             unordered: false,
+        }
+    }
+
+    /// 返回 `members` 这一组对应的选区；成员多于一个时交由 `span` 合并。
+    pub(super) fn selection_for(
+        &self,
+        members: Range<usize>,
+        span: impl FnOnce(&[Selection]) -> Selection,
+    ) -> Selection {
+        if members.len() == 1 {
+            self.selections[members.start]
+        } else {
+            span(&self.selections[members])
         }
     }
 

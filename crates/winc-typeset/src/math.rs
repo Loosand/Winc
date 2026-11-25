@@ -8,9 +8,9 @@
 //! 坐标和尺寸都是逻辑像素。
 
 use winc_preview::markdown::math::{self, Accent, Class, Font, Grid, Node};
-use winc_render::{Color, Faux, FontKind, Rect, Stroke};
+use winc_render::{Color, Faux, FontKind, Frame, Rect, Stroke};
 
-use super::{Cx, Item};
+use super::Item;
 
 mod support;
 
@@ -107,27 +107,34 @@ impl MathBox {
     }
 }
 
-impl Cx<'_, '_> {
-    /// 排公式 `tex`：正文字号 `size`，`display` 为真时是单独成行的（大运算符更大，上下限放在
-    /// 正上下方）。
-    pub(crate) fn math(&mut self, tex: &str, size: f32, display: bool, color: Color) -> MathBox {
-        let node = math::parse(tex);
-        let level = if display { Level::Display } else { Level::Text };
-        let mut m = Math {
-            cx: self,
-            size: size * SCALE,
-        };
-        m.node(&node, Env { level, color }).b
-    }
+/// 排公式 `tex`：正文字号 `size`，`display` 为真时是单独成行的（大运算符更大，上下限放在
+/// 正上下方）。
+pub(crate) fn layout(
+    frame: &mut Frame<'_>,
+    dark: bool,
+    tex: &str,
+    size: f32,
+    display: bool,
+    color: Color,
+) -> MathBox {
+    let node = math::parse(tex);
+    let level = if display { Level::Display } else { Level::Text };
+    let mut m = Math {
+        frame,
+        dark,
+        size: size * SCALE,
+    };
+    m.node(&node, Env { level, color }).b
 }
 
-struct Math<'c, 'a, 'f> {
-    cx: &'c mut Cx<'a, 'f>,
+struct Math<'c, 'f> {
+    frame: &'c mut Frame<'f>,
+    dark: bool,
     /// 正文层级的字号（逻辑像素）。
     size: f32,
 }
 
-impl Math<'_, '_, '_> {
+impl Math<'_, '_> {
     /// 当前层级的字号（逻辑像素）。
     fn size(&self, level: Level) -> f32 {
         self.size * level.scale()
@@ -231,7 +238,7 @@ impl Math<'_, '_, '_> {
                 Laid::new(b, Class::Ord)
             }
             Node::Error(text) => {
-                let red = Color::hex(if self.cx.dark { 0xff7b72 } else { 0xcf222e });
+                let red = Color::hex(if self.dark { 0xff7b72 } else { 0xcf222e });
                 let env = Env { color: red, ..env };
                 Laid::new(self.glyphs(text, Font::Text, env), Class::Ord)
             }
@@ -252,7 +259,7 @@ impl Math<'_, '_, '_> {
             bold: matches!(font, Font::Bold | Font::BoldItalic) && shown == text,
             italic: false,
         };
-        let frame = &mut *self.cx.frame;
+        let frame = &mut *self.frame;
         let (mut w, mut asc, mut desc) = (0f32, 0f32, 0f32);
         for c in shown.chars() {
             w += frame.advance_faux(kind, faux, size, c);
@@ -575,12 +582,11 @@ impl Math<'_, '_, '_> {
         if let Some(Item::Text { size, .. }) = b.items.first_mut() {
             *size = s * factor;
         }
-        let w = self.cx.frame.measure(FontKind::Math, s * factor, text);
+        let w = self.frame.measure(FontKind::Math, s * factor, text);
         let (mut asc, mut desc) = (0f32, 0f32);
         for c in text.chars() {
             if let Some((top, bottom)) =
-                self.cx
-                    .frame
+                self.frame
                     .ink(FontKind::Math, Faux::default(), s * factor, c)
             {
                 asc = asc.max(top);
@@ -784,7 +790,7 @@ impl Math<'_, '_, '_> {
             if let Some(Item::Text { size: sz, .. }) = big.items.first_mut() {
                 *sz = size;
             }
-            let w = self.cx.frame.measure(FontKind::Math, size, delim);
+            let w = self.frame.measure(FontKind::Math, size, delim);
             let (asc, desc) = (glyph.asc * f, glyph.desc * f);
             let dy = (asc - desc) / 2.0 - axis;
             let mut out = MathBox::default();

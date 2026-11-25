@@ -23,8 +23,7 @@ mod surround;
 mod view;
 
 pub use map::{Mapped, Mapping};
-pub(crate) use options::option_names;
-pub use options::{Options, option_list};
+pub use options::Options;
 pub use search::Prompt;
 
 use std::collections::VecDeque;
@@ -268,6 +267,11 @@ impl Vim {
     /// 返回未完成命令已输入的按键，用于显示。
     pub fn pending(&self) -> &[Key] {
         self.parser.pending()
+    }
+
+    /// 返回未完成命令的按键记法文本，供状态栏显示；空闲时为空字符串。
+    pub fn pending_notation(&self) -> String {
+        self.parser.pending_notation()
     }
 
     /// 返回光标所在字符的位置：可视模式下是选区中光标一端的字符，其余模式下是选区的端点。

@@ -157,14 +157,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, index: usize, 
         }),
         _ => None,
     };
-    let merges: Vec<Area> = visible.map_or_else(Vec::new, |v| {
-        sheet
-            .merges
-            .iter()
-            .filter(|m| m.overlaps(&v))
-            .copied()
-            .collect()
-    });
+    let merges: Vec<Area> = visible.map_or_else(Vec::new, |v| sheet.merges_overlapping(v));
 
     // 选中的区域：底色（当前格除外）先铺上，文字画在上面。
     let selected = sheet.cover_merges(Area::spanning(selection.0, selection.1));

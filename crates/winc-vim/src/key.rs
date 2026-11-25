@@ -91,12 +91,27 @@ impl Mods {
     pub const fn without(self, other: Self) -> Self {
         Self(self.0 & !other.0)
     }
+
+    /// 按 `M-`、`C-`、`S-`、`D-` 的顺序写出修饰键前缀。
+    fn write_prefix(self, f: &mut impl fmt::Write) -> fmt::Result {
+        for (letter, modifier) in [
+            ('M', Self::ALT),
+            ('C', Self::CTRL),
+            ('S', Self::SHIFT),
+            ('D', Self::CMD),
+        ] {
+            if self.contains(modifier) {
+                write!(f, "{letter}-")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Debug for Mods {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Mods(")?;
-        notation::write_mods(f, *self)?;
+        self.write_prefix(f)?;
         write!(f, ")")
     }
 }
@@ -193,7 +208,43 @@ impl Key {
 
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        notation::write_key(f, *self)
+        use std::fmt::Write;
+        match self.code {
+            Code::Char('<') if self.mods.is_empty() => f.write_str("<lt>"),
+            Code::Char(' ') if self.mods.is_empty() => f.write_str("<Space>"),
+            Code::Char(c) if self.mods.is_empty() => f.write_char(c),
+            code => {
+                f.write_char('<')?;
+                self.mods.write_prefix(f)?;
+                match code {
+                    Code::Char('<') => f.write_str("lt")?,
+                    Code::Char(' ') => f.write_str("Space")?,
+                    Code::Char(c) => f.write_char(c)?,
+                    Code::Named(Named::F(number)) => write!(f, "F{number}")?,
+                    Code::Named(named) => {
+                        let name = match named {
+                            Named::Esc => "Esc",
+                            Named::Enter => "CR",
+                            Named::Tab => "Tab",
+                            Named::Backspace => "BS",
+                            Named::Delete => "Del",
+                            Named::Insert => "Insert",
+                            Named::Up => "Up",
+                            Named::Down => "Down",
+                            Named::Left => "Left",
+                            Named::Right => "Right",
+                            Named::Home => "Home",
+                            Named::End => "End",
+                            Named::PageUp => "PageUp",
+                            Named::PageDown => "PageDown",
+                            Named::F(_) => unreachable!(),
+                        };
+                        f.write_str(name)?;
+                    }
+                }
+                f.write_char('>')
+            }
+        }
     }
 }
 

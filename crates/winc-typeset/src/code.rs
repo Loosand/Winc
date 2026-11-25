@@ -108,16 +108,15 @@ impl Cx<'_, '_> {
             row.size.to_bits().hash(h);
             row.line_h.to_bits().hash(h);
         });
-        self.memo.touch(key);
-        if let Some((piece, next)) = self.memo.lines.get(&key) {
-            *state = *next;
-            return Arc::clone(piece);
+        if let Some((piece, next)) = self.memo.get_line(key) {
+            *state = next;
+            return piece;
         }
         let mut piece =
             self.isolated(|cx, out| cx.code_line(line, Some(source), language, state, row, out));
         piece.source = source;
         let piece = Arc::new(piece);
-        self.memo.lines.insert(key, (Arc::clone(&piece), *state));
+        self.memo.insert_line(key, Arc::clone(&piece), *state);
         piece
     }
 

@@ -93,18 +93,16 @@ impl History {
             .map(|(i, line)| (self.start + i as u64, line.marks))
     }
 
-    /// 取出全部行（供重排使用），再用 [`History::extend`] 放回。
+    /// 取出全部行交由 `f` 重排，再把返回的新行放回，超过上限时丢弃最旧的行。
     ///
     /// 行号从原来的起点继续排列。
-    pub fn take_all(&mut self) -> VecDeque<Line> {
-        std::mem::take(&mut self.lines)
-    }
-
-    /// 放入重排后的行，超过上限时丢弃最旧的行（与 [`History::push`] 相同）。
-    pub fn extend(&mut self, lines: impl IntoIterator<Item = Line>) {
-        for line in lines {
+    pub fn replace_with<R>(&mut self, f: impl FnOnce(VecDeque<Line>) -> (Vec<Line>, R)) -> R {
+        let lines = std::mem::take(&mut self.lines);
+        let (next, out) = f(lines);
+        for line in next {
             self.push(line);
         }
+        out
     }
 
     /// 清空回滚缓冲。

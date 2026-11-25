@@ -4,7 +4,7 @@
 //! `<S-Left>`），`<` 记作 `<lt>`，空格记作 `<Space>`。名字与修饰键前缀不区分大小写；
 //! 不构成记法的 `<` 按字符本身处理。[`write()`] 的输出经 [`parse`] 得到原来的按键序列。
 
-use std::fmt;
+use std::fmt::Write;
 
 use super::{Code, Key, MAX_FUNCTION_KEY, Mods, Named};
 
@@ -78,7 +78,7 @@ pub fn write(keys: &[Key]) -> String {
     let mut text = String::new();
     for key in keys {
         // 向 `String` 写入不会失败。
-        let _ = write_key(&mut text, *key);
+        let _ = write!(text, "{key}");
     }
     text
 }
@@ -150,41 +150,4 @@ fn named(name: &str) -> Option<(Code, Mods)> {
     (1..=MAX_FUNCTION_KEY)
         .contains(&number)
         .then_some((Code::Named(Named::F(number)), Mods::NONE))
-}
-
-/// 把 `key` 写成按键记法。
-pub(super) fn write_key(f: &mut impl fmt::Write, key: Key) -> fmt::Result {
-    let mods = key.mods();
-    match key.code() {
-        Code::Char('<') if mods.is_empty() => f.write_str("<lt>"),
-        Code::Char(' ') if mods.is_empty() => f.write_str("<Space>"),
-        Code::Char(c) if mods.is_empty() => f.write_char(c),
-        code => {
-            f.write_char('<')?;
-            write_mods(f, mods)?;
-            match code {
-                Code::Char('<') => f.write_str("lt")?,
-                Code::Char(' ') => f.write_str("Space")?,
-                Code::Char(c) => f.write_char(c)?,
-                Code::Named(Named::F(number)) => write!(f, "F{number}")?,
-                Code::Named(_) => {
-                    let name = (NAMES.iter())
-                        .find(|(_, c, m)| *c == code && m.is_empty())
-                        .map_or("", |(name, ..)| name);
-                    f.write_str(name)?;
-                }
-            }
-            f.write_char('>')
-        }
-    }
-}
-
-/// 按 `M-`、`C-`、`S-`、`D-` 的顺序写出修饰键前缀。
-pub(super) fn write_mods(f: &mut impl fmt::Write, mods: Mods) -> fmt::Result {
-    for (letter, modifier) in &MOD_LETTERS[..4] {
-        if mods.contains(*modifier) {
-            write!(f, "{letter}-")?;
-        }
-    }
-    Ok(())
 }

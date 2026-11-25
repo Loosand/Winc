@@ -407,7 +407,7 @@ impl App {
                     continue;
                 }
             };
-            if !read.applies_to(doc) {
+            if !doc.accepts_reread(&read) {
                 recheck.extend(doc.path.clone());
                 continue;
             }

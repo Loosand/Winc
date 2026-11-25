@@ -21,9 +21,10 @@ mod vim;
 
 pub use command::TextObject;
 pub use command::{Action, Entry, Focusing, Force, Kind, Mode, Modes, Motion, Operator, Support};
+pub use ex::option_list;
 pub use host::{AppCommand, Fold, Host, HostOption, Indentation, Input, Listing, Message, Place};
 pub use host::{Query, Scroll};
 pub use key::{Code, Key, Mods, Named, notation};
 pub use parser::{Body, Command, Movement, Outcome, Parser, Target};
 pub use register::{Clipboard, Registers};
-pub use vim::{Mapped, Mapping, Options, Prompt, Shared, Vim, VisualKind, option_list};
+pub use vim::{Mapped, Mapping, Options, Prompt, Shared, Vim, VisualKind};

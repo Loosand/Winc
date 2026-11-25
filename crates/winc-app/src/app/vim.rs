@@ -395,7 +395,7 @@ impl App {
         } else {
             mode.to_owned()
         };
-        let mut pending = winc_vim::notation::write(state.vim.pending());
+        let mut pending = state.vim.pending_notation();
         // 逐处确认时显示替换之后的文本与可用的回答；记录宏时显示寄存器名。
         if let Some(replacement) = state.vim.confirming() {
             pending = t!("workspace-status-vim-confirm", text = replacement);

@@ -703,7 +703,7 @@ pub fn paste(text: &impl Lines, selection: Selection, pasted: &str) -> Transacti
 /// 按行切分时各行保留自己的换行符，LF、CRLF 和单独的 CR 都能认出（粘贴的内容已换成文档的换行符）。
 fn fit_indent(pasted: &str, target: &str) -> Option<String> {
     let is_indent = |c: char| c == ' ' || c == '\t';
-    let lines = crate::diff::lines(pasted);
+    let lines = crate::text::split_lines(pasted);
     let first = lines.first()?;
     let indented = !target.is_empty() && target.chars().all(is_indent);
     if !pasted.contains(['\n', '\r']) || !indented || !first.starts_with(is_indent) {

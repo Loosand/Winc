@@ -9,9 +9,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use swash::scale::ScaleContext;
 use swash::zeno::{Command, PathData, Point};
 
-use crate::text::font::Face;
+use crate::text::face::Face;
 use crate::text::font_path::{FaceMatch, FontFile, resolve_face};
-use crate::text::system_outline::GlyphPath;
 
 /// 一个字形：轮廓和前进宽度。
 ///
@@ -108,21 +107,7 @@ impl OutlineFonts {
         c: char,
     ) -> Option<OutlineGlyph> {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        let bold = weight >= 600;
-        for family in candidates(families) {
-            let Some(index) = inner.face(family, bold, italic) else {
-                continue;
-            };
-            let id = inner.faces[index].face.font().charmap().map(c);
-            if id == 0 {
-                continue;
-            }
-            // 字体有该字符但轮廓读不出来（例如轮廓格式不被 swash 支持）时，继续尝试下一个字体。
-            if let Some(glyph) = inner.outline(index, id, weight) {
-                return Some(glyph);
-            }
-        }
-        None
+        inner.glyph(families, weight, italic, c)
     }
 
     /// 返回第一个能打开的字体对应的竖向尺寸（单位 em）。
@@ -131,9 +116,39 @@ impl OutlineFonts {
     /// 比例接近。
     pub fn metrics(&self, families: &[String], weight: u16, italic: bool) -> OutlineMetrics {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        inner.metrics(families, weight, italic)
+    }
+}
+
+impl Inner {
+    fn glyph(
+        &mut self,
+        families: &[String],
+        weight: u16,
+        italic: bool,
+        c: char,
+    ) -> Option<OutlineGlyph> {
+        let bold = weight >= 600;
         for family in candidates(families) {
-            if let Some(index) = inner.face(family, weight >= 600, italic) {
-                let m = inner.faces[index].face.font().metrics(&[]);
+            let Some(index) = self.face(family, bold, italic) else {
+                continue;
+            };
+            let id = self.faces[index].face.font().charmap().map(c);
+            if id == 0 {
+                continue;
+            }
+            // 字体有该字符但轮廓读不出来（例如轮廓格式不被 swash 支持）时，继续尝试下一个字体。
+            if let Some(glyph) = self.outline(index, id, weight) {
+                return Some(glyph);
+            }
+        }
+        None
+    }
+
+    fn metrics(&mut self, families: &[String], weight: u16, italic: bool) -> OutlineMetrics {
+        for family in candidates(families) {
+            if let Some(index) = self.face(family, weight >= 600, italic) {
+                let m = self.faces[index].face.font().metrics(&[]);
                 let upem = f32::from(m.units_per_em.max(1));
                 return OutlineMetrics {
                     ascent: m.ascent / upem,
@@ -152,9 +167,6 @@ impl OutlineFonts {
             x_height: 0.5,
         }
     }
-}
-
-impl Inner {
     /// 返回（字族名，粗体，斜体）对应的字体在 `faces` 中的下标；找不到时返回 `None`。
     ///
     /// 首次查找时打开字体。
@@ -230,12 +242,8 @@ impl Inner {
             Command::Close => Command::Close,
         };
         // 轮廓坐标以字体单位计（1 em = `upem`），`y` 向上。
-        let outline: Option<Arc<[Command]>> = match &face.system {
-            Some(system) => {
-                let mut path = GlyphPath::default();
-                system.outline(id, upem, &mut path);
-                Some(path.data().commands().map(transform).collect())
-            }
+        let outline: Option<Arc<[Command]>> = match face.system_outline(id, upem) {
+            Some(path) => Some(path.data().commands().map(transform).collect()),
             None => {
                 let context = self.scale.get_or_insert_with(ScaleContext::new);
                 let mut scaler = context

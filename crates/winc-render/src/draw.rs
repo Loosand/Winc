@@ -5,3 +5,4 @@
 use super::*;
 pub(crate) mod canvas;
 pub(crate) mod frame;
+pub(crate) mod stroke_cache;

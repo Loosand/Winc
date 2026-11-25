@@ -1,8 +1,6 @@
 //! `font_list` 的测试：已安装字族的排序与等宽判断、按宽松写法查找，以及读取字体文件的名字表。
 
 use super::*;
-#[cfg(target_os = "macos")]
-use crate::text::font_path::FontSpec;
 
 #[test]
 fn families_are_sorted_and_deduplicated_ignoring_how_names_are_written() {

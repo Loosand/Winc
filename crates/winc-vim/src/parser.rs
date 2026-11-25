@@ -259,6 +259,16 @@ impl Parser {
         &self.keys
     }
 
+    /// 是否已有未完成命令的按键。
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.keys.is_empty()
+    }
+
+    /// 返回未完成命令的按键记法文本，用于显示；解析器空闲时为空字符串。
+    pub fn pending_notation(&self) -> String {
+        crate::notation::write(&self.keys)
+    }
+
     /// 下一个按键是否为一条命令、动作或文本对象的第一个键：不在多键序列与字符参数之中。
     pub(crate) fn at_start(&self) -> bool {
         self.node == ROOT && self.arg.is_none()

@@ -351,7 +351,7 @@ impl Perform for Emulator {
             }
             b"7" => {
                 if let Some(path) = params.get(1).and_then(|url| file_url_path(url)) {
-                    self.blocks.cwd = path.as_slice().into();
+                    self.blocks.set_cwd(&path);
                     self.events.push(Event::Cwd(path));
                 }
             }
@@ -789,15 +789,9 @@ impl Emulator {
         // 没有携带参数时不改动（提示符主题也可能发送 `A`）。命令运行期间收到的 `A` 来自命令的输出
         // （远程 shell、日志文件），不代表本地 shell 会重画。
         if flag == Marks::PROMPT && !self.blocks.running() {
-            for param in params.get(2..).unwrap_or_default() {
-                match *param {
-                    b"redraw=1" => self.blocks.redraws_prompt = true,
-                    b"redraw=0" => self.blocks.redraws_prompt = false,
-                    _ => {}
-                }
-            }
-            // `signed=1` 表示这个 shell 的结束标记附带随机数；换了 shell 后以新的提示符为准。
             let rest = params.get(2..).unwrap_or_default();
+            self.blocks.update_prompt_params(rest);
+            // `signed=1` 表示这个 shell 的结束标记附带随机数；换了 shell 后以新的提示符为准。
             self.signed_end = rest.contains(&&b"signed=1"[..]);
         }
         // `C` 之后可以带命令行：`cmdline_url=` 为百分号转义形式，`cmdline=` 为原样形式；命令行

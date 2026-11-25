@@ -645,12 +645,8 @@ impl Document {
         };
         for unit in order {
             let members = unit.members.clone();
-            let selections = &current.selections;
-            self.selection = if members.len() == 1 {
-                selections[members.start]
-            } else {
-                self.line_span(selections[members.clone()].iter().copied())
-            };
+            self.selection =
+                current.selection_for(members.clone(), |sels| self.line_span(sels.iter().copied()));
             let piece;
             let command = match &pieces {
                 Some(pieces) => {

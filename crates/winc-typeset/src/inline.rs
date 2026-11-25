@@ -192,7 +192,7 @@ impl Cx<'_, '_> {
             runs.push(st);
             if style.has(Style::MATH) {
                 let tex = &inline.text[range.clone()];
-                let b = self.math(tex, st.size, false, st.color);
+                let b = crate::math::layout(self.frame, self.dark, tex, st.size, false, st.color);
                 let width = b.w;
                 atoms.push(Atom {
                     kind: AtomKind::Math {

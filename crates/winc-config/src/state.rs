@@ -1163,27 +1163,8 @@ fn remember_recent_path(paths: &mut Vec<PathBuf>, file: &Path) {
 ///
 /// 便携版放在便携数据目录中（见 [`crate::files::portable_dir`]）。
 pub fn state_path() -> Option<PathBuf> {
-    let dir = crate::files::portable_dir().or_else(user_state_dir)?;
+    let dir = crate::files::portable_dir().or_else(crate::files::user_state_dir)?;
     Some(dir.join("state.json"))
-}
-
-/// 返回用户目录中存放状态文件的目录，不考虑便携版；无法确定用户目录时返回 `None`。
-pub(crate) fn user_state_dir() -> Option<PathBuf> {
-    let home = || std::env::var_os("HOME").map(PathBuf::from);
-
-    if cfg!(target_os = "macos") {
-        crate::files::user_config_dir()
-    } else if cfg!(target_os = "windows") {
-        std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .or_else(home)
-            .map(|dir| dir.join("winc"))
-    } else {
-        std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| home().map(|home| home.join(".local").join("state")))
-            .map(|dir| dir.join("winc"))
-    }
 }
 
 /// 从状态文件的根对象读出 `key` 下 Vim 模式的历史：非空的字符串，只留最新的

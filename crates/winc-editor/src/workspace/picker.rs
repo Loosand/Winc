@@ -99,6 +99,11 @@ impl Packed {
         self.spans.len()
     }
 
+    /// 返回现有内容加上 `added` 全部字符串后的总字节数，用于合并时预留容量。
+    fn merged_bytes(&self, added: &[String]) -> usize {
+        self.text.len() + added.iter().map(String::len).sum::<usize>()
+    }
+
     fn is_empty(&self) -> bool {
         self.spans.is_empty()
     }

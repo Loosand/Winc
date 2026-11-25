@@ -419,17 +419,9 @@ fn worksheet(xml: &str, name: String, context: &Context) -> Option<Sheet> {
     if !late.is_empty() {
         sheet = sheet.with_rows(&late);
     }
-    // 合并区域只保留从已读的行开始、在列数上限以内的，伸到最后一行之外的截到最后一行。
-    let count = sheet.row_count();
-    merges.retain(|m| m.top < count && m.left < MAX_COLUMNS);
-    for merge in &mut merges {
-        merge.bottom = merge.bottom.min(count.saturating_sub(1));
-        merge.right = merge.right.min(MAX_COLUMNS - 1);
-    }
-    sheet.merges = merges;
-    // 合并区域伸到有文字的列之外时，列数按合并区域算，区域完整显示。
-    let widest = sheet.merges.iter().map(|m| m.right + 1).max().unwrap_or(0);
-    sheet.columns = sheet.columns.max(widest);
+    // 合并区域只保留从已读的行开始、在列数上限以内的，伸到最后一行之外的截到最后一行，
+    // 伸到有文字的列之外时扩展列数使区域完整显示。
+    sheet.set_merges(merges);
     Some(sheet)
 }
 

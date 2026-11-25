@@ -8,9 +8,8 @@ use std::path::Path;
 
 use regex::Regex;
 use ropey::Rope;
-use winc_syntax::Language;
+use winc_syntax::{Highlighter, Language, Token, TokenKind};
 
-use super::usages::token_kinds;
 use crate::workspace::project_search::Query;
 
 /// 定义的类别。
@@ -512,11 +511,48 @@ impl Finder {
 }
 
 /// `kind` 是否是注释或字符串：其中的名字只是文字，不是代码。
-pub(crate) fn is_text(kind: winc_syntax::TokenKind) -> bool {
-    matches!(
-        kind,
-        winc_syntax::TokenKind::Comment | winc_syntax::TokenKind::String
-    )
+pub(crate) fn is_text(kind: TokenKind) -> bool {
+    matches!(kind, TokenKind::Comment | TokenKind::String)
+}
+
+/// 返回 `text` 中各位置（行号，列号，均从 0 起，列是字符偏移）所在 token 的类别；位置不在任何
+/// token 中时为 `None`。
+///
+/// 按 `language` 从文本开头推算各行的行首状态，跨行的块注释和字符串同样识别；`positions` 不必
+/// 有序。
+pub(crate) fn token_kinds(
+    text: &Rope,
+    language: &'static Language,
+    positions: &[(usize, usize)],
+) -> Vec<Option<TokenKind>> {
+    let mut order: Vec<usize> = (0..positions.len()).collect();
+    order.sort_by_key(|&i| positions[i]);
+    let mut kinds = vec![None; positions.len()];
+    let mut highlighter = Highlighter::new(language);
+    let mut tokens: Vec<Token> = Vec::new();
+    let mut chars: Vec<char> = Vec::new();
+    let mut lexed = None;
+
+    for i in order {
+        let (line, col) = positions[i];
+        if line >= text.len_lines() {
+            continue;
+        }
+        if lexed != Some(line) {
+            let Some(state) = highlighter.state_at(text, line, usize::MAX) else {
+                continue;
+            };
+            chars.clear();
+            chars.extend(text.line(line).chars().filter(|&c| c != '\n' && c != '\r'));
+            winc_syntax::highlight_line(language, &chars, state, &mut tokens);
+            lexed = Some(line);
+        }
+        kinds[i] = tokens
+            .iter()
+            .find(|t| (t.start..t.end).contains(&col))
+            .map(|t| t.kind);
+    }
+    kinds
 }
 
 /// `before`（名字之前的部分）的最后一个单词是否是语句关键字（见 [`NOT_RETURN_TYPES`]）。

@@ -77,7 +77,7 @@ pub(super) struct File<'a> {
     bytes: &'a [u8],
     xref: HashMap<u32, Entry>,
     /// 尾部字典（或交叉引用流的字典）：其中有 `/Root`、`/Encrypt`。
-    pub trailer: Obj,
+    trailer: Obj,
     /// 解开过的对象流：对象号到（解码后的数据，各对象的起点）。
     streams: RefCell<HashMap<u32, Option<Packed>>>,
 }
@@ -130,6 +130,16 @@ impl<'a> File<'a> {
         (self.trailer != Obj::Null).then_some(())
     }
 
+    /// 尾部字典中是否声明了加密。
+    pub(super) fn is_encrypted(&self) -> bool {
+        self.trailer.get(b"Encrypt").is_some()
+    }
+
+    /// 解析并返回文档根对象（`/Root`）；缺失或解析失败时返回 `None`。
+    pub(super) fn catalog(&self) -> Option<Obj> {
+        self.resolve(self.trailer.get(b"Root"))
+    }
+
     /// 读 `offset` 处的交叉引用表（`xref` 起头），返回其后的尾部字典。
     fn read_table(&mut self, offset: usize) -> Option<Obj> {
         let mut lexer = Lexer::new(self.bytes, offset + b"xref".len());
@@ -144,8 +154,7 @@ impl<'a> File<'a> {
                 let at = lexer.object(0)?.int()?;
                 let _generation = lexer.object(0)?;
                 lexer.skip_space();
-                let used = lexer.peek() == Some(b'n');
-                lexer.pos += 1;
+                let used = lexer.take_byte() == Some(b'n');
                 if used && let Ok(at) = usize::try_from(at) {
                     self.xref.entry(n).or_insert(Entry::At(at));
                 }
@@ -504,6 +513,12 @@ impl<'a> Lexer<'a> {
 
     fn peek(&self) -> Option<u8> {
         self.bytes.get(self.pos).copied()
+    }
+
+    fn take_byte(&mut self) -> Option<u8> {
+        let byte = self.peek();
+        self.pos += 1;
+        byte
     }
 
     /// 跳过空白和注释（`%` 到行尾）。

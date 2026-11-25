@@ -22,12 +22,12 @@ use winit::window::Window;
 pub use draw::canvas::{Covered, Stroke, rounded_outline};
 pub use draw::frame::Frame;
 pub use text::font::{FontKind, set_cjk_language};
-pub use text::font_list::{FontFamily, installed_fonts};
-pub use text::font_path::{FontError, FontSpec};
+pub use text::font_list::{FontError, FontFamily, FontSpec, installed_fonts};
 pub use text::outline::{OutlineFonts, OutlineGlyph, OutlineMetrics};
 
-use cache::{FastMap, Generations, StrokeCache};
+use cache::{FastMap, Generations};
 use draw::canvas::{Canvas, IRect, Tinted, Wall};
+use draw::stroke_cache::StrokeCache;
 use present::Presenter;
 use text::font::Fonts;
 use text::glyphs::*;
@@ -622,10 +622,7 @@ impl Renderer {
         weight: u16,
     ) -> Result<(), String> {
         let fonts = Fonts::load(mono, ui, terminal, weight)?;
-        let mut glyphs = self.glyphs.borrow_mut();
-        glyphs.fonts = fonts;
-        glyphs.clear();
-        glyphs.advances.clear();
+        self.glyphs.borrow_mut().set_fonts(fonts);
         Ok(())
     }
     /// 返回逻辑像素到物理像素的倍数：系统的缩放系数乘以界面缩放倍数。
@@ -921,7 +918,7 @@ impl Renderer {
 impl Renderer {
     /// 设置光栅化时是否按像素网格微调字形轮廓；须在绘制任何文字之前调用，已缓存的位图不重画。
     fn set_hinting(&mut self, hinting: bool) {
-        self.glyphs.borrow_mut().hinting = hinting;
+        self.glyphs.borrow_mut().set_hinting(hinting);
     }
 }
 

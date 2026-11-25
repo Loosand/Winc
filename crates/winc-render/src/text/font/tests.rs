@@ -1,8 +1,9 @@
 //! 字体加载的测试：字形表的选择、可变字体的命名实例、斜体候选，以及注释的 ASCII 快速路径。
 
+use std::path::Path;
+use std::sync::{Arc, Weak};
+
 use super::*;
-#[cfg(target_os = "macos")]
-use crate::text::system_outline::GlyphPath;
 
 /// 返回只含表目录的字体文件数据：列出 `tags` 中的表，每个表的内容为空。
 pub(crate) fn bare_font(tags: &[&[u8; 4]]) -> Vec<u8> {
@@ -77,12 +78,15 @@ fn hvgl_only_fonts_get_outlines_from_the_system() {
     let file = FontSpec::Name("苹方-简".into()).resolve().unwrap();
     let face = Face::open(&file).expect("苹方能用");
     let font = face.font();
-    let Some(system) = &face.system else {
+    if face
+        .system_advance(font.charmap().map('中'), 1000.0)
+        .is_none()
+    {
         // 不只有 `hvgl` 表的苹方由 swash 读取：旧版 macOS 的有 `glyf` 表，macOS 27 的有 `CFF ` 表。
         let drawable = GLYPH_TABLES.map(|t| font.table(swash::tag_from_bytes(t)).is_some());
         assert!(drawable.contains(&true));
         return;
-    };
+    }
     // 字宽由 swash 按命名实例的坐标读取，必须与提供轮廓的 CoreText 字体一致，否则字形与排版
     // 位置对不上。CoreText 的字宽另加了 `trak` 表中按字号给出的字距（每个字形相同），因此比较
     // 两边的差值是否对所有字形都相同：实例不对时拉丁字母的差值与汉字不同。
@@ -95,16 +99,14 @@ fn hvgl_only_fonts_get_outlines_from_the_system() {
                 .glyph_metrics(&face.coords)
                 .scale(1000.0)
                 .advance_width(glyph);
-            system.advance(glyph, 1000.0) - ours
+            face.system_advance(glyph, 1000.0).unwrap() - ours
         })
         .collect();
     assert!(gaps.iter().all(|g| (g - gaps[0]).abs() < 0.5), "{gaps:?}");
     assert!(gaps[0].abs() < 10.0, "{gaps:?}");
-    let mut path = GlyphPath::default();
-    system.outline(font.charmap().map('中'), 16.0, &mut path);
+    let path = face.system_outline(font.charmap().map('中'), 16.0).unwrap();
     assert!(path.verbs.len() > 10, "{path:?}");
-    let mut space = GlyphPath::default();
-    system.outline(font.charmap().map(' '), 16.0, &mut space);
+    let space = face.system_outline(font.charmap().map(' '), 16.0).unwrap();
     assert!(space.verbs.is_empty(), "空格没有轮廓");
 }
 

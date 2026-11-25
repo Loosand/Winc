@@ -2,6 +2,7 @@
 //! 文件权限的脚本。
 
 use super::*;
+use crate::tools::shell::process::drop_unset_wslenv as drop_unset;
 
 fn place(text: &str) -> Option<(String, String)> {
     locate(Path::new(text)).map(|p| (p.distro, p.path))

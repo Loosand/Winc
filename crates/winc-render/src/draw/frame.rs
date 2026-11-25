@@ -719,7 +719,7 @@ impl Frame<'_> {
         // 先取整到 ¼ 像素，再拆成整像素和档位（0 至 3）；取整后小数部分达到 1 时，
         // 进位到下一个像素的第 0 档。中日韩文字按整像素定位，见 [`full_width`]；emoji 同样是
         // 方块形，彩色位图每像素 4 字节，按档位各存一份的占用是单色字形的 4 倍。
-        let quarters = if full_width(c) || self.glyphs.fonts.is_emoji_slot(slot) {
+        let quarters = if full_width(c) || self.glyphs.is_emoji_slot(slot) {
             (x * s).round() * 4.0
         } else {
             (x * s * 4.0).round()

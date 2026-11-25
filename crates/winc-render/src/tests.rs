@@ -253,25 +253,27 @@ fn system_outline_glyphs_sit_on_the_baseline() {
     // 由系统提供轮廓的字形与 swash 光栅化的字形在同一条基线上：`top` 是位图上边缘在基线以上
     // 的高度。「中」上至约 0.82 em、下至约 -0.11 em；「一」在 0.33–0.40 em 之间。
     let file = FontSpec::Name("苹方-简".into()).resolve().unwrap();
-    let face = text::font::Face::open(&file).unwrap();
-    let Some(system) = &face.system else {
+    let face = text::face::Face::open(&file).unwrap();
+    let charmap = face.font().charmap();
+    let text::face::SystemFill::Mask(zhong) =
+        face.fill_system(charmap.map('中'), 100.0, 0.0, 0.0, 0.0)
+    else {
         return; // 旧版 macOS 的苹方由 swash 读取。
     };
-    let charmap = face.font().charmap();
-    let zhong = system
-        .fill(charmap.map('中'), 100.0, 0.0, 0.0, 0.0)
-        .unwrap();
+    let zhong = zhong.unwrap();
     assert!((80..=84).contains(&zhong.top), "{}", zhong.top);
     assert!((92..=96).contains(&zhong.height), "{}", zhong.height);
-    let yi = system
-        .fill(charmap.map('一'), 100.0, 0.0, 0.0, 0.0)
-        .unwrap();
+    let text::face::SystemFill::Mask(yi) =
+        face.fill_system(charmap.map('一'), 100.0, 0.0, 0.0, 0.0)
+    else {
+        unreachable!();
+    };
+    let yi = yi.unwrap();
     assert!((40..=41).contains(&yi.top), "{}", yi.top);
-    assert!(
-        system
-            .fill(charmap.map(' '), 100.0, 0.0, 0.0, 0.0)
-            .is_none()
-    );
+    assert!(matches!(
+        face.fill_system(charmap.map(' '), 100.0, 0.0, 0.0, 0.0),
+        text::face::SystemFill::Mask(None)
+    ));
     // 有覆盖率：笔画中间是实心的（覆盖率接近 255）。
     assert!(zhong.data.iter().any(|&a| a > 250));
 }
@@ -739,7 +741,7 @@ fn emoji_are_rasterized_once_whatever_the_pen_position() {
     let mut renderer =
         Renderer::offscreen(200.0, 60.0, 1.0, Color::hex(0xffffff), None, None).unwrap();
     // 系统中没有彩色 emoji 字体时不做比较。
-    if renderer.glyphs.borrow_mut().fonts.emoji_face().is_none() {
+    if !renderer.glyphs.borrow_mut().has_emoji_font() {
         return;
     }
     let draw = |renderer: &mut Renderer, text: &str| {

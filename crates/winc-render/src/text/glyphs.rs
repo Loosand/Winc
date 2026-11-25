@@ -1,6 +1,7 @@
 //! 字形缓存：按字体、字号和字符缓存光栅化后的字形，以及模拟的粗体和斜体。
 
 use super::*;
+use crate::text::face::SystemFill;
 use swash::FontRef;
 use swash::shape::ShapeContext;
 use swash::zeno::{Fill, Join, Placement, Stroke, Style};
@@ -51,19 +52,19 @@ const HINTING: bool = cfg!(not(target_os = "macos"));
 
 /// 字体、字形缓存和前进宽度缓存。
 pub(crate) struct GlyphCache {
-    pub(crate) fonts: Fonts,
+    fonts: Fonts,
     /// 光栅化时是否按像素网格微调字形轮廓。
     ///
     /// 微调只移动竖直方向的坐标：横画、x 字高和大写字高对齐到像素行，笔画不再跨两行像素。
     /// 横向坐标和前进宽度不变，排版与横向亚像素定位不受影响。位图随该值不同，整个缓存只用
     /// 一个值，因此不计入 [`GlyphKey`]。
-    pub(crate) hinting: bool,
+    hinting: bool,
     /// swash 的光栅化上下文，复用以避免重复分配。
     scaler: ScaleContext,
     /// 光栅化后的字形，每一代的上限为 [`GLYPH_CACHE_BYTES`] 字节。
     glyphs: Generations<GlyphKey, Glyph>,
     /// （槽位，字形，字号×4）→ 前进宽度，逻辑像素。
-    pub(crate) advances: FastMap<(u8, u16, u32), f32>,
+    advances: FastMap<(u8, u16, u32), f32>,
     /// swash 的整形上下文，复用以避免重复分配。
     shaper: ShapeContext,
     /// emoji 序列 → 整形结果，分新旧两代；序列无法由 emoji 字体合成时为 `None`。
@@ -124,6 +125,31 @@ impl GlyphCache {
             shaper: ShapeContext::new(),
             sequences: Default::default(),
         }
+    }
+
+    /// 更换字体并清空所有字形与前进宽度缓存。
+    pub(crate) fn set_fonts(&mut self, fonts: Fonts) {
+        self.fonts = fonts;
+        self.clear();
+        self.advances.clear();
+    }
+
+    /// 槽位 `slot` 是否为 emoji 字体。
+    pub(crate) fn is_emoji_slot(&self, slot: u8) -> bool {
+        self.fonts.is_emoji_slot(slot)
+    }
+
+    /// 设置光栅化时是否按像素网格微调字形轮廓，并清空已缓存的位图。
+    #[cfg(test)]
+    pub(crate) fn set_hinting(&mut self, hinting: bool) {
+        self.hinting = hinting;
+        self.clear();
+    }
+
+    /// 系统中是否有可用的彩色 emoji 字体。
+    #[cfg(test)]
+    pub(crate) fn has_emoji_font(&mut self) -> bool {
+        self.fonts.emoji_face().is_some()
     }
 
     /// 返回 emoji 序列 `unit` 由 emoji 字体合成的结果，带缓存。
@@ -414,21 +440,24 @@ fn rasterize(
     // 笔画加宽的总量（物理像素）：补足字重的部分与模拟粗体之和。
     let bold = if key.bold { BOLD_RATIO } else { 0.0 };
     let widen = size_px * (face.embolden + bold);
-    if let Some(system) = &face.system {
-        let slant = if key.oblique {
-            OBLIQUE_DEGREES.to_radians().tan()
-        } else {
-            0.0
-        };
-        let mask = system.fill(key.glyph, size_px, dx, slant, widen)?;
-        return Some(Glyph {
-            width: mask.width as u16,
-            height: mask.height as u16,
-            left: mask.left as i16,
-            top: mask.top as i16,
-            color: false,
-            data: mask.data.into_boxed_slice(),
-        });
+    let slant = if key.oblique {
+        OBLIQUE_DEGREES.to_radians().tan()
+    } else {
+        0.0
+    };
+    match face.fill_system(key.glyph, size_px, dx, slant, widen) {
+        SystemFill::Mask(mask) => {
+            let mask = mask?;
+            return Some(Glyph {
+                width: mask.width as u16,
+                height: mask.height as u16,
+                left: mask.left as i16,
+                top: mask.top as i16,
+                color: false,
+                data: mask.data.into_boxed_slice(),
+            });
+        }
+        SystemFill::NotSystem => {}
     }
     let mut scaler = scaler
         .builder(face.font())

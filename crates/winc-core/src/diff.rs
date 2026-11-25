@@ -514,30 +514,7 @@ fn eol_free<'a>(lines: &[&'a str]) -> Vec<(&'a str, bool)> {
 ///
 /// 最后一行没有换行符时也算一行，以换行符结尾时不多出一个空行；行号与 [`line_hunks`] 一致。
 /// 返回的每行内容包含自己的换行符，需要不含换行符的行时由调用方去掉。
-pub fn lines(text: &str) -> Vec<&str> {
-    let bytes = text.as_bytes();
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        let end = match bytes[i] {
-            b'\n' => i + 1,
-            b'\r' if bytes.get(i + 1) == Some(&b'\n') => i + 2,
-            b'\r' => i + 1,
-            _ => {
-                i += 1;
-                continue;
-            }
-        };
-        lines.push(&text[start..end]);
-        start = end;
-        i = end;
-    }
-    if start < text.len() {
-        lines.push(&text[start..]);
-    }
-    lines
-}
+pub use crate::text::split_lines as lines;
 
 /// 把两侧的条目替换为编号，内容相同的条目编号相同，后续比较只需比较整数。
 fn intern<T: Hash + Eq>(a: &[T], b: &[T]) -> (Vec<u32>, Vec<u32>) {

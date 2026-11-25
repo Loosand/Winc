@@ -39,10 +39,10 @@ pub fn outline(bytes: &[u8]) -> Vec<OutlineItem> {
         return Vec::new();
     };
     // 加密的文件里标题也是加密的：不读。
-    if file.trailer.get(b"Encrypt").is_some() {
+    if file.is_encrypted() {
         return Vec::new();
     }
-    let Some(catalog) = file.resolve(file.trailer.get(b"Root")) else {
+    let Some(catalog) = file.catalog() else {
         return Vec::new();
     };
     let reader = Reader {

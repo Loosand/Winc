@@ -10,51 +10,11 @@
 use std::path::Path;
 
 use ropey::Rope;
-use winc_syntax::{Highlighter, Language, Markup, Token, TokenKind};
+use winc_syntax::{Language, Markup, TokenKind};
 
-use super::definition::{Finder, is_text};
+use super::definition::{Finder, is_text, token_kinds};
 use super::symbols::{self, SymbolKind};
 use crate::editing::scopes::FoldRange;
-
-/// 返回 `text` 中各位置（行号，列号，均从 0 起，列是字符偏移）所在 token 的类别；位置不在任何
-/// token 中时为 `None`。
-///
-/// 按 `language` 从文本开头推算各行的行首状态，跨行的块注释和字符串同样识别；`positions` 不必
-/// 有序。
-pub(crate) fn token_kinds(
-    text: &Rope,
-    language: &'static Language,
-    positions: &[(usize, usize)],
-) -> Vec<Option<TokenKind>> {
-    let mut order: Vec<usize> = (0..positions.len()).collect();
-    order.sort_by_key(|&i| positions[i]);
-    let mut kinds = vec![None; positions.len()];
-    let mut highlighter = Highlighter::new(language);
-    let mut tokens: Vec<Token> = Vec::new();
-    let mut chars: Vec<char> = Vec::new();
-    let mut lexed = None;
-
-    for i in order {
-        let (line, col) = positions[i];
-        if line >= text.len_lines() {
-            continue;
-        }
-        if lexed != Some(line) {
-            let Some(state) = highlighter.state_at(text, line, usize::MAX) else {
-                continue;
-            };
-            chars.clear();
-            chars.extend(text.line(line).chars().filter(|&c| c != '\n' && c != '\r'));
-            winc_syntax::highlight_line(language, &chars, state, &mut tokens);
-            lexed = Some(line);
-        }
-        kinds[i] = tokens
-            .iter()
-            .find(|t| (t.start..t.end).contains(&col))
-            .map(|t| t.kind);
-    }
-    kinds
-}
 
 /// 判断搜索命中是否是某个名字的用法。
 ///

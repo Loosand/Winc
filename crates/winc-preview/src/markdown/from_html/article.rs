@@ -3,7 +3,7 @@
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 
-use super::{Span, Writer};
+use super::Writer;
 
 /// The title and Markdown of the extracted main content.
 pub struct ArticleHtml {
@@ -273,7 +273,7 @@ fn convert(
         }
         let tag = name(node);
         match tag {
-            "img" if w.pre.is_none() => {
+            "img" if !w.in_pre() => {
                 let alt = attr(node, "alt").unwrap_or_default();
                 let src = ["data-src", "src", "data-original"]
                     .into_iter()
@@ -296,12 +296,12 @@ fn convert(
                 }
                 return;
             }
-            "a" if w.pre.is_none() => {
+            "a" if !w.in_pre() => {
                 let href = attr(node, "href")
                     .as_deref()
                     .and_then(link)
                     .unwrap_or_default();
-                w.spans.push((Span::Link(href), w.inline.len()));
+                w.open_link(href);
             }
             _ => {
                 // Only pass the presentation attributes understood by the shared Markdown writer.

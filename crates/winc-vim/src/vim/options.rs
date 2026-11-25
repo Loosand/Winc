@@ -4,7 +4,8 @@
 //! [`Shared`] 中，只在本次运行中生效。
 
 use super::{Failed, Shared, Vim};
-use crate::host::{Host, HostOption, Message};
+use crate::ex::{OPTIONS, OptionTarget as Target};
+use crate::host::{Host, Message};
 use crate::register::Clipboard;
 
 /// Vim 层自己的选项。
@@ -35,71 +36,6 @@ impl Default for Options {
             timeoutlen: None,
         }
     }
-}
-
-/// 选项保存的位置。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Target {
-    /// 由宿主保存。
-    Host(HostOption),
-    /// `ignorecase`。
-    IgnoreCase,
-    /// `smartcase`。
-    SmartCase,
-    /// `hlsearch`。
-    HlSearch,
-    /// `incsearch`。
-    IncSearch,
-    /// `wrapscan`。
-    WrapScan,
-    /// `gdefault`。
-    GDefault,
-    /// `scrolloff`。
-    ScrollOff,
-    /// `timeoutlen`。
-    TimeoutLen,
-    /// `clipboard`。
-    Clipboard,
-}
-
-/// 选项的全名、缩写、保存的位置，以及是否为开关。
-const OPTIONS: &[(&str, &str, Target, bool)] = &[
-    ("number", "nu", Target::Host(HostOption::Number), true),
-    (
-        "relativenumber",
-        "rnu",
-        Target::Host(HostOption::RelativeNumber),
-        true,
-    ),
-    ("wrap", "wrap", Target::Host(HostOption::Wrap), true),
-    ("list", "list", Target::Host(HostOption::List), true),
-    ("tabstop", "ts", Target::Host(HostOption::TabStop), false),
-    (
-        "shiftwidth",
-        "sw",
-        Target::Host(HostOption::ShiftWidth),
-        false,
-    ),
-    ("expandtab", "et", Target::Host(HostOption::ExpandTab), true),
-    ("ignorecase", "ic", Target::IgnoreCase, true),
-    ("smartcase", "scs", Target::SmartCase, true),
-    ("hlsearch", "hls", Target::HlSearch, true),
-    ("incsearch", "is", Target::IncSearch, true),
-    ("wrapscan", "ws", Target::WrapScan, true),
-    ("gdefault", "gd", Target::GDefault, true),
-    ("scrolloff", "so", Target::ScrollOff, false),
-    ("timeoutlen", "tm", Target::TimeoutLen, false),
-    ("clipboard", "cb", Target::Clipboard, false),
-];
-
-/// 返回各选项的全名与缩写，供帮助页列出。
-pub fn option_list() -> impl Iterator<Item = (&'static str, &'static str)> {
-    OPTIONS.iter().map(|(name, short, _, _)| (*name, *short))
-}
-
-/// 返回各选项的全名，供补全使用。
-pub(crate) fn option_names() -> impl Iterator<Item = &'static str> {
-    OPTIONS.iter().map(|(name, _, _, _)| *name)
 }
 
 /// 返回名为 `name`（全名或缩写）的选项。

@@ -217,6 +217,17 @@ impl Format {
         self
     }
 
+    /// 用样式节点 `node` 中显式指定的加粗/倾斜覆盖当前格式。
+    fn overlay(mut self, node: FormatNode) -> Format {
+        if let Some(b) = node.bold {
+            self.bold = b;
+        }
+        if let Some(i) = node.italic {
+            self.italic = i;
+        }
+        self
+    }
+
     /// 写出开始标签，顺序与 [`Format::close`] 相反。
     fn open(self, out: &mut String) {
         for (set, tag) in self.tags() {
@@ -372,12 +383,7 @@ impl Styles {
             None::<()>
         });
         for node in chain.into_iter().rev().flatten() {
-            if let Some(b) = node.bold {
-                format.bold = b;
-            }
-            if let Some(i) = node.italic {
-                format.italic = i;
-            }
+            format = format.overlay(node);
         }
         format
     }

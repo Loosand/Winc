@@ -349,10 +349,7 @@ fn merge(
                 .filter(|dir| !gone(dir))
                 .chain(dirs.iter().map(String::as_str)),
         ),
-        ..Files::with_capacity(
-            base.paths.text.len() + added.iter().map(String::len).sum::<usize>(),
-            base.len() + added.len(),
-        )
+        ..Files::with_capacity(base.paths.merged_bytes(&added), base.len() + added.len())
     };
 
     let mut fresh = added.iter().peekable();

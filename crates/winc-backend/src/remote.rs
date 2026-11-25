@@ -436,12 +436,14 @@ impl Connection {
     /// 子进程），命令结束后返回 [`io::ErrorKind::Interrupted`]。
     fn exec(
         &self,
+        cwd: &[u8],
         exec: &Exec,
         cancel: &dyn Fn() -> bool,
         answer: &dyn Fn(&Ask) -> Option<Vec<u8>>,
     ) -> io::Result<Output> {
-        let (id, replies) = self.link.send(kind::EXEC, &exec.encode())?;
+        let (id, replies) = self.link.send(kind::EXEC, &exec.encode(cwd, true))?;
         let mut output = Output::default();
+        let mut budget = exec.output_budget();
         let mut asked = false;
         loop {
             let frame = match replies.recv_timeout(CANCEL_POLL) {
@@ -494,15 +496,48 @@ impl Connection {
                 _ => return Err(wire::invalid("unknown output stream")),
             }
             // 输出超过上限：不再接收，通知对端结束命令。
-            if exec
-                .limit
-                .is_some_and(|limit| output.stdout.len() + output.stderr.len() > limit)
-            {
+            if let Err(error) = budget.record(data.len()) {
                 let _ = self.link.write(kind::CANCEL, id, &[]);
                 self.link.forget(id);
-                return Err(io::ErrorKind::FileTooLarge.into());
+                return Err(error);
             }
         }
+    }
+
+    fn spawn_running(self: Arc<Self>, cwd: &[u8], exec: &Exec) -> io::Result<Running> {
+        // 输出随到随读的命令没有答复输入请求的一方。
+        let (id, replies) = self.link.send(kind::EXEC, &exec.encode(cwd, false))?;
+        Ok(Running {
+            connection: self,
+            id,
+            replies,
+            stdout: (Vec::new(), 0),
+            stderr: Vec::new(),
+            budget: exec.output_budget(),
+            code: None,
+            deadline: None,
+        })
+    }
+
+    fn cancel(&self, id: u32) {
+        let _ = self.link.write(kind::CANCEL, id, &[]);
+    }
+
+    fn cancel_and_forget(&self, id: u32) {
+        let _ = self.link.write(kind::CANCEL, id, &[]);
+        self.link.forget(id);
+    }
+
+    fn is_open(&self) -> bool {
+        !self.link.closed()
+    }
+
+    fn is_stalled(&self) -> bool {
+        !self.link.closed() && self.link.stalled.load(Ordering::Relaxed)
+    }
+
+    fn sent_requests(&self) -> u64 {
+        self.link.sent.load(Ordering::Relaxed)
     }
 }
 
@@ -684,7 +719,6 @@ const CANCEL_POLL: Duration = Duration::from_millis(50);
 #[derive(Debug, Clone, Default)]
 pub struct Exec {
     program: Vec<u8>,
-    cwd: Vec<u8>,
     args: Vec<Vec<u8>>,
     envs: Vec<(Vec<u8>, Vec<u8>)>,
     stdin: Vec<u8>,
@@ -692,6 +726,22 @@ pub struct Exec {
     ask: bool,
     /// 输出（标准输出与标准错误合计）的字节数上限；只在本机一侧使用，不发给对端。
     limit: Option<usize>,
+}
+
+/// 累计远端命令的输出字节数并检查上限。
+struct OutputBudget {
+    limit: Option<usize>,
+    received: usize,
+}
+
+impl OutputBudget {
+    fn record(&mut self, bytes: usize) -> io::Result<()> {
+        self.received = self.received.saturating_add(bytes);
+        if self.limit.is_some_and(|limit| self.received > limit) {
+            return Err(io::ErrorKind::FileTooLarge.into());
+        }
+        Ok(())
+    }
 }
 
 /// 远端运行的命令提出的一次输入请求。
@@ -759,10 +809,10 @@ impl Exec {
     }
 
     /// 编码为 [`kind::EXEC`] 的载荷。
-    fn encode(&self) -> Vec<u8> {
+    fn encode(&self, cwd: &[u8], allow_ask: bool) -> Vec<u8> {
         let mut out = Writer::default()
             .bytes(&self.program)
-            .bytes(&self.cwd)
+            .bytes(cwd)
             .u32(self.args.len() as u32);
         for arg in &self.args {
             out = out.bytes(arg);
@@ -771,7 +821,14 @@ impl Exec {
         for (name, value) in &self.envs {
             out = out.bytes(name).bytes(value);
         }
-        out.bytes(&self.stdin).flag(self.ask).finish()
+        out.bytes(&self.stdin).flag(allow_ask && self.ask).finish()
+    }
+
+    fn output_budget(&self) -> OutputBudget {
+        OutputBudget {
+            limit: self.limit,
+            received: 0,
+        }
     }
 }
 
@@ -815,9 +872,7 @@ pub fn exec_asking(
     let Some(at) = crate::locate(dir) else {
         return Err(io::ErrorKind::InvalidInput.into());
     };
-    let mut exec = exec.clone();
-    exec.cwd = at.path;
-    connection(&at.target)?.exec(&exec, cancel, answer)
+    connection(&at.target)?.exec(&at.path, exec, cancel, answer)
 }
 
 /// 在远端运行、输出随到随读的命令，由 [`spawn`] 启动。
@@ -834,8 +889,7 @@ pub struct Running {
     /// 已收到、尚未读走的标准输出，以及其中已读走的字节数。
     stdout: (Vec<u8>, usize),
     stderr: Vec<u8>,
-    received: usize,
-    limit: Option<usize>,
+    budget: OutputBudget,
     /// 命令已结束时为其退出码（被信号结束时是 `None`）。
     code: Option<Option<i32>>,
     /// 读取等待的最后期限，见 [`Running::read_until`]。
@@ -889,10 +943,7 @@ impl Running {
         let stream = chunk.u8()?;
         let data = chunk.bytes()?;
         chunk.finish()?;
-        self.received += data.len();
-        if self.limit.is_some_and(|limit| self.received > limit) {
-            return Err(io::ErrorKind::FileTooLarge.into());
-        }
+        self.budget.record(data.len())?;
         match stream {
             kind::STDOUT => self.stdout.0.extend_from_slice(data),
             kind::STDERR => self.stderr.extend_from_slice(data),
@@ -912,7 +963,7 @@ impl Stopper {
     /// 通知对端强制结束命令（连同它启动的子进程）；命令已经结束或连接已断开时没有效果。
     /// 读取的一方随后读到输出结束。
     pub fn stop(&self) {
-        let _ = self.connection.link.write(kind::CANCEL, self.id, &[]);
+        self.connection.cancel(self.id);
     }
 }
 
@@ -959,8 +1010,7 @@ impl io::Read for Running {
 impl Drop for Running {
     fn drop(&mut self) {
         if self.code.is_none() {
-            let _ = self.connection.link.write(kind::CANCEL, self.id, &[]);
-            self.connection.link.forget(self.id);
+            self.connection.cancel_and_forget(self.id);
         }
     }
 }
@@ -974,23 +1024,7 @@ pub fn spawn(dir: &Path, exec: &Exec) -> io::Result<Running> {
     let Some(at) = crate::locate(dir) else {
         return Err(io::ErrorKind::InvalidInput.into());
     };
-    let mut exec = exec.clone();
-    exec.cwd = at.path;
-    // 输出随到随读的命令没有答复输入请求的一方。
-    exec.ask = false;
-    let connection = connection(&at.target)?;
-    let (id, replies) = connection.link.send(kind::EXEC, &exec.encode())?;
-    Ok(Running {
-        connection,
-        id,
-        replies,
-        stdout: (Vec::new(), 0),
-        stderr: Vec::new(),
-        received: 0,
-        limit: exec.limit,
-        code: None,
-        deadline: None,
-    })
+    connection(&at.target)?.spawn_running(&at.path, exec)
 }
 
 /// 连接不可用的情形。
@@ -1071,7 +1105,7 @@ pub fn is_connected(target: &Target) -> bool {
     let connections = CONNECTIONS.lock().unwrap_or_else(PoisonError::into_inner);
     (connections.as_ref())
         .and_then(|all| all.get(target))
-        .is_some_and(|connection| !connection.link.closed())
+        .is_some_and(|connection| connection.is_open())
 }
 
 /// 是否到 `target` 的连接上有请求在等待，而对端已有 20 秒没有任何动静：网络多半已经
@@ -1080,9 +1114,7 @@ pub fn is_stalled(target: &Target) -> bool {
     let connections = CONNECTIONS.lock().unwrap_or_else(PoisonError::into_inner);
     (connections.as_ref())
         .and_then(|all| all.get(target))
-        .is_some_and(|connection| {
-            !connection.link.closed() && connection.link.stalled.load(Ordering::Relaxed)
-        })
+        .is_some_and(|connection| connection.is_stalled())
 }
 
 /// 返回到 `target` 的连接至今发出的请求数；没有连接时为 0。
@@ -1092,14 +1124,14 @@ pub fn requests(target: &Target) -> u64 {
     let connections = CONNECTIONS.lock().unwrap_or_else(PoisonError::into_inner);
     (connections.as_ref())
         .and_then(|all| all.get(target))
-        .map_or(0, |connection| connection.link.sent.load(Ordering::Relaxed))
+        .map_or(0, |connection| connection.sent_requests())
 }
 
 /// 返回有可用连接的各个目标，按名字排序。
 pub fn connected() -> Vec<Target> {
     let connections = CONNECTIONS.lock().unwrap_or_else(PoisonError::into_inner);
     let mut targets: Vec<Target> = (connections.iter().flatten())
-        .filter(|(_, connection)| !connection.link.closed())
+        .filter(|(_, connection)| connection.is_open())
         .map(|(target, _)| target.clone())
         .collect();
     targets.sort_by(|a, b| a.as_str().cmp(b.as_str()));

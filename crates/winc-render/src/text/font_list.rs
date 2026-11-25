@@ -2,14 +2,79 @@
 //!
 //! macOS 向 CoreText 查询字族；其他平台读取字体目录下每个字体文件的名字表。
 
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use swash::FontRef;
 #[cfg(any(not(target_os = "macos"), test))]
 use swash::{Style, Weight};
 
-use super::font::{load, select};
+use super::face::{Face, load, select};
 use super::font_path::{FontFile, normalize};
+
+/// 一次字体请求：按名字查系统，或直接使用给定的路径。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FontSpec {
+    /// 字体名或字族名，例如 `Menlo`、`Helvetica`、`苹方-简`。
+    ///
+    /// macOS 由 CoreText 查询，识别字族名、PostScript 名和本地化名称；其他平台按文件名前缀匹配，
+    /// 忽略空格、连字符、下划线和大小写。这些方式都找不到时，再按同样宽松的写法匹配已安装的字族名。
+    Name(String),
+    /// 字体文件路径。
+    Path(PathBuf),
+}
+
+/// 不能使用字体的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontError {
+    /// 系统里没有该名字的字体，或路径不是文件。
+    NotFound,
+    /// 找到了字体文件，但无法打开，或其中的字形格式画不出来。
+    Unsupported,
+}
+
+impl FontSpec {
+    /// 确认字体存在，并且能用来显示文字。
+    ///
+    /// 渲染层遇到不能用的字体时静默改用默认字体，调用方据此提前告知用户原因。
+    ///
+    /// # Errors
+    ///
+    /// 找不到字体时返回 [`FontError::NotFound`]，找到了但画不出字形时返回
+    /// [`FontError::Unsupported`]。
+    pub fn check(&self) -> Result<(), FontError> {
+        let file = self.resolve().ok_or(FontError::NotFound)?;
+        Face::open(&file).map(drop).ok_or(FontError::Unsupported)
+    }
+
+    /// 解析成字体文件；路径不是文件，或系统里没有该名字的字体时返回 `None`。
+    ///
+    /// 返回 `None` 时调用方退回内置候选。
+    pub(crate) fn resolve(&self) -> Option<FontFile> {
+        match self {
+            FontSpec::Path(path) => path.is_file().then(|| FontFile::first(path.clone())),
+            FontSpec::Name(name) => resolve_name(name.trim()),
+        }
+    }
+}
+
+/// 返回字体名 `name` 对应的字体文件；系统里没有该字体时返回 `None`。
+///
+/// 系统界面字体无法按名字向 CoreText 查询，`SF Mono`、`SF Pro` 直接对应系统字体文件；用户
+/// 自行安装了同名字体时优先使用安装的字体。
+#[cfg(target_os = "macos")]
+fn resolve_name(name: &str) -> Option<FontFile> {
+    super::font_path::exact_font(name)
+        .or_else(|| find_family(name).map(|family| family.file.clone()))
+}
+
+/// 返回字体名 `name` 对应的字体文件：先按文件名查找，再按字族名查找（文件名与字族名无关的
+/// 字体，例如 `msyh.ttc`），找不到时返回 `None`。
+#[cfg(not(target_os = "macos"))]
+fn resolve_name(name: &str) -> Option<FontFile> {
+    super::font_path::resolve_file_name(name)
+        .or_else(|| find_family(name).map(|family| family.file.clone()))
+}
 
 /// 一个已安装的字族。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,7 +177,7 @@ fn scan<'a>(paths: impl Iterator<Item = &'a std::path::PathBuf>) -> Vec<FontFami
             let Some(name) = family_name(&font).filter(|n| !n.starts_with('.')) else {
                 continue;
             };
-            let postscript = super::font::postscript_name(&font);
+            let postscript = super::face::postscript_name(&font);
             let usable = select(&data, postscript.as_deref()).is_some();
             if !usable {
                 continue;

@@ -895,5 +895,34 @@ pub fn starts_with(slice: RopeSlice<'_>, prefix: &str) -> bool {
     prefix.chars().all(|p| chars.next() == Some(p))
 }
 
+/// 按行切分文本，每行保留自己的换行符（`\n`、`\r\n` 或单独的 `\r`）。
+///
+/// 最后一行没有换行符时也算一行，以换行符结尾时不多出一个空行。返回的每行内容包含自己的
+/// 换行符，需要不含换行符的行时由调用方去掉。
+pub fn split_lines(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let end = match bytes[i] {
+            b'\n' => i + 1,
+            b'\r' if bytes.get(i + 1) == Some(&b'\n') => i + 2,
+            b'\r' => i + 1,
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        lines.push(&text[start..end]);
+        start = end;
+        i = end;
+    }
+    if start < text.len() {
+        lines.push(&text[start..]);
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests;

@@ -163,6 +163,33 @@ impl Sheet {
         out.finish(self.name.clone(), self.truncated)
     }
 
+    /// 标记还有未读入的行。
+    fn mark_truncated(&mut self, more: bool) {
+        self.truncated |= more;
+    }
+
+    /// 设置合并区域：裁去超出已读行或列数上限的部分，并按合并区域的最右端扩展列数。
+    pub(crate) fn set_merges(&mut self, mut merges: Vec<Area>) {
+        let count = self.row_count();
+        merges.retain(|m| m.top < count && m.left < MAX_COLUMNS);
+        for merge in &mut merges {
+            merge.bottom = merge.bottom.min(count.saturating_sub(1));
+            merge.right = merge.right.min(MAX_COLUMNS - 1);
+        }
+        let widest = merges.iter().map(|m| m.right + 1).max().unwrap_or(0);
+        self.merges = merges;
+        self.columns = self.columns.max(widest);
+    }
+
+    /// 返回与 `area` 重叠的全部合并区域。
+    pub fn merges_overlapping(&self, area: Area) -> Vec<Area> {
+        self.merges
+            .iter()
+            .filter(|m| m.overlaps(&area))
+            .copied()
+            .collect()
+    }
+
     /// 返回第 `row` 行的单元格在 `ends` 中的范围；没有这一行时为空。
     fn span(&self, row: usize) -> std::ops::Range<usize> {
         let end = self.row_ends.get(row).map_or(0, |&end| end as usize);
@@ -311,7 +338,7 @@ pub fn load_delimited(path: &Path, tabs: bool) -> Result<Table, String> {
         head_lines(path, MAX_ROWS + 1).map_err(|e| e.to_string())?
     };
     let mut sheet = read_delimited(&String::from_utf8_lossy(&bytes), tabs);
-    sheet.truncated |= more;
+    sheet.mark_truncated(more);
     Ok(Table {
         sheets: vec![sheet],
     })

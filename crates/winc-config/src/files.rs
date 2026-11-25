@@ -40,7 +40,7 @@ pub fn import_into_portable() -> bool {
     let Some(dir) = portable_dir() else {
         return false;
     };
-    let state = crate::state::user_state_dir();
+    let state = user_state_dir();
     import_missing(
         &dir,
         [(user_config_dir(), "config.json"), (state, "state.json")],
@@ -96,6 +96,25 @@ pub(crate) fn user_config_dir() -> Option<PathBuf> {
 /// `~/Library/Application Support`）；无法确定用户目录时返回 `None`。
 pub fn user_config_root() -> Option<PathBuf> {
     user_config_dir().and_then(|dir| dir.parent().map(Path::to_path_buf))
+}
+
+/// 返回用户目录中存放状态文件的目录，不考虑便携版；无法确定用户目录时返回 `None`。
+pub(crate) fn user_state_dir() -> Option<PathBuf> {
+    let home = || std::env::var_os("HOME").map(PathBuf::from);
+
+    if cfg!(target_os = "macos") {
+        user_config_dir()
+    } else if cfg!(target_os = "windows") {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .or_else(home)
+            .map(|dir| dir.join("winc"))
+    } else {
+        std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home().map(|home| home.join(".local").join("state")))
+            .map(|dir| dir.join("winc"))
+    }
 }
 
 /// 规范化路径：解开符号链接、`.` 和 `..`，规则同 [`std::fs::canonicalize`]。

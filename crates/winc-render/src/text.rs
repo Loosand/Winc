@@ -1,6 +1,7 @@
 //! 文字：加载字体、按名字查找字体文件、字形缓存，以及字形轮廓（SVG 预览里的文字使用）。
 
 use super::*;
+pub(crate) mod face;
 pub(crate) mod font;
 pub(crate) mod font_list;
 pub(crate) mod font_path;

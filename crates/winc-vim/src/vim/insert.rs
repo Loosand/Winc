@@ -217,10 +217,7 @@ impl Vim {
         key: Key,
     ) -> bool {
         // 替换模式的退格还原被覆盖的字符。
-        if self.is_replace()
-            && key == Key::named(Named::Backspace)
-            && self.parser.pending().is_empty()
-        {
+        if self.is_replace() && key == Key::named(Named::Backspace) && !self.parser.has_pending() {
             self.play(host, &Input::Backspace { word: false });
             return true;
         }

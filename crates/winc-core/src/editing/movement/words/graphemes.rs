@@ -55,6 +55,17 @@ impl<'a> LineGraphemes<'a> {
         };
         chunk[at - start..].chars().next()
     }
+
+    fn step(&mut self, backwards: bool) -> Option<(usize, char)> {
+        let at = self.cursor.cur_cursor();
+        let (start, next) = if backwards {
+            let prev = self.query(GraphemeCursor::prev_boundary)?;
+            (prev, prev)
+        } else {
+            (at, self.query(GraphemeCursor::next_boundary)?)
+        };
+        Some((next, self.char_at(start)?))
+    }
 }
 
 /// 返回 `at` 处或之前最近的字素边界。位置以 UTF-8 字节计。
@@ -74,14 +85,5 @@ pub(super) fn iter(
     backwards: bool,
 ) -> impl Iterator<Item = (usize, char)> + '_ {
     let mut units = LineGraphemes::new(line, at, backwards);
-    std::iter::from_fn(move || {
-        let at = units.cursor.cur_cursor();
-        let (start, next) = if backwards {
-            let prev = units.query(GraphemeCursor::prev_boundary)?;
-            (prev, prev)
-        } else {
-            (at, units.query(GraphemeCursor::next_boundary)?)
-        };
-        Some((next, units.char_at(start)?))
-    })
+    std::iter::from_fn(move || units.step(backwards))
 }

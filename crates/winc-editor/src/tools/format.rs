@@ -407,6 +407,44 @@ impl Plan {
         }
     }
 
+    /// 展开本次运行所需的命令行参数（含范围参数和占位符替换）。
+    fn expanded_args(&self, file: &Path) -> Result<Vec<std::ffi::OsString>, FormatError> {
+        let range_args = match &self.range {
+            Some(range) => self.range_args()?.iter().map(|a| range.expand(a)).collect(),
+            None => Vec::new(),
+        };
+        let dir = self.file.parent().unwrap_or(Path::new("/"));
+        let edition = self
+            .args
+            .iter()
+            .any(|arg| arg.contains(command::RUST_EDITION))
+            .then(|| tools::rust_edition(dir))
+            .flatten();
+        Ok(self.args[1..]
+            .iter()
+            .chain(&range_args)
+            .map(|arg| command::expand(arg, file, edition.as_deref()))
+            .collect())
+    }
+
+    /// 本次命令是否按 `ESLint` `--fix-dry-run` 模式运行。
+    fn is_eslint_dry_run(&self) -> bool {
+        self.args.iter().any(|a| a == "--fix-dry-run")
+    }
+
+    /// 返回工具所在环境下的文件路径、所在目录和 WSL 位置。
+    fn target_paths(&self) -> (PathBuf, &Path, Option<crate::wsl::Location>, bool) {
+        let remote = winc_backend::is_remote(&self.file);
+        let place = crate::wsl::locate_here(&self.file);
+        let file = match &place {
+            Some(place) => PathBuf::from(&place.path),
+            None if remote => PathBuf::from(winc_backend::native_lossy(&self.file).into_owned()),
+            None => self.file.clone(),
+        };
+        let dir = self.file.parent().unwrap_or(Path::new("/"));
+        (file, dir, place, remote)
+    }
+
     /// 是否 `command` 把 `{file}` 当成要处理的文件交给了工具（`gofmt {file}`），而不是某个
     /// 选项的值（`--stdin-filepath {file}`）。
     ///
@@ -727,10 +765,8 @@ impl Formatter {
     pub fn run(&self, job: Job, cancel: &Cancel) -> Result<Formatted, FormatError> {
         let plan = &self.resolve(&job.plan)?;
         let tool = plan.tool().into_owned();
-        let range_args = match &plan.range {
-            Some(range) => plan.range_args()?.iter().map(|a| range.expand(a)).collect(),
-            None => Vec::new(),
-        };
+        let (file, dir, place, remote) = plan.target_paths();
+        let args = plan.expanded_args(&file)?;
         let program = self.locate_for(&plan.file, &plan.program).ok_or_else(|| {
             let message = match &plan.auto {
                 Some((preset, Some(reason))) => {
@@ -749,27 +785,6 @@ impl Formatter {
                 _ => FormatError::missing(message, ""),
             }
         })?;
-
-        // 发行版内的工具只接受发行版内的路径，远端主机上的工具只接受那台主机上的路径。
-        let remote = winc_backend::is_remote(&plan.file);
-        let place = crate::wsl::locate_here(&plan.file);
-        let file = match &place {
-            Some(place) => PathBuf::from(&place.path),
-            None if remote => PathBuf::from(winc_backend::native_lossy(&plan.file).into_owned()),
-            None => plan.file.clone(),
-        };
-        let dir = plan.file.parent().unwrap_or(Path::new("/"));
-        let edition = plan
-            .args
-            .iter()
-            .any(|arg| arg.contains(command::RUST_EDITION))
-            .then(|| tools::rust_edition(dir))
-            .flatten();
-        let args: Vec<_> = plan.args[1..]
-            .iter()
-            .chain(&range_args)
-            .map(|arg| command::expand(arg, &file, edition.as_deref()))
-            .collect();
         // 工作目录取文件所在的目录（工具从这里向上查找配置）；该目录已被删除时取向上第一个
         // 仍存在的目录。
         let cwd = dir
@@ -870,7 +885,7 @@ impl Formatter {
         // ESLint 不直接输出修复后的内容，见 `eslint_output`。仍有无法自动修复的问题时退出码是 1，
         // 不算失败。按参数 `--fix-dry-run` 识别，而不是按程序名：项目里的路径是
         // `node_modules/.bin/eslint`，Windows 上是 `eslint.cmd`，用户也可能在外面套一层 `npx`。
-        let eslint = plan.args.iter().any(|a| a == "--fix-dry-run");
+        let eslint = plan.is_eslint_dry_run();
         let finished = output.status.success() || (eslint && output.status.code() == Some(1));
         if !finished {
             for line in stderr.lines() {
