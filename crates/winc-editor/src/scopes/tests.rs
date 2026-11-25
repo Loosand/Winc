@@ -130,10 +130,7 @@ fn a_header_sticks_as_soon_as_it_reaches_the_top() {
 #[test]
 fn reusing_earlier_results_changes_nothing() {
     let files = [
-        (
-            "a.rs",
-            include_str!("../../../../winc-app/src/view/editor.rs"),
-        ),
+        ("a.rs", include_str!("../../../winc-app/src/view/editor.rs")),
         ("a.md", include_str!("sections.md")),
         ("a.py", PYTHON),
     ];

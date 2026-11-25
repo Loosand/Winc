@@ -17,7 +17,8 @@ use regex::{Regex, RegexBuilder};
 use winc_core::{Change, EditKind, Lines, Selection, Transaction};
 use winc_i18n::t;
 
-use crate::document::{Document, DocumentId};
+use crate::DocumentId;
+use crate::document::Document;
 
 /// 最多记录的匹配数（处）。
 ///

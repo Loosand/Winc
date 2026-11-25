@@ -32,11 +32,14 @@ use memchr::{memchr_iter, memchr2_iter};
 use ropey::Rope;
 use winc_core::Lines;
 
+use crate::document::editing::search::{
+    Matcher, Options, Pattern, Search, count_chars, joined, unescape,
+};
 use crate::document::encoding::{UTF8_BOM, decode, utf16_text};
 use crate::document::large::{LINE_CAP, visible_len};
-use crate::document::{BINARY_SNIFF, Document, DocumentId, LARGE_FILE, OPEN_LIMIT, looks_binary};
-use crate::editing::search::{Matcher, Options, Pattern, Search, count_chars, joined, unescape};
+use crate::document::{BINARY_SNIFF, Document, OPEN_LIMIT, looks_binary};
 use crate::workspace::tree::{is_listed_file, natural_cmp, walker, walker_with_ignored};
+use crate::{DocumentId, LARGE_FILE};
 
 /// 最多记录的匹配数（处）；达到后停止搜索，并提示结果不全。
 ///

@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use winc_core::edit::EditKind;
 use winc_core::{Change, Lines, Selection, Transaction};
 
+use super::search::Pattern;
 use crate::document::content::Content;
-use crate::editing::search::Pattern;
 use crate::{Command, Document, EDIT_LIMIT};
 
 /// 修改列表保留的位置个数（个）；超出时丢弃最早的一个。

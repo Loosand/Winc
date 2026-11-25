@@ -25,21 +25,6 @@ impl Document {
             .min(self.text.line_count().saturating_sub(1))
     }
 
-    /// 返回文档的显示行数；差异标签是对齐以后的行数，日志标签是提交数。
-    pub fn row_count(&self) -> usize {
-        if let Some(view) = &self.log {
-            return view.row_count();
-        }
-        if let Some(view) = &self.hex {
-            return view.rows();
-        }
-        match &self.diff {
-            // 末尾删掉一大段时左侧比右侧长，滚动范围取较长的一侧（见 `DiffView::scroll_rows`）。
-            Some(view) => view.scroll_rows().max(1),
-            None => self.folds.row_count(self.text.line_count()),
-        }
-    }
-
     /// 返回整个文件可折叠的块，按（版本号、Tab 宽度）缓存，连续执行多次折叠命令时不必重算；
     /// 返回的是缓存的共享引用，不复制整张列表。
     pub fn fold_ranges(&mut self, tab_width: usize) -> Rc<[FoldRange]> {
@@ -77,7 +62,7 @@ impl Document {
     /// 返回 `lines`（升序）中是块的开头的行，结果与逐行调用 [`Self::starts_block`] 相同。
     ///
     /// 供一次询问屏幕上的所有行：Markdown 中省去让每个标题向上统计代码块围栏的开销（见
-    /// [`crate::editing::scopes::block_starts`]）。
+    /// [`crate::scopes::block_starts`]）。
     pub fn block_starts(
         &mut self,
         lines: impl IntoIterator<Item = usize>,

@@ -6,52 +6,7 @@ use std::sync::Arc;
 
 use crate::LargeText;
 use crate::document::content::Content;
-
-/// 返回第 `line` 行按 `width` 个显示列断开的结果。
-///
-/// 只处理开头 `limit` 个字符（见 [`Document::wrap_limit`]）。
-pub(crate) fn line_breaks(
-    text: &impl Lines,
-    line: usize,
-    width: usize,
-    tab_width: usize,
-    limit: usize,
-) -> Breaks {
-    let content = text.line_content(line);
-    let slice = content.slice();
-    breaks_of(slice.len_chars(), || slice.chars(), width, tab_width, limit)
-}
-
-/// 返回一行文字按 `width` 个显示列断开的结果：`chars` 每次调用都从行首起依次给出该行的字符，
-/// `len` 是字符数的上界。
-///
-/// 只处理开头 `limit` 个字符。
-pub(super) fn breaks_of<I: Iterator<Item = char>>(
-    len: usize,
-    chars: impl Fn() -> I,
-    width: usize,
-    tab_width: usize,
-    limit: usize,
-) -> Breaks {
-    // 先做粗略估计：每个字符最宽 2 个显示列（Tab 按 Tab 宽度计），按该上界估算仍可容纳的行
-    // 无需逐字符测量。
-    if len.saturating_mul(tab_width.max(2)) <= width {
-        return Breaks::default();
-    }
-    // 该上界偏保守（Tab 宽度越大，越容易判为不可容纳），而多数行实际可以容纳：因此遍历时累计
-    // 宽度，确认不可容纳时才取出字符精确计算，避免为同一行建立两次字符表。
-    let mut cells = 0;
-    let mut behind = winc_core::text::Behind::default();
-    let fits = chars().take(limit).all(|c| {
-        cells += behind.cells(c, cells, tab_width);
-        cells <= width.max(1)
-    });
-    if fits {
-        return Breaks::default();
-    }
-    let chars: Vec<char> = chars().take(limit).collect();
-    wrap::breaks(&chars, width, tab_width)
-}
+use crate::scopes::{breaks_of, line_breaks};
 
 /// 返回第 `line` 行按 `width` 个显示列断开的结果，以及参与断行的字符数（字符）。
 pub(super) fn measure_line(

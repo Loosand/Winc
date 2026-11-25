@@ -7,7 +7,6 @@
 mod block;
 mod edit;
 mod ex;
-mod global;
 mod insert;
 mod macros;
 mod map;
@@ -17,7 +16,6 @@ mod number;
 mod operate;
 mod options;
 mod search;
-mod sort;
 mod substitute;
 mod surround;
 mod view;
@@ -47,6 +45,24 @@ pub(crate) const MAX_OUTPUT: usize = 16 << 20;
 /// 命令已经失败并提示过。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Failed;
+
+/// 命令行求值之后的范围：行号从 1 起，0 表示第一行之前。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Span {
+    /// 首行。
+    pub first: usize,
+    /// 末行，不小于首行。
+    pub last: usize,
+    /// 写出的地址个数。
+    pub given: usize,
+}
+
+impl Span {
+    /// 返回首末行从 0 起的行号；第一行之前算作第一行。
+    pub(super) fn lines(self) -> (usize, usize) {
+        (self.first.max(1) - 1, self.last.max(1) - 1)
+    }
+}
 
 /// 可视模式的种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1177,6 +1193,117 @@ impl Vim {
             cursor: end,
         });
         self.mode = Mode::Visual;
+    }
+
+    /// 提示出错的 `message` 并返回失败。
+    pub(super) fn fail<T>(&mut self, host: &mut impl Host, message: Message) -> Result<T, Failed> {
+        self.error(host, message);
+        Err(Failed)
+    }
+
+    /// 返回状态机正在等待的输入；不在等待时返回 `None`。
+    pub fn prompt(&self) -> Option<Prompt> {
+        if self.cmdline {
+            return Some(Prompt::Command);
+        }
+        self.prompt.map(search::Pending::prompt)
+    }
+
+    /// 放弃输入：光标回到输入开始时的位置，命令不执行。
+    pub fn prompt_cancel(&mut self, host: &mut impl Host) {
+        if self.prompt.is_some() || self.cmdline {
+            self.record_line(None);
+        }
+        self.cmdline = false;
+        self.line.clear();
+        self.cancel_search(host);
+    }
+
+    /// 输入完成：以 `text` 为命令行或查找的模式，执行等待中的命令。
+    ///
+    /// 查找时 `text` 中未转义的 `/`（向前文查找时为 `?`）之后是偏移；模式为空时沿用上一次的
+    /// 模式。
+    pub fn prompt_submit(&mut self, shared: &mut Shared, host: &mut impl Host, text: &str) {
+        self.begin_key(shared);
+        self.record_line(Some(text));
+        self.submit(shared, host, text);
+        self.finish_key(shared, host);
+    }
+
+    /// 执行命令行 `text`，并记为上一次执行的命令行；以 `|` 分隔的命令没有执行到最后一条时
+    /// 不记。
+    pub(super) fn command_line(&mut self, shared: &mut Shared, host: &mut impl Host, text: &str) {
+        self.ex_last = true;
+        self.ex_line(shared, host, text);
+        if !text.trim().is_empty() && self.ex_last {
+            shared.last_command = Some(text.to_owned());
+            shared.registers.set_special(':', text.to_owned());
+        }
+    }
+
+    /// [`Vim::prompt_submit`] 的实现，不记录按键。
+    pub(super) fn submit(&mut self, shared: &mut Shared, host: &mut impl Host, text: &str) {
+        self.line.clear();
+        if std::mem::take(&mut self.cmdline) {
+            shared.remember_command(text);
+            self.command_line(shared, host, text);
+            self.resume_if_done(host);
+            return;
+        }
+        self.submit_search(shared, host, text);
+    }
+
+    /// 等待输入期间由状态机自行处理按键：字符加入输入的一行，回车提交，`Esc` 放弃。
+    ///
+    /// 宿主没有输入框时调用；回放按键时状态机也经此处理。
+    pub fn prompt_key(&mut self, shared: &mut Shared, host: &mut impl Host, key: Key) {
+        self.record(key);
+        self.line_key(shared, host, key);
+        self.finish_key(shared, host);
+    }
+
+    /// [`Vim::prompt_key`] 的实现，不记录按键。
+    pub(super) fn line_key(&mut self, shared: &mut Shared, host: &mut impl Host, key: Key) {
+        // `Ctrl-V` 之后的按键按字面加入。
+        let literal = std::mem::take(&mut self.line_literal);
+        match key.code() {
+            Code::Char(c) if key.as_char().is_some() => self.line.push(c),
+            Code::Named(Named::Tab) if literal => self.line.push('\t'),
+            Code::Named(Named::Enter) if literal => self.line.push('\r'),
+            Code::Named(Named::Enter) => {
+                let line = std::mem::take(&mut self.line);
+                return self.submit(shared, host, &line);
+            }
+            Code::Named(Named::Backspace) | Code::Char('h') => {
+                if self.line.pop().is_none() {
+                    return self.prompt_cancel(host);
+                }
+            }
+            Code::Char('v' | 'q') if key.mods() == Mods::CTRL => {
+                self.line_literal = true;
+                return;
+            }
+            Code::Named(Named::Esc) | Code::Char('c') => {
+                self.line.clear();
+                return self.prompt_cancel(host);
+            }
+            _ => return,
+        }
+        // 回放期间不做即时跳转。
+        if self.typeahead.is_empty() {
+            let line = self.line.clone();
+            self.prompt_preview(shared, host, &line);
+        }
+    }
+
+    /// `&`、`g&`：重复上一次替换；`all` 为真时作用于全部的行并沿用标志。
+    fn repeat_substitute(&mut self, shared: &mut Shared, host: &mut impl Host, all: bool) {
+        // `&` 记为上一次执行的命令行，`g&` 不记。
+        if all {
+            self.ex_line(shared, host, "%s//~/&");
+        } else {
+            self.command_line(shared, host, "s");
+        }
     }
 }
 

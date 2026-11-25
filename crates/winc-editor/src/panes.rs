@@ -1,8 +1,6 @@
 //! 编辑区的窗格：按左右或上下拆分、可以嵌套的一棵树，每个窗格有自己的标签。
 
-/// 窗格编号，在同一个 `Editor` 内唯一。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PaneId(pub u32);
+pub use crate::PaneId;
 
 /// 拆分的方向。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

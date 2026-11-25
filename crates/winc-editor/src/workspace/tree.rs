@@ -13,7 +13,7 @@ use std::rc::Rc;
 use ignore::WalkBuilder;
 use winc_i18n::t;
 
-use super::copying::{self, Copying};
+use crate::tools::copying::{self, Copying};
 
 /// 文件树里一项的类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

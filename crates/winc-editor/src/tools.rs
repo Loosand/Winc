@@ -3,6 +3,7 @@
 //! [`shell`] 提供环境与进程运行，[`format`] 在其上实现格式化工具的自动选择、调用与结果应用；
 //! [`host`] 为运行在其他主机上的程序换算路径。
 
+pub(crate) mod copying;
 pub mod format;
 pub mod host;
 pub mod remote_env;

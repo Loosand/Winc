@@ -14,7 +14,7 @@ use winc_syntax::{Language, Markup, TokenKind};
 
 use super::definition::{Finder, is_text, token_kinds};
 use super::symbols::{self, SymbolKind};
-use crate::editing::scopes::FoldRange;
+use crate::scopes::FoldRange;
 
 /// 判断搜索命中是否是某个名字的用法。
 ///

@@ -12,42 +12,58 @@ pub mod background;
 pub mod backup;
 pub mod diff_view;
 mod document;
-mod editing;
 pub mod git;
 pub mod hex;
 mod navigation;
 pub mod panes;
 pub mod proxy;
+pub mod scopes;
 mod tools;
 mod workspace;
 
 #[cfg(test)]
 mod test_util;
 
+/// 文档的标识，在同一个 [`Editor`] 内唯一。
+///
+/// 界面按（文档、版本）缓存绘制结果，因此标识在进程内不会复用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DocumentId(pub u64);
+
+/// 窗格编号，在同一个 [`Editor`] 内唯一。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PaneId(pub u32);
+
+/// 大文件的大小下限（字节，16 MiB）。
+///
+/// 超过该大小的文件按大文件打开：原文留在磁盘上按需读取，内存里只记录改动。下限取自调参：按大文件
+/// 打开后每次滚动都要读磁盘，只有当整个文件读入内存的占用和耗时不可忽略时，这一代价才值得承担。
+pub const LARGE_FILE: u64 = 16 << 20;
+
+pub use document::bookmarks::{self, BookmarkMap, Bookmarks};
 pub use document::content::Content;
 pub use document::disk::{
     DiskRead, DiskSync, DiskTake, DiskTaken, EncodingRead, EncodingReread, HandedSave, Opened,
     Reread, SaveJob, Saved,
 };
+pub use document::editing::command::Command;
+pub use document::editing::cursors::MAX_CURSORS;
+pub use document::editing::folding::{Fold, FoldCommand, Folds, LineWindow, WrapJob, WrapResult};
+pub use document::editing::long_lines::LineSpan;
+pub use document::editing::modal::ModalPattern;
+pub use document::editing::paste;
+pub use document::editing::search::{MAX_MATCHES, Search, TextSearch};
 pub use document::encoding::Encoding;
 pub use document::large::LargeText;
 pub use document::progress::ReadProgress;
 pub use document::{
-    COPY_LIMIT, DiskChange, Document, DocumentId, EDIT_LIMIT, LARGE_FILE, OpenError, PictureState,
-    PreviewKind, PreviewMode, Reading, TableState, TableView, Unsupported, looks_binary, size_text,
+    COPY_LIMIT, DiskChange, Document, EDIT_LIMIT, OpenError, PictureState, PreviewKind,
+    PreviewMode, Reading, TableState, TableView, Unsupported, looks_binary, size_text,
 };
 pub use document::{editorconfig, encoding};
-pub use editing::command::Command;
-pub use editing::cursors::MAX_CURSORS;
-pub use editing::folding::{Fold, FoldCommand, Folds, LineWindow, WrapJob, WrapResult};
-pub use editing::long_lines::LineSpan;
-pub use editing::modal::ModalPattern;
-pub use editing::search::{MAX_MATCHES, Search, TextSearch};
-pub use editing::{paste, scopes};
-pub use navigation::bookmarks::{BookmarkMap, Bookmarks};
-pub use navigation::{bookmarks, definition, keypath, symbols, usages};
+pub use navigation::{definition, keypath, symbols, usages};
+pub use tools::copying::Copying;
 pub use tools::{format, host, remote_env, shell, wsl};
-pub use workspace::copying::Copying;
 pub use workspace::picker::{FileIndex, IndexedFile, MAX_RESULTS as PICKER_MAX_RESULTS};
 pub use workspace::project_search::{
     FileResult, LineMatch, MAX_RESULTS, MAX_THREADS as MAX_SEARCH_THREADS, ProjectSearch, Query,

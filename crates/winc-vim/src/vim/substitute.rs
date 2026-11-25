@@ -7,8 +7,7 @@ use std::time::{Duration, Instant};
 
 use winc_core::{Change, Lines, Selection};
 
-use super::ex::Span;
-use super::{Failed, Shared, Vim};
+use super::{Failed, Shared, Span, Vim};
 use crate::ex;
 use crate::host::{Host, Message, Query};
 use crate::key::{Code, Key, Named};
@@ -469,21 +468,6 @@ impl Vim {
             return self.confirm_end(host);
         }
         self.confirm_show(host);
-    }
-
-    /// `&`、`g&`：重复上一次替换；`all` 为真时作用于全部的行并沿用标志。
-    pub(super) fn repeat_substitute(
-        &mut self,
-        shared: &mut Shared,
-        host: &mut impl Host,
-        all: bool,
-    ) {
-        // `&` 记为上一次执行的命令行，`g&` 不记。
-        if all {
-            self.ex_line(shared, host, "%s//~/&");
-        } else {
-            self.command_line(shared, host, "s");
-        }
     }
 }
 

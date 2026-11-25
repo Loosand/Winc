@@ -73,6 +73,15 @@ pub(super) struct Pending {
     visual: Option<Visual>,
 }
 
+impl Pending {
+    /// 返回本次查找输入对应的提示状态。
+    pub(super) fn prompt(self) -> Prompt {
+        Prompt::Search {
+            forward: self.forward,
+        }
+    }
+}
+
 /// 返回命令 `command` 中需要输入模式的查找动作的方向；没有时返回 `None`。
 fn prompted(command: Command) -> Option<bool> {
     let motion = match command.body {
@@ -285,7 +294,7 @@ impl Shared {
     }
 
     /// 把 `text` 记入命令行的历史；已有相同的一条时移到最后。
-    fn remember_command(&mut self, text: &str) {
+    pub(super) fn remember_command(&mut self, text: &str) {
         if text.trim().is_empty() {
             return;
         }
@@ -325,16 +334,6 @@ impl Shared {
 }
 
 impl Vim {
-    /// 返回状态机正在等待的输入；不在等待时返回 `None`。
-    pub fn prompt(&self) -> Option<Prompt> {
-        if self.cmdline {
-            return Some(Prompt::Command);
-        }
-        self.prompt.map(|pending| Prompt::Search {
-            forward: pending.forward,
-        })
-    }
-
     /// 返回光标处的词，供命令行的输入框插入；光标所在的行上没有词时返回 `None`。
     pub fn word_at_cursor(&self, host: &impl Host) -> Option<String> {
         let text = host.text();
@@ -428,13 +427,8 @@ impl Vim {
         }
     }
 
-    /// 放弃输入：光标回到输入开始时的位置，命令不执行。
-    pub fn prompt_cancel(&mut self, host: &mut impl Host) {
-        if self.prompt.is_some() || self.cmdline {
-            self.record_line(None);
-        }
-        self.cmdline = false;
-        self.line.clear();
+    /// 取消等待中的查找输入并恢复光标位置。
+    pub(super) fn cancel_search(&mut self, host: &mut impl Host) {
         if let Some(pending) = self.prompt.take() {
             self.restore(host, pending);
         }
@@ -447,37 +441,8 @@ impl Vim {
         self.line.clear();
     }
 
-    /// 输入完成：以 `text` 为命令行或查找的模式，执行等待中的命令。
-    ///
-    /// 查找时 `text` 中未转义的 `/`（向前文查找时为 `?`）之后是偏移；模式为空时沿用上一次的
-    /// 模式。
-    pub fn prompt_submit(&mut self, shared: &mut Shared, host: &mut impl Host, text: &str) {
-        self.begin_key(shared);
-        self.record_line(Some(text));
-        self.submit(shared, host, text);
-        self.finish_key(shared, host);
-    }
-
-    /// 执行命令行 `text`，并记为上一次执行的命令行；以 `|` 分隔的命令没有执行到最后一条时
-    /// 不记。
-    pub(super) fn command_line(&mut self, shared: &mut Shared, host: &mut impl Host, text: &str) {
-        self.ex_last = true;
-        self.ex_line(shared, host, text);
-        if !text.trim().is_empty() && self.ex_last {
-            shared.last_command = Some(text.to_owned());
-            shared.registers.set_special(':', text.to_owned());
-        }
-    }
-
-    /// [`Vim::prompt_submit`] 的实现，不记录按键。
-    pub(super) fn submit(&mut self, shared: &mut Shared, host: &mut impl Host, text: &str) {
-        self.line.clear();
-        if std::mem::take(&mut self.cmdline) {
-            shared.remember_command(text);
-            self.command_line(shared, host, text);
-            self.resume_if_done(host);
-            return;
-        }
+    /// 提交查找输入：以 `text` 作为查找模式与偏移执行等待中的命令。
+    pub(super) fn submit_search(&mut self, shared: &mut Shared, host: &mut impl Host, text: &str) {
         let Some(pending) = self.prompt.take() else {
             return;
         };

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::{Shared, Vim};
 use crate::command::Mode;
-use crate::host::{Host, Input, Message};
+use crate::host::{Host, Message};
 use crate::key::{Code, Key, Mods, Named, notation};
 use crate::register::{Content, Kind};
 
@@ -258,123 +258,5 @@ impl Vim {
             return false;
         }
         true
-    }
-
-    /// 处理队列中的按键，直到队列的长度回到 `base`；某个按键失败时丢弃其余属于本次回放的按键。
-    pub(super) fn drain(&mut self, shared: &mut Shared, host: &mut impl Host, base: usize) {
-        while self.typeahead.len() > base {
-            if !self.spend(host) {
-                // 回放中止时结束未完成的插入。
-                if self.mode == Mode::Insert {
-                    self.leave_insert(shared, host);
-                }
-                return;
-            }
-            let Some((key, remap)) = self.typeahead.pop_front() else {
-                return;
-            };
-            self.failed = false;
-            shared.failed = false;
-            self.type_key(shared, host, key, remap);
-            if self.failed || shared.failed {
-                self.failed = true;
-                let extra = self.typeahead.len().saturating_sub(base);
-                self.typeahead.drain(..extra);
-                self.parser.reset();
-                return;
-            }
-        }
-    }
-
-    /// 立即回放 `keys`；`remap` 为真时按键经过用户的映射。
-    pub(super) fn play_now(
-        &mut self,
-        shared: &mut Shared,
-        host: &mut impl Host,
-        keys: &[Key],
-        remap: bool,
-    ) {
-        let base = self.typeahead.len();
-        for key in keys.iter().rev() {
-            self.typeahead.push_front((*key, remap));
-        }
-        self.drain(shared, host, base);
-        // 回放结束时仍在等待后续按键的映射按已有的按键执行。
-        self.map_timeout(shared, host);
-    }
-
-    /// 按键入的方式处理按键 `key`：等待输入时进入行内的输入，插入模式下没有定义的按键作为
-    /// 文字输入。
-    pub(super) fn type_key(
-        &mut self,
-        shared: &mut Shared,
-        host: &mut impl Host,
-        key: Key,
-        remap: bool,
-    ) {
-        if self.prompt().is_some() {
-            self.line_key(shared, host, key);
-            return;
-        }
-        let handled = if remap {
-            self.key_mapped(shared, host, key)
-        } else {
-            self.key_raw(shared, host, key)
-        };
-        if handled || self.mode != Mode::Insert {
-            return;
-        }
-        let input = match key.code() {
-            Code::Char(c) if key.as_char().is_some() => Input::Text(c.to_string()),
-            Code::Named(Named::Enter) => Input::Newline,
-            Code::Named(Named::Tab) => Input::Text("\t".into()),
-            Code::Named(Named::Backspace) => Input::Backspace { word: false },
-            Code::Named(Named::Delete) => Input::Delete { word: false },
-            _ => return,
-        };
-        self.play(host, &input);
-    }
-
-    /// 等待输入期间由状态机自行处理按键：字符加入输入的一行，回车提交，`Esc` 放弃。
-    ///
-    /// 宿主没有输入框时调用；回放按键时状态机也经此处理。
-    pub fn prompt_key(&mut self, shared: &mut Shared, host: &mut impl Host, key: Key) {
-        self.record(key);
-        self.line_key(shared, host, key);
-        self.finish_key(shared, host);
-    }
-
-    /// [`Vim::prompt_key`] 的实现，不记录按键。
-    fn line_key(&mut self, shared: &mut Shared, host: &mut impl Host, key: Key) {
-        // `Ctrl-V` 之后的按键按字面加入。
-        let literal = std::mem::take(&mut self.line_literal);
-        match key.code() {
-            Code::Char(c) if key.as_char().is_some() => self.line.push(c),
-            Code::Named(Named::Tab) if literal => self.line.push('\t'),
-            Code::Named(Named::Enter) if literal => self.line.push('\r'),
-            Code::Named(Named::Enter) => {
-                let line = std::mem::take(&mut self.line);
-                return self.submit(shared, host, &line);
-            }
-            Code::Named(Named::Backspace) | Code::Char('h') => {
-                if self.line.pop().is_none() {
-                    return self.prompt_cancel(host);
-                }
-            }
-            Code::Char('v' | 'q') if key.mods() == Mods::CTRL => {
-                self.line_literal = true;
-                return;
-            }
-            Code::Named(Named::Esc) | Code::Char('c') => {
-                self.line.clear();
-                return self.prompt_cancel(host);
-            }
-            _ => return,
-        }
-        // 回放期间不做即时跳转。
-        if self.typeahead.is_empty() {
-            let line = self.line.clone();
-            self.prompt_preview(shared, host, &line);
-        }
     }
 }

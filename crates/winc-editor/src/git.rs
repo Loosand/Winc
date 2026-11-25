@@ -633,7 +633,7 @@ pub struct Git {
 pub const CREDENTIAL_HELPER_ARG: &str = "git-credential";
 
 /// 传递 [`Askpass::endpoint`] 的环境变量名。
-pub const ASKPASS_ENDPOINT: &str = "WINC_GIT_ASKPASS";
+pub use crate::tools::shell::process::ASKPASS_ENDPOINT;
 
 /// `git`、`ssh` 需要用户输入时运行的 askpass 程序。
 #[derive(Debug, Clone)]

@@ -12,7 +12,6 @@ mod wrapping;
 use wrapping::*;
 
 pub(crate) use wrapping::WindowKey;
-pub(crate) use wrapping::line_breaks;
 pub use wrapping::{LineWindow, WrapJob, WrapKey, WrapResult};
 
 use std::ops::{ControlFlow, Range};
@@ -22,12 +21,12 @@ use winc_core::text::{EditBuffer, MAX_LINE_CHARS};
 use winc_core::wrap::{self, Breaks};
 use winc_core::{Lines, Selection};
 
+use super::Marks;
+use super::long_lines::{Limits, WholeLines};
 use crate::document::Document;
+use crate::document::bookmarks::Bookmarks;
 use crate::document::content::Content;
-use crate::editing::Marks;
-use crate::editing::long_lines::{Limits, WholeLines};
-use crate::editing::scopes::{self, FoldRange};
-use crate::navigation::bookmarks::Bookmarks;
+use crate::scopes::{self, FoldRange};
 
 /// 一个折叠块：`start` 行保持显示，`start + 1..=end` 行不显示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -711,7 +710,7 @@ pub(crate) struct Tracked<'a> {
     /// 需要随修改移动的模态编辑层的标记与修改列表。
     pub marks: &'a mut Marks,
     /// 需要随修改移动的、其他窗格里的视图状态。
-    pub parked: &'a mut crate::document::Parked,
+    pub parked: &'a mut super::Parked,
 }
 
 impl EditBuffer for Tracked<'_> {

@@ -5,10 +5,70 @@
 //! 整个文件（[`fold_ranges`]）。多行字符串、块注释中的行不参与缩进判断：调用方用 `quoted` 说明
 //! 某一行的行首是否位于字符串或注释内。
 
-use ropey::RopeSlice;
+use ropey::{Rope, RopeSlice};
 use winc_core::Lines;
 use winc_core::text;
-use winc_syntax::Language;
+use winc_core::wrap::{self, Breaks};
+use winc_syntax::{Highlighter, Language, LineState};
+
+/// 粘滞滚动每帧最多向后推算的高亮行数（行，4000）。
+///
+/// 与编辑区绘制时的每帧预算取同一个值：推算不完时本次结果不缓存，下一帧重新计算。该值取自调参，
+/// 上限越大，跳到文件靠后位置时粘滞块能更早算出，单帧耗时也随之增长。
+pub(crate) const STICKY_HIGHLIGHT_BUDGET: usize = 4_000;
+
+/// 第 `line` 行（从 0 起）的开头是否处于多行字符串或块注释中（文本为整体载入内存的 `rope`）。
+pub(crate) fn rope_starts_quoted(highlighter: &mut Highlighter, rope: &Rope, line: usize) -> bool {
+    highlighter
+        .state_at(rope, line, 0)
+        .is_some_and(|s| s != LineState::Normal)
+}
+
+/// 返回第 `line` 行按 `width` 个显示列断开的结果。
+///
+/// 只处理开头 `limit` 个字符。
+pub(crate) fn line_breaks(
+    text: &impl Lines,
+    line: usize,
+    width: usize,
+    tab_width: usize,
+    limit: usize,
+) -> Breaks {
+    let content = text.line_content(line);
+    let slice = content.slice();
+    breaks_of(slice.len_chars(), || slice.chars(), width, tab_width, limit)
+}
+
+/// 返回一行文字按 `width` 个显示列断开的结果：`chars` 每次调用都从行首起依次给出该行的字符，
+/// `len` 是字符数的上界。
+///
+/// 只处理开头 `limit` 个字符。
+pub(crate) fn breaks_of<I: Iterator<Item = char>>(
+    len: usize,
+    chars: impl Fn() -> I,
+    width: usize,
+    tab_width: usize,
+    limit: usize,
+) -> Breaks {
+    // 先做粗略估计：每个字符最宽 2 个显示列（Tab 按 Tab 宽度计），按该上界估算仍可容纳的行
+    // 无需逐字符测量。
+    if len.saturating_mul(tab_width.max(2)) <= width {
+        return Breaks::default();
+    }
+    // 该上界偏保守（Tab 宽度越大，越容易判为不可容纳），而多数行实际可以容纳：因此遍历时累计
+    // 宽度，确认不可容纳时才取出字符精确计算，避免为同一行建立两次字符表。
+    let mut cells = 0;
+    let mut behind = text::Behind::default();
+    let fits = chars().take(limit).all(|c| {
+        cells += behind.cells(c, cells, tab_width);
+        cells <= width.max(1)
+    });
+    if fits {
+        return Breaks::default();
+    }
+    let chars: Vec<char> = chars().take(limit).collect();
+    wrap::breaks(&chars, width, tab_width)
+}
 
 /// 查找所在块时向上最多查看的行数（行）。
 ///

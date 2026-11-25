@@ -1,6 +1,7 @@
 //! 折叠的测试：折叠状态随修改移动、显示行换算、按行筛选、自动换行的断行与追加。
 
 use super::*;
+use crate::scopes::line_breaks;
 use crate::{Command, DocumentId};
 
 const PY: &str = "\

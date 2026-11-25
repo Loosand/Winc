@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 use winc_i18n::t;
 
+/// 供 git askpass 辅助进程连接的本地端点环境变量名。
+pub const ASKPASS_ENDPOINT: &str = "WINC_GIT_ASKPASS";
 /// 标准输出、标准错误各自允许收集的最大字节数（64 MiB，经验值）。
 ///
 /// 任一路超过该值即视为失败（[`RunError::TooLarge`]）并终止进程组，防止失控的程序耗尽内存。
@@ -335,7 +337,7 @@ const ASKPASS_VARS: [&str; 4] = [
     "GIT_ASKPASS",
     "SSH_ASKPASS",
     "SSH_ASKPASS_REQUIRE",
-    crate::git::ASKPASS_ENDPOINT,
+    ASKPASS_ENDPOINT,
 ];
 
 /// `command` 上设置的本机 askpass 程序及其端点：远端运行的命令需要用户输入时，由它在本机
@@ -354,7 +356,7 @@ impl Askpass {
         };
         Some(Self {
             program: value("GIT_ASKPASS")?,
-            endpoint: value(crate::git::ASKPASS_ENDPOINT)?,
+            endpoint: value(ASKPASS_ENDPOINT)?,
         })
     }
 
@@ -364,7 +366,7 @@ impl Askpass {
         let mut program = Command::new(&self.program);
         program
             .arg(String::from_utf8_lossy(&ask.prompt).as_ref())
-            .env(crate::git::ASKPASS_ENDPOINT, &self.endpoint)
+            .env(ASKPASS_ENDPOINT, &self.endpoint)
             .stdin(Stdio::null())
             .stderr(Stdio::null());
         // Windows 上图形程序启动命令行工具时默认弹出控制台窗口：`CREATE_NO_WINDOW`

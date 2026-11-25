@@ -261,7 +261,7 @@ impl Git {
                 if let Some(parent) = target.parent() {
                     winc_backend::fs::create_dir_all(parent)?;
                 }
-                crate::editing::paste::copy_entry(&source, &target)
+                crate::tools::copying::copy_entry(&source, &target)
             };
             copy().map_err(|e| failed(relative, e.to_string()))?;
             copied += 1;

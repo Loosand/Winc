@@ -12,7 +12,7 @@ use winc_core::Lines;
 use winc_core::text::{Behind, MAX_LINE_CHARS};
 
 use crate::document::Document;
-use crate::navigation::bookmarks::Bookmarks;
+use crate::document::bookmarks::Bookmarks;
 
 /// 列索引的间隔（字符）。
 ///

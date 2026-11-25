@@ -15,8 +15,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::git::STATUS_TIMEOUT;
 use crate::tools::shell::process;
+
+/// 读取系统代理配置命令的超时时间（30 秒）。
+const PROXY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 是否跟随系统代理，见 [`follow_system_proxy`]。
 static FOLLOW: AtomicBool = AtomicBool::new(true);
@@ -182,7 +184,7 @@ fn system_proxy() -> Option<SystemProxy> {
         return None;
     };
     let cancel = process::Cancel::default();
-    let output = process::run(&mut command, Vec::new(), STATUS_TIMEOUT, &cancel).ok()?;
+    let output = process::run(&mut command, Vec::new(), PROXY_TIMEOUT, &cancel).ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
     Some(if cfg!(windows) {
         parse_registry(&text)

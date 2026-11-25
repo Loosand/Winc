@@ -925,7 +925,7 @@ fn sticky_scroll_never_jumps_while_scrolling() {
     )
     .unwrap();
     std::fs::copy(
-        repo.join("crates/winc-editor/src/editing/scopes/sections.md"),
+        repo.join("crates/winc-editor/src/scopes/sections.md"),
         dir.join("sections.md"),
     )
     .unwrap();

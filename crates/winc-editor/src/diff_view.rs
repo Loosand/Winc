@@ -14,9 +14,9 @@ use winc_core::text::{self, MAX_LINE_CHARS};
 use winc_core::wrap::Breaks;
 use winc_syntax::{Highlighter, Language};
 
-use crate::document::{STICKY_HIGHLIGHT_BUDGET, rope_starts_quoted};
-use crate::editing::folding::line_breaks;
-use crate::editing::scopes::{self, Scope, ScopeMemo};
+use crate::scopes::{
+    self, STICKY_HIGHLIGHT_BUDGET, Scope, ScopeMemo, line_breaks, rope_starts_quoted,
+};
 
 /// 改动前后各自保留的未改动行数（行）。
 ///

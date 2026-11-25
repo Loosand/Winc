@@ -6,7 +6,7 @@
 use super::{Shared, Vim};
 use crate::command::Mode;
 use crate::host::{AppCommand, Host, Input, Message};
-use crate::key::Key;
+use crate::key::{Code, Key, Named};
 
 /// 映射的右侧。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,5 +152,80 @@ impl Vim {
         if !shown {
             self.type_key(shared, host, key, false);
         }
+    }
+
+    /// 处理队列中的按键，直到队列的长度回到 `base`；某个按键失败时丢弃其余属于本次回放的按键。
+    pub(super) fn drain(&mut self, shared: &mut Shared, host: &mut impl Host, base: usize) {
+        while self.typeahead.len() > base {
+            if !self.spend(host) {
+                // 回放中止时结束未完成的插入。
+                if self.mode == Mode::Insert {
+                    self.leave_insert(shared, host);
+                }
+                return;
+            }
+            let Some((key, remap)) = self.typeahead.pop_front() else {
+                return;
+            };
+            self.failed = false;
+            shared.failed = false;
+            self.type_key(shared, host, key, remap);
+            if self.failed || shared.failed {
+                self.failed = true;
+                let extra = self.typeahead.len().saturating_sub(base);
+                self.typeahead.drain(..extra);
+                self.parser.reset();
+                return;
+            }
+        }
+    }
+
+    /// 立即回放 `keys`；`remap` 为真时按键经过用户的映射。
+    pub(super) fn play_now(
+        &mut self,
+        shared: &mut Shared,
+        host: &mut impl Host,
+        keys: &[Key],
+        remap: bool,
+    ) {
+        let base = self.typeahead.len();
+        for key in keys.iter().rev() {
+            self.typeahead.push_front((*key, remap));
+        }
+        self.drain(shared, host, base);
+        // 回放结束时仍在等待后续按键的映射按已有的按键执行。
+        self.map_timeout(shared, host);
+    }
+
+    /// 按键入的方式处理按键 `key`：等待输入时进入行内的输入，插入模式下没有定义的按键作为
+    /// 文字输入。
+    pub(super) fn type_key(
+        &mut self,
+        shared: &mut Shared,
+        host: &mut impl Host,
+        key: Key,
+        remap: bool,
+    ) {
+        if self.prompt().is_some() {
+            self.line_key(shared, host, key);
+            return;
+        }
+        let handled = if remap {
+            self.key_mapped(shared, host, key)
+        } else {
+            self.key_raw(shared, host, key)
+        };
+        if handled || self.mode != Mode::Insert {
+            return;
+        }
+        let input = match key.code() {
+            Code::Char(c) if key.as_char().is_some() => Input::Text(c.to_string()),
+            Code::Named(Named::Enter) => Input::Newline,
+            Code::Named(Named::Tab) => Input::Text("\t".into()),
+            Code::Named(Named::Backspace) => Input::Backspace { word: false },
+            Code::Named(Named::Delete) => Input::Delete { word: false },
+            _ => return,
+        };
+        self.play(host, &input);
     }
 }

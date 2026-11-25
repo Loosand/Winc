@@ -2,7 +2,9 @@
 //! 工具的选择与部分格式化，以及结果作为一次可撤销的修改应用。
 
 use super::*;
+use crate::Document;
 use crate::test_util::scratch;
+use winc_core::Selection;
 
 /// 不测试超时的地方给模拟工具的时间（60 秒）。
 ///

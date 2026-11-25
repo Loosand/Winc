@@ -22,14 +22,13 @@ use std::time::Duration;
 use ropey::Rope;
 use winc_config::Json;
 use winc_core::diff;
-use winc_core::{Change, EditKind, LineEnding, Selection, Transaction, indent};
+use winc_core::{Change, LineEnding};
 use winc_i18n::t;
 use winc_syntax::Language;
 
-use crate::document::content::Content;
+use crate::display_name;
 use crate::tools::shell::process::{self, MAX_OUTPUT, RunError};
 use crate::tools::shell::{Shell, is_executable};
-use crate::{Document, display_name};
 use tools::Detected;
 
 /// 外部工具执行的任务。
@@ -1072,52 +1071,6 @@ fn strip_ansi(line: &str) -> String {
         out.push(c);
     }
     out
-}
-
-impl Document {
-    /// 返回要交给格式化工具的内容。
-    ///
-    /// # Errors
-    ///
-    /// 文档只读（含预览、二进制、无法解码）或属于大文件时返回原因。
-    pub fn format_source(&self) -> Result<Rope, String> {
-        if let Some(reason) = self.readonly_reason() {
-            return Err(reason.to_owned());
-        }
-        match &self.text {
-            Content::Rope(rope) => Ok(rope.clone()),
-            Content::Large(_) => Err(t!("format-file-too-large").to_owned()),
-        }
-    }
-
-    /// 用格式化的结果替换内容：算一次修改，⌘Z 一次还原；选区跟随原来的文字移动，并重新检测缩进。
-    ///
-    /// `top` 是窗口第一行的行首位置（字符偏移），与选区一起换算，返回换算后的位置。
-    ///
-    /// 内容与送去格式化时不一样（期间又被修改，或从磁盘重新加载过）时不做任何改动，返回 `None`。
-    /// 不能用撤销记录的版本号判断：重新加载会清空撤销记录，版本号可能回到原来的值。
-    pub fn apply_formatted(
-        &mut self,
-        sent: &Rope,
-        changes: Vec<Change>,
-        top: usize,
-    ) -> Option<usize> {
-        if self.text.rope() != Some(sent) || self.readonly_reason().is_some() {
-            return None;
-        }
-        if changes.is_empty() {
-            return Some(top);
-        }
-
-        let before = self.selection;
-        // `map_positions` 按输入的数量返回位置，因此这里正好取到三个。
-        let mapped = diff::map_positions(&changes, &[before.anchor, before.head, top]);
-        let after = Selection::new(mapped[0], mapped[1]);
-        self.apply(Transaction::new(changes, before, after, EditKind::Other));
-        self.goal_cell = None;
-        self.detected_indent = indent::detect(&self.text);
-        Some(mapped[2])
-    }
 }
 
 #[cfg(test)]

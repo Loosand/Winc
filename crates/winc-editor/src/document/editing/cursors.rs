@@ -18,11 +18,11 @@ use winc_core::selection::merge;
 use winc_core::{Lines, Restored, Selection, movement};
 use winc_i18n::t;
 
+use super::command::Command;
+use super::folding::Tracked;
+use super::search::MAX_MATCHES;
 use crate::Document;
 use crate::document::content::Content;
-use crate::editing::command::Command;
-use crate::editing::folding::Tracked;
-use crate::editing::search::MAX_MATCHES;
 
 /// 主选区以外的其余选区（多光标）。
 #[derive(Debug, Clone, Default)]

@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 
 use winc_i18n::t;
 
-use crate::workspace::copying::{Copying, copy_item};
+use crate::tools::copying::{Copying, copy_item, copy_symlink};
 
 /// 粘贴到 Markdown 时写成图片（`![…](…)`）的文件扩展名，小写；其他文件写成链接。
 ///
@@ -338,23 +338,6 @@ fn inside(path: &Path, dir: &Path) -> bool {
         (Ok(path), Ok(dir)) => path.starts_with(dir),
         _ => path.starts_with(dir),
     }
-}
-
-/// 把 `from` 复制为 `to`：目录逐项递归复制，符号链接复制链接本身。
-pub(crate) fn copy_entry(from: &Path, to: &Path) -> io::Result<()> {
-    copy_item(from, to, copy_symlink, &Copying::default())
-}
-
-/// 把符号链接 `from` 复制为指向同一目标的符号链接 `to`。
-#[cfg(unix)]
-fn copy_symlink(from: &Path, to: &Path) -> io::Result<()> {
-    winc_backend::fs::copy_symlink(from, to)
-}
-
-/// 其他平台上创建符号链接需要额外权限，复制链接指向的内容。
-#[cfg(not(unix))]
-fn copy_symlink(from: &Path, to: &Path) -> io::Result<()> {
-    winc_backend::fs::copy(from, to).map(drop)
 }
 
 /// 准备粘贴到 Markdown 文档中的文件，返回要写进链接的路径，顺序与 `files` 相同。

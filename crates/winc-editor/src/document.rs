@@ -16,32 +16,35 @@ use ropey::Rope;
 use winc_core::edit::{EditKind, Transaction};
 use winc_core::selection::merge;
 use winc_core::text::{Aligned, CellLayout, ColumnWidths, Columns};
-use winc_core::{History, Indent, LineEnding, Lines, Selection, diff, indent, transform};
+use winc_core::{Change, History, Indent, LineEnding, Lines, Selection, diff, indent, transform};
 use winc_i18n::t;
 use winc_syntax::{Highlighter, LineState};
 
-use crate::Command;
 use crate::diff_view::DiffView;
-use crate::editing::Marks;
-use crate::editing::cursors::others;
-use crate::editing::folding::{Folds, LineWindow, Tracked, WindowKey, WrapKey};
-use crate::editing::long_lines::WholeLines;
-use crate::editing::scopes::{self, FoldRange, Scope, ScopeMemo};
-use crate::navigation::bookmarks::Bookmarks;
+use crate::scopes::{
+    self, FoldRange, STICKY_HIGHLIGHT_BUDGET, Scope, ScopeMemo, rope_starts_quoted,
+};
+use crate::{Command, DocumentId, LARGE_FILE};
+use bookmarks::Bookmarks;
 use content::Content;
+use editing::Marks;
+use editing::Parked;
+use editing::cursors::others;
+use editing::folding::{Folds, LineWindow, Tracked, WindowKey, WrapKey};
+use editing::long_lines::WholeLines;
 use editorconfig::FileConfig;
 use encoding::{self as charset, Encoding, UTF8_BOM, utf16_text, utf16_unmarked};
 use large::LargeText;
 use winc_preview::image::Picture;
 use winc_preview::table::Table;
 
+pub mod bookmarks;
 pub(crate) mod content;
 pub(crate) mod disk;
+pub(crate) mod editing;
 pub mod editorconfig;
 pub mod encoding;
 mod indentation;
-mod parked;
-pub(crate) use parked::Parked;
 pub(crate) mod large;
 mod preview;
 pub(crate) mod progress;
@@ -50,12 +53,6 @@ mod tests;
 
 use disk::load;
 pub(crate) use winc_config::files::sync_dir;
-
-/// 文档的标识，在同一个 [`crate::Editor`] 内唯一。
-///
-/// 界面按（文档、版本）缓存绘制结果，因此标识在进程内不会复用。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DocumentId(pub u64);
 
 /// 打开文件失败的原因。
 #[derive(Debug)]
@@ -399,11 +396,6 @@ const EDIT_LOG: usize = 64;
 /// 随文件大小线性增长，超过该值后占用达到可用内存的量级。该上限同时约束打开文件与全局搜索的扫描，
 /// 按需读取的方式见 [`LARGE_FILE`]。
 pub(crate) const OPEN_LIMIT: u64 = 4 << 30;
-/// 大文件的大小下限（字节，16 MiB）。
-///
-/// 超过该大小的文件按大文件打开：原文留在磁盘上按需读取，内存里只记录改动。下限取自调参：按大文件
-/// 打开后每次滚动都要读磁盘，只有当整个文件读入内存的占用和耗时不可忽略时，这一代价才值得承担。
-pub const LARGE_FILE: u64 = 16 << 20;
 /// 一次复制的最大字节数（字节，64 MiB）。
 ///
 /// 大文件全选后复制会把整个文件读进内存，因此需要限制。
@@ -423,11 +415,6 @@ pub const EDIT_LIMIT: u64 = 16 << 20;
 /// 跨过这一距离，起始位置以上 256 行内没有未闭合的块注释或字符串时结果才与从头推算相同。
 const HIGHLIGHT_LOOKBACK: usize = 256;
 
-/// 粘滞滚动每帧最多向后推算的高亮行数（行，4000）。
-///
-/// 与编辑区绘制时的每帧预算取同一个值：推算不完时本次结果不缓存，下一帧重新计算。该值取自调参，
-/// 上限越大，跳到文件靠后位置时粘滞块能更早算出，单帧耗时也随之增长。
-pub(crate) const STICKY_HIGHLIGHT_BUDGET: usize = 4_000;
 /// 二进制检测读取的文件前缀长度（字节，8 KiB）。
 ///
 /// 这段前缀中出现 NUL 即视为二进制文件；带 UTF-16 BOM 的文件除外。
@@ -522,9 +509,9 @@ pub struct Document {
     /// 横向滚动的偏移（像素）。
     pub scroll_x: f32,
     /// 主选区以外的其余选区（多光标）。
-    pub(crate) extra: crate::editing::cursors::Extra,
+    pub(crate) extra: editing::cursors::Extra,
     /// 撤销多光标操作的历史，以及键盘列选择正在框选的区域。
-    pub(crate) cursor_memory: crate::editing::cursors::CursorMemory,
+    pub(crate) cursor_memory: editing::cursors::CursorMemory,
     /// 扩大选区时逐层记录的（扩大前，扩大后）选区；缩小选区时据此回退。
     pub(crate) grown: Vec<(Selection, Selection)>,
     /// 已折叠的块。
@@ -1288,6 +1275,123 @@ impl Document {
             self.picture = Some(PictureState::Loading);
         }
     }
+    /// 返回文档的显示行数；差异标签是对齐以后的行数，日志标签是提交数。
+    pub fn row_count(&self) -> usize {
+        if let Some(view) = &self.log {
+            return view.row_count();
+        }
+        if let Some(view) = &self.hex {
+            return view.rows();
+        }
+        match &self.diff {
+            // 末尾删掉一大段时左侧比右侧长，滚动范围取较长的一侧（见 `DiffView::scroll_rows`）。
+            Some(view) => view.scroll_rows().max(1),
+            None => self.folds.row_count(self.text.line_count()),
+        }
+    }
+
+    /// 返回要交给格式化工具的内容。
+    ///
+    /// # Errors
+    ///
+    /// 文档只读（含预览、二进制、无法解码）或属于大文件时返回原因。
+    pub fn format_source(&self) -> Result<Rope, String> {
+        if let Some(reason) = self.readonly_reason() {
+            return Err(reason.to_owned());
+        }
+        match &self.text {
+            Content::Rope(rope) => Ok(rope.clone()),
+            Content::Large(_) => Err(t!("format-file-too-large").to_owned()),
+        }
+    }
+
+    /// 用格式化的结果替换内容：算一次修改，⌘Z 一次还原；选区跟随原来的文字移动，并重新检测缩进。
+    ///
+    /// `top` 是窗口第一行的行首位置（字符偏移），与选区一起换算，返回换算后的位置。
+    ///
+    /// 内容与送去格式化时不一样（期间又被修改，或从磁盘重新加载过）时不做任何改动，返回 `None`。
+    /// 不能用撤销记录的版本号判断：重新加载会清空撤销记录，版本号可能回到原来的值。
+    pub fn apply_formatted(
+        &mut self,
+        sent: &Rope,
+        changes: Vec<Change>,
+        top: usize,
+    ) -> Option<usize> {
+        if self.text.rope() != Some(sent) || self.readonly_reason().is_some() {
+            return None;
+        }
+        if changes.is_empty() {
+            return Some(top);
+        }
+
+        let before = self.selection;
+        // `map_positions` 按输入的数量返回位置，因此这里正好取到三个。
+        let mapped = diff::map_positions(&changes, &[before.anchor, before.head, top]);
+        let after = Selection::new(mapped[0], mapped[1]);
+        self.apply(Transaction::new(changes, before, after, EditKind::Other));
+        self.goal_cell = None;
+        self.detected_indent = indent::detect(&self.text);
+        Some(mapped[2])
+    }
+
+    /// 保存前按 `.editorconfig` 清理文本，返回是否有改动。
+    ///
+    /// 清理包括删除行尾空白、统一换行符、末尾补换行，算一次修改，⌘Z 可以还原。`to` 是另存为
+    /// 的新路径；`keep_caret` 为 `true` 时每个光标（选区）所在的行都不删除行尾空白，以免
+    /// 自动保存时删掉用户正在输入的空格。多光标在清理后保留，撤销时也一并还原。
+    pub fn tidy_for_save(&mut self, to: Option<&Path>, keep_caret: bool) -> bool {
+        let Some(path) = to.or(self.path.as_deref()) else {
+            return false;
+        };
+        let config = editorconfig::lookup(path);
+        if to.is_none() {
+            self.editorconfig = config.clone();
+        }
+        if !config.tidies() || self.readonly_reason().is_some() {
+            return false;
+        }
+        let Content::Rope(rope) = &self.text else {
+            return false;
+        };
+
+        // 每个光标（选区）所在的行都不删行尾空白；行范围合并成按顺序排列、互不重叠的几段。
+        let (all, primary) = self.selections();
+        let mut keep: Vec<Range<usize>> = Vec::new();
+        if keep_caret {
+            for selection in &all {
+                let (first, last) = (rope.line_of(selection.from()), rope.line_of(selection.to()));
+                match keep.last_mut() {
+                    Some(lines) if first <= lines.end => lines.end = lines.end.max(last + 1),
+                    _ => keep.push(first..last + 1),
+                }
+            }
+        }
+        let old = rope.to_string();
+        let new = editorconfig::tidy(&old, &config, self.line_ending, &keep);
+        if let Some(eol) = config.end_of_line {
+            self.line_ending = eol;
+        }
+        if new == old {
+            return false;
+        }
+
+        // 每个选区都按修改映射过去，撤销时也回到原来的各个选区，多光标不会因保存而丢失。
+        let changes = diff::line_changes(&old, &new);
+        let ends: Vec<usize> = all.iter().flat_map(|s| [s.anchor, s.head]).collect();
+        let mapped = diff::map_positions(&changes, &ends)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|ends| Selection::new(ends[0], ends[1]))
+            .collect();
+        let (mapped, after) = merge(mapped, primary);
+        let mut transaction =
+            Transaction::new(changes, all[primary], mapped[after], EditKind::Other);
+        transaction.extra_before = others(&all, primary);
+        transaction.extra_after = others(&mapped, after);
+        self.apply(transaction);
+        true
+    }
 }
 
 /// 是否第 `line` 行（从 0 起）的开头处于多行字符串或块注释中。
@@ -1301,11 +1405,4 @@ pub(crate) fn starts_quoted(highlighter: &mut Highlighter, text: &Content, line:
             highlighter.state_near(&**large, line, HIGHLIGHT_LOOKBACK) != LineState::Normal
         }
     }
-}
-
-/// 同 [`starts_quoted`]，文本为整体载入内存的 `rope`。
-pub(crate) fn rope_starts_quoted(highlighter: &mut Highlighter, rope: &Rope, line: usize) -> bool {
-    highlighter
-        .state_at(rope, line, 0)
-        .is_some_and(|s| s != LineState::Normal)
 }
