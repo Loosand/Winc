@@ -843,7 +843,7 @@ impl App {
             Next::Find(query) => {
                 self.open_search(false);
                 self.bars.find.input.set_text(&query);
-                self.bars.search.query = query;
+                self.bars.search.set_query(query);
                 self.search_changed();
             }
             Next::Highlight => {

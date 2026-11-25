@@ -472,7 +472,7 @@ impl App {
             self.forget_git_document(doc.id, doc.path.as_deref());
             self.preview.markdown.forget(doc.id);
         }
-        self.bars.search.current = None;
+        self.bars.search.reset_position();
         self.check_waiting();
     }
 
@@ -496,7 +496,7 @@ impl App {
             self.forget_git_document(doc.id, doc.path.as_deref());
             self.preview.markdown.forget(doc.id);
         }
-        self.bars.search.current = None;
+        self.bars.search.reset_position();
         self.check_waiting();
 
         if self.editor.documents.is_empty() {

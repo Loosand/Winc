@@ -85,7 +85,7 @@ impl App {
     ///
     /// 查找条未打开或查找内容为空时返回 `false`，按键交给编辑区。
     pub(in crate::app) fn select_all_matches(&mut self) -> bool {
-        if !self.bars.find.open || self.bars.search.query.is_empty() || self.diff_active() {
+        if !self.bars.find.open || !self.bars.search.has_query() || self.diff_active() {
             return false;
         }
         let Some(doc) = self

@@ -410,7 +410,7 @@ fn snapshot_global_search() {
         // 文件内查找条展开替换：「替换」「全部替换」是图标按钮，鼠标停在「替换」上。
         app.open_path(&dir.join("src/config.rs"));
         app.open_search(true);
-        app.bars.search.query = "Config".into();
+        app.bars.search.set_query("Config");
         app.bars.find.input.set_text("Config");
         app.bars.find.replace_input.set_text("Settings");
         paint(&mut app);

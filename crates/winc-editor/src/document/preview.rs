@@ -3,7 +3,96 @@
 
 use super::*;
 
+/// 文档标签页在编辑区主区域呈现的视图形态（按唯一权威优先级判定）。
+#[derive(Debug)]
+pub enum TabSurface<'a> {
+    /// 图像文件或切换到预览的 SVG。
+    Picture(&'a PictureState),
+    /// docx / EPUB 等转为 Markdown 排版显示的阅读文档。
+    ConvertedMarkdown,
+    /// 阅读标签页（笔记库主页或后台取回的 Markdown）。
+    Reading(&'a Reading),
+    /// PDF 逐页预览。
+    Pdf,
+    /// 只读表格视图（xlsx 工作簿，或仅预览的 csv / tsv）。
+    Table {
+        /// 表格视图状态。
+        view: &'a TableView,
+        /// 是否为无源码工作簿（xlsx）。
+        workbook: bool,
+    },
+    /// 可直接编辑的 Markdown 排版预览。
+    MarkdownPreview,
+    /// JSON 结构图只读预览。
+    JsonPreview,
+    /// 并排或单栏差异视图。
+    Diff,
+    /// Git 日志视图。
+    Log,
+    /// 十六进制字节视图。
+    Hex,
+    /// 正在后台读取中的占位标签。
+    Loading,
+    /// 无法作为文本打开的文件说明页。
+    Unsupported(&'a Unsupported),
+    /// 普通源代码 / 文本编辑视图（含分栏预览的左侧编辑区）。
+    Text,
+}
+
 impl Document {
+    /// 按唯一权威优先级返回该文档在编辑区主区域应呈现的视图形态。
+    pub fn tab_surface(&self) -> TabSurface<'_> {
+        if let Some(picture) = self.picture.as_ref() {
+            return TabSurface::Picture(picture);
+        }
+        if self
+            .unsupported
+            .as_ref()
+            .is_some_and(Unsupported::reads_as_markdown)
+        {
+            return TabSurface::ConvertedMarkdown;
+        }
+        if let Some(reading) = self.reading.as_ref() {
+            return TabSurface::Reading(reading);
+        }
+        if self.unsupported == Some(Unsupported::Pdf) {
+            return TabSurface::Pdf;
+        }
+        if let Some(view) = self.table.as_deref().filter(|_| !self.shows_text()) {
+            return TabSurface::Table {
+                view,
+                workbook: self.unsupported.is_some(),
+            };
+        }
+        if self.preview_kind() == Some(PreviewKind::Markdown)
+            && self.preview_mode() == PreviewMode::Preview
+        {
+            return TabSurface::MarkdownPreview;
+        }
+        if self.preview_kind() == Some(PreviewKind::Json)
+            && self.preview_mode() == PreviewMode::Preview
+            && !self.pending
+        {
+            return TabSurface::JsonPreview;
+        }
+        if self.diff.is_some() {
+            return TabSurface::Diff;
+        }
+        if self.log.is_some() {
+            return TabSurface::Log;
+        }
+        if self.hex.is_some() {
+            return TabSurface::Hex;
+        }
+        if self.pending {
+            return TabSurface::Loading;
+        }
+        if let Some(reason) = self.unsupported.as_ref() {
+            return TabSurface::Unsupported(reason);
+        }
+        TabSurface::Text
+    }
+
     /// 返回编辑区显示的图；尚未解码完成或没有图时返回 `None`。
     pub fn picture(&self) -> Option<&Arc<Picture>> {
         match &self.picture {
@@ -207,5 +296,64 @@ impl Document {
             Err(reason) => TableState::Failed(reason),
         };
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_surface_dispatches_preview_and_special_tab_precedence() {
+        let mut doc = Document::from_text(DocumentId(1), "# 标题\n");
+        assert!(matches!(doc.tab_surface(), TabSurface::Text));
+
+        doc.set_language("a.md");
+        assert!(doc.set_preview_mode(PreviewMode::Preview));
+        assert!(matches!(doc.tab_surface(), TabSurface::MarkdownPreview));
+        assert!(doc.set_preview_mode(PreviewMode::Split));
+        assert!(matches!(doc.tab_surface(), TabSurface::Text));
+
+        let mut csv = Document::from_text(DocumentId(2), "a,b\n1,2\n");
+        csv.set_language("a.csv");
+        assert!(csv.set_preview_mode(PreviewMode::Split));
+        assert!(matches!(csv.tab_surface(), TabSurface::Text));
+        assert!(csv.set_preview_mode(PreviewMode::Preview));
+        assert!(matches!(
+            csv.tab_surface(),
+            TabSurface::Table {
+                workbook: false,
+                ..
+            }
+        ));
+
+        let mut json = Document::from_text(DocumentId(3), "{\"a\":1}");
+        json.set_language("a.json");
+        assert!(json.set_preview_mode(PreviewMode::Preview));
+        assert!(matches!(json.tab_surface(), TabSurface::JsonPreview));
+
+        let pending = Document::pending(DocumentId(4), PathBuf::from("a.rs"));
+        assert!(matches!(pending.tab_surface(), TabSurface::Loading));
+
+        let reading = Document::reading(DocumentId(5), "页", Reading::Loading);
+        assert!(matches!(
+            reading.tab_surface(),
+            TabSurface::Reading(Reading::Loading)
+        ));
+
+        let mut docx = Document::from_text(DocumentId(6), "");
+        docx.unsupported = Some(Unsupported::Docx);
+        assert!(matches!(docx.tab_surface(), TabSurface::ConvertedMarkdown));
+
+        let mut pdf = Document::from_text(DocumentId(7), "");
+        pdf.unsupported = Some(Unsupported::Pdf);
+        assert!(matches!(pdf.tab_surface(), TabSurface::Pdf));
+
+        let mut binary = Document::from_text(DocumentId(8), "");
+        binary.unsupported = Some(Unsupported::Binary(128));
+        assert!(matches!(
+            binary.tab_surface(),
+            TabSurface::Unsupported(Unsupported::Binary(128))
+        ));
     }
 }

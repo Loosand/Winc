@@ -265,9 +265,8 @@ impl App {
         state.highlight
             && shared().options.hlsearch
             && !self.bars.find.open
-            && self.bars.search.regex
             && (state.pattern.as_ref())
-                .is_some_and(|(query, _)| query.regex == self.bars.search.query)
+                .is_some_and(|(query, _)| self.bars.search.matches_regex_query(&query.regex))
     }
 
     /// 返回输入条的位置：Vim 模式的命令行与查找占状态栏所在的一行，其余位于右上角浮层所在区域
@@ -913,10 +912,9 @@ impl App {
 
     /// 把 `query` 设为查找条的查找内容：查找条与 Vim 层的查找是同一份查找状态。
     fn vim_set_highlight(&mut self, query: &Query) {
-        self.bars.search.query.clone_from(&query.regex);
-        self.bars.search.regex = true;
-        self.bars.search.case_sensitive = !query.ignore_case;
-        self.bars.search.whole_word = false;
+        self.bars
+            .search
+            .configure_regex(query.regex.clone(), !query.ignore_case);
         self.bars.find.input.set_text(&query.regex);
     }
 

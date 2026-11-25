@@ -5,10 +5,7 @@ use super::*;
 use crate::Command;
 
 fn query(text: &str) -> Search {
-    Search {
-        query: text.into(),
-        ..Default::default()
-    }
+    Search::with_query(text)
 }
 
 #[test]
@@ -24,7 +21,7 @@ fn case_insensitive_and_wraps() {
     assert_eq!(search.next_from(4, true), Some((0, 3)));
     assert_eq!(search.next_from(0, true), Some((8, 11)));
 
-    search.case_sensitive = true;
+    search.toggle_case_sensitive();
     search.update(&doc);
     assert_eq!(search.matches(), &[(4, 7)]);
 }
@@ -72,7 +69,7 @@ fn plain_text_folds_case_like_regex() {
         let mut plain = query(q);
         plain.update(&doc);
         let mut regex = query(&regex::escape(q));
-        regex.regex = true;
+        regex.toggle_regex();
         regex.update(&doc);
         assert_eq!(plain.matches(), regex.matches(), "{q}");
     }
@@ -89,7 +86,7 @@ fn plain_text_folds_case_like_regex() {
     assert_eq!(count("中文 foo"), 1);
     // 区分大小写的纯文本按字节直接查找，`FOO` 只与原文的大写形式匹配。
     let mut exact = query("FOO");
-    exact.case_sensitive = true;
+    exact.toggle_case_sensitive();
     exact.update(&doc);
     assert_eq!(exact.matches().len(), 1);
 }
@@ -102,7 +99,7 @@ fn newlines_in_a_regex_match_across_lines() {
 
     let doc = Document::from_text(DocumentId(1), "a\r\nb\nc\rd\nx");
     let mut search = query("a\\nb|b\\nc|c\\nd");
-    search.regex = true;
+    search.toggle_regex();
     search.update(&doc);
     assert!(search.is_complete());
     assert_eq!(search.matches(), &[(0, 4), (5, 8)]);
@@ -110,11 +107,11 @@ fn newlines_in_a_regex_match_across_lines() {
 
     // `^`、`$` 仍按行首、行尾匹配；`\W` 也能跨过换行；终点落在换行之后的匹配不计入下一行。
     let mut search = query("^d$|c\\Wd|x\\n?");
-    search.regex = true;
+    search.toggle_regex();
     search.update(&doc);
     assert_eq!(search.matches(), &[(5, 8), (9, 10)]);
     let mut search = query("b\\n");
-    search.regex = true;
+    search.toggle_regex();
     search.update(&doc);
     assert_eq!(search.matches(), &[(3, 5)]);
     assert_eq!(search.lines(), &[1]);
@@ -123,8 +120,8 @@ fn newlines_in_a_regex_match_across_lines() {
     let mut doc = Document::from_text(DocumentId(1), "key\r\nvalue\r\nkey\r\nother");
     doc.line_ending = winc_core::LineEnding::CrLf;
     let mut search = query("(key)\\n(value)");
-    search.regex = true;
-    search.replacement = "$2\\n$1".into();
+    search.toggle_regex();
+    search.set_replacement("$2\\n$1");
     assert_eq!(search.replace_all(&mut doc), Ok(1));
     assert_eq!(
         doc.text().rope().unwrap().to_string(),
@@ -136,18 +133,18 @@ fn newlines_in_a_regex_match_across_lines() {
 fn whole_word() {
     let doc = Document::from_text(DocumentId(1), "foofoo foo foo_bar 中foo a->b");
     let mut search = query("foo");
-    search.whole_word = true;
+    search.toggle_whole_word();
     search.update(&doc);
     // 「foofoo」中第二个 foo 的前一个字符是 o，不满足全字匹配的条件。
     assert_eq!(search.matches(), &[(7, 10)]);
 
     // 查询文字的两端不是单词字符时，该端不检查。
-    search.query = "->".into();
+    search.set_query("->");
     search.update(&doc);
     assert_eq!(search.matches(), &[(25, 27)]);
 
-    search.query = "FOO".into();
-    search.regex = true;
+    search.set_query("FOO");
+    search.toggle_regex();
     search.update(&doc);
     assert_eq!(search.matches(), &[(7, 10)]);
 }
@@ -160,7 +157,7 @@ fn lookaround_and_backreferences_fall_back_to_fancy_regex() {
     );
     let found = |q: &str| {
         let mut search = query(q);
-        search.regex = true;
+        search.toggle_regex();
         search.update(&doc);
         assert!(search.error().is_none(), "{q}: {:?}", search.error());
         search.matches().to_vec()
@@ -192,15 +189,15 @@ fn lookaround_and_backreferences_fall_back_to_fancy_regex() {
 
     // 语法有误时，错误不能只是 `regex` 给出的「not supported」，应当带上 `fancy-regex` 的具体原因。
     let mut search = query(r"(?<=a");
-    search.regex = true;
+    search.toggle_regex();
     search.update(&doc);
     assert!(search.error().is_some_and(|e| !e.contains("not supported")));
 
     // 含反向引用的查询在替换时同样展开分组引用，两个重复的词都换成第一个分组。
     let mut doc = Document::from_text(DocumentId(1), "foo foo bar baz baz");
     let mut search = query(r"(\w+) \1");
-    search.regex = true;
-    search.replacement = "$1".into();
+    search.toggle_regex();
+    search.set_replacement("$1");
     assert_eq!(search.replace_all(&mut doc), Ok(2));
     assert_eq!(doc.text().rope().unwrap().to_string(), "foo bar baz");
 }
@@ -237,31 +234,31 @@ fn relaxed_patterns_compile_and_never_panic() {
 fn regex_search() {
     let doc = Document::from_text(DocumentId(1), "fn main() {}\nFN Helper()\nlet x = 中文12;");
     let mut search = query(r"fn (\w+)\(");
-    search.regex = true;
+    search.toggle_regex();
     search.update(&doc);
     assert_eq!(search.matches(), &[(0, 8), (13, 23)]);
 
-    search.case_sensitive = true;
+    search.toggle_case_sensitive();
     search.update(&doc);
     assert_eq!(search.matches(), &[(0, 8)]);
 
     // 位置按字符偏移计，不按字节。
-    search.query = r"\d+".into();
+    search.set_query(r"\d+");
     search.update(&doc);
     assert_eq!(search.matches(), &[(35, 37)]);
 
     // 空匹配不计入结果，搜索也能正常结束。
-    search.query = "z*".into();
+    search.set_query("z*");
     search.update(&doc);
     assert!(search.matches().is_empty());
     assert!(search.is_complete());
 
-    search.query = "(".into();
+    search.set_query("(");
     search.update(&doc);
     assert!(search.error().is_some());
     assert!(search.matches().is_empty() && search.is_complete());
 
-    search.query = "^let".into();
+    search.set_query("^let");
     search.update(&doc);
     assert!(search.error().is_none());
     assert_eq!(search.matches(), &[(25, 28)]);
@@ -271,7 +268,7 @@ fn regex_search() {
 fn replace_current_then_all() {
     let mut doc = Document::from_text(DocumentId(1), "a = 1\nb = 2\nc = 3");
     let mut search = query("=");
-    search.replacement = ":".into();
+    search.set_replacement(":");
 
     // 选区不是匹配时不替换。
     assert_eq!(search.replace_current(&mut doc), Ok(false));
@@ -293,17 +290,17 @@ fn replace_current_then_all() {
 fn regex_replace_expands_groups_and_escapes() {
     let mut doc = Document::from_text(DocumentId(1), "key=value\nname=中文");
     let mut search = query(r"(\w+)=(\w+)");
-    search.regex = true;
-    search.replacement = r"$2 <- $1\t\\".into();
+    search.toggle_regex();
+    search.set_replacement(r"$2 <- $1\t\\");
     assert_eq!(search.replace_all(&mut doc), Ok(2));
     assert_eq!(
         doc.text().substring(0, 100),
         "value <- key\t\\\n中文 <- name\t\\"
     );
 
-    search.query = " <- ".into();
-    search.regex = false;
-    search.replacement = r"\n$1".into();
+    search.set_query(" <- ");
+    search.toggle_regex();
+    search.set_replacement(r"\n$1");
     assert_eq!(search.replace_all(&mut doc), Ok(2));
     // 纯文本模式不解析转义，替换文字原样插入。
     assert_eq!(
@@ -311,9 +308,9 @@ fn regex_replace_expands_groups_and_escapes() {
         "value\\n$1key\t\\\n中文\\n$1name\t\\"
     );
 
-    search.query = "key".into();
-    search.regex = true;
-    search.replacement = r"a\nb".into();
+    search.set_query("key");
+    search.toggle_regex();
+    search.set_replacement(r"a\nb");
     assert_eq!(search.replace_all(&mut doc), Ok(1));
     assert!(doc.text().substring(0, 100).contains("$1a\nb\t"));
 }
@@ -325,7 +322,7 @@ fn replacing_after_a_query_change_restarts_the_search() {
     search.update(&doc);
     assert_eq!(search.matches(), &[(0, 3)]);
     // 更换查询后直接替换（选区不是匹配，因此不替换）：下次更新按新查询从头搜索。
-    search.query = "bar".into();
+    search.set_query("bar");
     assert_eq!(search.replace_current(&mut doc), Ok(false));
     search.update(&doc);
     assert_eq!(search.matches(), &[(4, 7)]);
@@ -389,19 +386,19 @@ fn regex_backtracking_limits_are_reported() {
     // 反向引用把它交给 `fancy-regex`；第一行有 `c`，整块预查放行，`(a|aa)+` 在那一行上的
     // 回溯次数随长度指数增长。
     let mut search = query(r"(a|aa)+\1c");
-    search.regex = true;
+    search.toggle_regex();
     search.update(&doc);
     assert!(search.is_complete());
     assert_eq!(search.matches(), &[(43, 46)]);
     assert!(search.gave_up() && !search.is_truncated());
-    search.replacement = "x".into();
+    search.set_replacement("x");
     assert_eq!(
         search.replace_all(&mut doc),
         Err(t!("editor-replace-all-gave-up"))
     );
     // 查询变了，从头查找，标记随之清除。
-    search.query = "aac".into();
-    search.regex = false;
+    search.set_query("aac");
+    search.toggle_regex();
     search.update(&doc);
     assert!(!search.gave_up());
     assert_eq!(search.matches(), &[(43, 46)]);

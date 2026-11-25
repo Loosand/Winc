@@ -701,8 +701,7 @@ fn large_files_edit_save_and_undo() {
     assert_eq!(doc.text().line_content(1).slice(), line.trim_end());
     assert_eq!(doc.text().line_count(), count + 1);
 
-    let mut search = crate::Search::default();
-    search.query = "STATUS".into();
+    let mut search = crate::Search::with_query("STATUS");
     // 查找按 8 ms 的时间片分段进行，机器繁忙（例如并行运行测试）时一次调用可能无法完成搜索；
     // 反复调用直到搜索完成或结果达到上限，使断言不依赖机器当时的负载。
     search.update(&doc);

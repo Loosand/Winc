@@ -1068,10 +1068,10 @@ fn each_kind_of_file_keeps_its_own_preview_mode() {
     assert_eq!(mode(&app), PreviewMode::Preview);
 
     // 新窗口按状态恢复各类的方式。
-    app.editor.preview_defaults.fill(PreviewMode::Source);
+    app.editor.reset_preview_defaults();
     App::apply_preview_state(&mut app.editor, &app.state);
     assert_eq!(
-        app.editor.preview_defaults,
+        winc_editor::PreviewKind::ALL.map(|kind| app.editor.preview_default(kind)),
         [
             PreviewMode::Source,
             PreviewMode::Preview,

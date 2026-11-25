@@ -419,7 +419,7 @@ fn showing_only_matching_lines_hides_the_rest_until_turned_off() {
     // ⌘F 搜索 `ERROR` 并开启「只显示匹配的行」：只剩四行。
     app.run_action(Action::Find);
     app.bars.find.input.set_text("ERROR");
-    app.bars.search.query = "ERROR".into();
+    app.bars.search.set_query("ERROR");
     app.search_changed();
     app.run_action(Action::FilterLines);
     app.advance_search();
@@ -431,19 +431,19 @@ fn showing_only_matching_lines_hides_the_rest_until_turned_off() {
     assert_eq!(shown, [7, 57, 107, 157]);
 
     // 修改查询：显示的行随之变化；清空查询：显示全部行（200 行加末尾的空行，共 201 行）。
-    app.bars.search.query = "157".into();
+    app.bars.search.set_query("157");
     app.search_changed();
     app.advance_search();
     paint(&mut app);
     assert_eq!(rows(&app), 1);
-    app.bars.search.query.clear();
+    app.bars.search.clear_query();
     app.search_changed();
     app.advance_search();
     paint(&mut app);
     assert_eq!(rows(&app), 201);
 
     // 筛选状态下修改文本：等重新搜索完成后再筛选，被修改的行仍有匹配时保持显示。
-    app.bars.search.query = "ERROR".into();
+    app.bars.search.set_query("ERROR");
     app.search_changed();
     app.advance_search();
     paint(&mut app);
@@ -478,7 +478,7 @@ fn a_filter_that_hides_nothing_leaves_the_scroll_alone() {
 
     app.run_action(Action::Find);
     app.bars.find.input.set_text("x");
-    app.bars.search.query = "x".into();
+    app.bars.search.set_query("x");
     app.search_changed();
     app.run_action(Action::FilterLines);
     app.advance_search();

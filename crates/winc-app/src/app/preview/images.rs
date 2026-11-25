@@ -420,7 +420,7 @@ impl App {
         let Some(kind) = doc.preview_kind() else {
             return;
         };
-        self.editor.preview_defaults[kind as usize] = mode;
+        self.editor.set_preview_default(kind, mode);
         let saved = match mode {
             PreviewMode::Source => None,
             PreviewMode::Split => Some("split"),
@@ -435,14 +435,14 @@ impl App {
 
     /// 打开 Markdown 始终进入可编辑的排版视图；其他类型沿用上次的选择。
     pub(crate) fn apply_preview_state(editor: &mut Editor, state: &State) {
-        for kind in PreviewKind::ALL {
+        editor.apply_preview_defaults(|kind| {
             let saved = state.preview_modes.get(preview_key(kind));
-            editor.preview_defaults[kind as usize] = match (kind, saved.map(String::as_str)) {
+            match (kind, saved.map(String::as_str)) {
                 (PreviewKind::Markdown, _) | (_, Some("preview")) => PreviewMode::Preview,
                 (_, Some("split")) => PreviewMode::Split,
                 _ => PreviewMode::Source,
-            };
-        }
+            }
+        });
     }
 }
 

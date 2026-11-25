@@ -74,19 +74,20 @@ fn draw_search_bar(
         bar,
     );
 
-    let query = &search.query;
-    let matches = search.matches().len();
+    let status = search.status();
+    let query = status.query;
+    let matches = status.matches;
     // 截断了，或有行因正则回溯过多而放弃查找：计数是下限。
-    let incomplete = search.is_truncated() || search.gave_up();
+    let incomplete = status.incomplete;
     let total = if incomplete {
         format!("{matches}+")
     } else {
         matches.to_string()
     };
-    let searching = !search.is_complete();
-    let count = match (matches, search.current) {
+    let searching = status.searching;
+    let count = match (matches, status.current) {
         (0, _) if query.is_empty() => String::new(),
-        _ if search.error().is_some() => t!("workspace-find-regex-invalid").to_owned(),
+        _ if status.error.is_some() => t!("workspace-find-regex-invalid").to_owned(),
         (0, _) if searching => t!("workspace-find-searching").to_owned(),
         (0, _) => t!("workspace-find-no-results").to_owned(),
         (_, Some(i)) => format!("{}/{total}{}", i + 1, if searching { "…" } else { "" }),
@@ -96,7 +97,7 @@ fn draw_search_bar(
             format!("{count}{}", if searching { "…" } else { "" })
         }
     };
-    let failed = search.error().is_some() || (!query.is_empty() && matches == 0 && !searching);
+    let failed = status.error.is_some() || (!query.is_empty() && matches == 0 && !searching);
     let count_color = if failed { p.error } else { p.text_dim };
 
     // 匹配计数靠查找区域右端，查找输入框使用剩余的宽度。
@@ -123,17 +124,17 @@ fn draw_search_bar(
     let toggles = [
         (
             parts.case_toggle,
-            search.case_sensitive,
+            status.options.case_sensitive,
             hovered(SearchButton::Case),
         ),
         (
             parts.word_toggle,
-            search.whole_word,
+            status.options.whole_word,
             hovered(SearchButton::Word),
         ),
         (
             parts.regex_toggle,
-            search.regex,
+            status.options.regex,
             hovered(SearchButton::Regex),
         ),
     ];

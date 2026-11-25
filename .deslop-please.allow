@@ -313,7 +313,6 @@ field-leak winc_editor::Editor::diff_unified
 field-leak winc_editor::Editor::documents
 field-leak winc_editor::Editor::folds
 field-leak winc_editor::Editor::panes
-field-leak winc_editor::Editor::preview_defaults
 field-leak winc_editor::Editor::tab_width
 field-leak winc_editor::Editor::workspace
 field-leak winc_editor::diff_view::DiffView::editing
@@ -356,13 +355,7 @@ field-leak winc_editor::document::Document::text
 field-leak winc_editor::document::Document::title
 field-leak winc_editor::document::Document::unsupported
 field-leak winc_editor::document::editing::folding::Folds::wrap
-field-leak winc_editor::document::editing::search::Search::case_sensitive
-field-leak winc_editor::document::editing::search::Search::current
-field-leak winc_editor::document::editing::search::Search::query
-field-leak winc_editor::document::editing::search::Search::regex
-field-leak winc_editor::document::editing::search::Search::replacement
-field-leak winc_editor::document::editing::search::Search::whole_word
-field-leak winc_editor::document::editing::search::matcher::Matcher::gave_up
+field-leak winc_editor::document::editing::search::Matcher::gave_up
 field-leak winc_editor::git::log::LogView::commits
 field-leak winc_editor::git::log::LogView::compare
 field-leak winc_editor::git::log::LogView::compare_request
@@ -426,7 +419,6 @@ shallow-module winc_core::text
 shallow-module winc_editor::document::disk
 shallow-module winc_editor::document::editing
 shallow-module winc_editor::document::editing::folding
-shallow-module winc_editor::document::editing::search
 shallow-module winc_editor::git
 shallow-module winc_editor::workspace::tree
 shallow-module winc_emoji

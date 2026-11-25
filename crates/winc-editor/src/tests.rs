@@ -35,7 +35,10 @@ fn bookmarks_survive_a_placeholder_tab_until_the_file_opens() {
 
     // 文件暂时不在（例如切到了没有它的分支）：占位标签不移走书签，保存会话时也不丢。
     let mut editor = Editor::default();
-    editor.bookmarks.insert(path.clone(), marks.clone());
+    editor.restore_marks(
+        [(path.clone(), marks.clone())].into_iter().collect(),
+        FoldMap::new(),
+    );
     let index = editor.open(&path);
     assert!(editor.documents[index].unsupported.is_some());
     assert_eq!(editor.all_bookmarks().get(&path), Some(&marks));
@@ -44,7 +47,7 @@ fn bookmarks_survive_a_placeholder_tab_until_the_file_opens() {
     std::fs::write(&path, "a\nb\nc\n").unwrap();
     assert!(editor.reopen(index, false) && editor.load(index));
     assert_eq!(editor.documents[index].bookmarks(), &marks);
-    assert!(editor.bookmarks.is_empty());
+    assert_eq!(editor.unopened_mark_counts().0, 0);
     assert_eq!(editor.all_bookmarks().get(&path), Some(&marks));
 
     let _ = std::fs::remove_dir_all(&base);
@@ -71,7 +74,7 @@ fn folded_blocks_come_back_when_the_file_is_opened_again() {
     // 再次打开：恢复折叠，编辑器中不再留有记录。
     let index = editor.open(&path);
     assert_eq!(editor.documents[index].folded(), folded);
-    assert!(editor.folds.is_empty());
+    assert_eq!(editor.unopened_mark_counts().1, 0);
 
     // 全部展开后关闭：不再记录该文件。
     let doc = &mut editor.documents[index];
@@ -80,7 +83,10 @@ fn folded_blocks_come_back_when_the_file_is_opened_again() {
     assert!(editor.all_folds().is_empty());
 
     // 文件在此期间被改动：仍对得上的块恢复，对不上的丢弃。
-    editor.folds.insert(path.clone(), folded.clone());
+    editor.restore_marks(
+        BookmarkMap::new(),
+        [(path.clone(), folded.clone())].into_iter().collect(),
+    );
     std::fs::write(&path, "# A\na1\n## B\nb1\nb2\n# C\nc1\nc2\n").unwrap();
     let index = editor.open(&path);
     assert_eq!(editor.documents[index].folded(), [folded[0]]);
@@ -167,8 +173,7 @@ fn output_tabs_are_read_only_and_reused() {
 
     // 内容替换后 `revision` 继续递增：按（`DocumentId`，`revision`）缓存的查找结果
     // 不会用于新内容。
-    let mut search = Search::default();
-    search.query = "c".into();
+    let mut search = Search::with_query("c");
     search.update(&editor.documents[first]);
     assert!(search.matches().is_empty());
     editor.show_output("格式化输出", "c\n");
@@ -258,7 +263,10 @@ fn pending_tabs_read_the_file_only_when_loaded() {
     let marks = Bookmarks::from_lines(vec![1]);
 
     let mut editor = Editor::default();
-    editor.bookmarks.insert(path.clone(), marks.clone());
+    editor.restore_marks(
+        [(path.clone(), marks.clone())].into_iter().collect(),
+        FoldMap::new(),
+    );
     let index = editor.open_pending(&path);
     assert_eq!(editor.open_pending(&dir.join(".").join("a.txt")), index);
     assert_eq!(editor.active, None);

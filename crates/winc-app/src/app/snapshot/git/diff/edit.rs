@@ -248,17 +248,19 @@ fn find_in_a_commit_diff_follows_the_editor_rules() {
 
     // 替换快捷键只打开查找；光标在符号 `->` 上时不预填。
     set_read(&mut app, LEFT, (3, 3));
-    app.bars.search.query.clear();
+    app.bars.search.clear_query();
     app.open_search(true);
     assert!(app.bars.find.open && !app.bars.find.replace_open);
-    assert_eq!(app.bars.search.query, "");
+    assert_eq!(app.bars.search.status().query, "");
 
     // 长匹配横向滚动到能显示其末端，且不越过起点。
     app.bars
         .find
         .input
         .set_text("long_identifier_at_the_far_right_end_of_the_line");
-    app.bars.search.query = "long_identifier_at_the_far_right_end_of_the_line".into();
+    app.bars
+        .search
+        .set_query("long_identifier_at_the_far_right_end_of_the_line");
     app.search_changed();
     paint(&mut app);
     let doc = app.editor.active().unwrap();
@@ -299,7 +301,7 @@ fn find_in_a_commit_diff_follows_the_editor_rules() {
     let plain = row(&app);
     app.open_search(false);
     app.bars.find.input.set_text("->");
-    app.bars.search.query = "->".into();
+    app.bars.search.set_query("->");
     app.search_changed();
     paint(&mut app);
     let view = app.editor.active().unwrap().diff.as_deref().unwrap();

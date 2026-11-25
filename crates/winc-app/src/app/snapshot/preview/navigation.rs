@@ -273,7 +273,7 @@ fn command_f_searches_the_rendered_preview() {
     app.open_search(false);
     assert!(app.bars.find.open);
     app.bars.find.input.set_text("预览");
-    app.bars.search.query = "预览".into();
+    app.bars.search.set_query("预览");
     app.search_changed();
     paint(&mut app);
     // 「预览」在渲染后的文字里出现两次（表格一格、提示块一句），源码中的写法不计入。

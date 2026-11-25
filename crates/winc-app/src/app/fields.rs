@@ -55,12 +55,15 @@ impl App {
         if edit(field) {
             match self.focus {
                 Focus::Search => {
-                    self.bars.search.query = self.bars.find.input.text().to_owned();
+                    self.bars
+                        .search
+                        .set_query(self.bars.find.input.text().to_owned());
                     self.search_changed();
                 }
-                Focus::Replace => {
-                    self.bars.search.replacement = self.bars.find.replace_input.text().to_owned()
-                }
+                Focus::Replace => self
+                    .bars
+                    .search
+                    .set_replacement(self.bars.find.replace_input.text().to_owned()),
                 Focus::GlobalQuery | Focus::GlobalInclude | Focus::GlobalExclude => {
                     self.global_changed(false);
                 }

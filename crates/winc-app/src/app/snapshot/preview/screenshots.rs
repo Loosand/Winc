@@ -28,7 +28,7 @@ fn shoot_markdown_preview() {
                 app.preview.markdown.selection = Some((10, 40));
                 app.open_search(false);
                 app.bars.find.input.set_text("预览");
-                app.bars.search.query = "预览".into();
+                app.bars.search.set_query("预览");
                 app.search_changed();
                 settle(&mut app);
                 shoot(&mut app, &format!("{name}-find"));

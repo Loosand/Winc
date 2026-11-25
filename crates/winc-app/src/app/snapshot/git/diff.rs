@@ -248,7 +248,7 @@ fn shoot_diff_search() {
     paint(&mut app);
     app.run_action(Action::Find);
     app.bars.find.input.set_text("value_4");
-    app.bars.search.query = "value_4".into();
+    app.bars.search.set_query("value_4");
     app.search_changed();
     shoot(&mut app, "diff-search");
     let _ = std::fs::remove_dir_all(&dir);
@@ -455,7 +455,7 @@ fn find_in_a_commit_diff_searches_the_selected_snapshot() {
     };
     let set_query = |app: &mut App, query: &str| {
         app.bars.find.input.set_text(query);
-        app.bars.search.query = query.to_owned();
+        app.bars.search.set_query(query);
         app.search_changed();
     };
     let selection = |app: &App| {
@@ -498,7 +498,7 @@ fn find_in_a_commit_diff_searches_the_selected_snapshot() {
     );
     click(&mut app, point);
     assert!(app.on_shortcut(find));
-    assert_eq!(app.bars.search.query, "左侧");
+    assert_eq!(app.bars.search.status().query, "左侧");
     assert_eq!(selection(&app).side, LEFT);
     set_query(&mut app, "命中");
     assert_eq!(app.bars.search.matches().len(), 1);

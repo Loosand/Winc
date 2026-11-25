@@ -101,12 +101,9 @@ impl Query {
 
     /// 按相同条件构造文件内查找，用于替换，使替换结果与文件内的「全部替换」一致。
     fn in_file_search(&self, replacement: &str) -> Search {
-        let mut search = Search::default();
-        search.query = self.text.clone();
-        search.replacement = replacement.to_owned();
-        search.case_sensitive = self.case_sensitive;
-        search.whole_word = self.whole_word;
-        search.regex = self.regex;
+        let mut search = Search::with_query(self.text.clone());
+        search.set_replacement(replacement);
+        search.set_options(self.options());
         search
     }
 }

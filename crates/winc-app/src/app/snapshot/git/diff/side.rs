@@ -241,7 +241,7 @@ fn diff_right_side_edits_the_file_and_takes_hunks_from_the_left() {
     assert!(app.bars.find.open);
     assert!(app.layout.search.y >= app.layout.editor.y + crate::app::diff::DIFF_HEADER);
     app.bars.find.input.set_text("value_55 ");
-    app.bars.search.query = "value_55 ".into();
+    app.bars.search.set_query("value_55 ");
     app.search_changed();
     assert!(app.editor.active().unwrap().diff.is_some());
     let source = app

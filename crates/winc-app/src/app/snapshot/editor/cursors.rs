@@ -287,7 +287,7 @@ fn line_ends_cursor_undo_and_keyboard_columns() {
     // 查找条打开时 ⌥↩ 把全部查找结果变成选区，焦点回到编辑区。
     app.run_action(Action::Find);
     app.bars.find.input.set_text("let");
-    app.bars.search.query = "let".into();
+    app.bars.search.set_query("let");
     app.search_changed();
     assert!(press(&mut app, &["alt"], KeyCode::Enter));
     assert_eq!(app.focus, Focus::Editor);

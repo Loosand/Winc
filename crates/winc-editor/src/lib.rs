@@ -52,13 +52,13 @@ pub use document::editing::folding::{Fold, FoldCommand, Folds, LineWindow, WrapJ
 pub use document::editing::long_lines::LineSpan;
 pub use document::editing::modal::ModalPattern;
 pub use document::editing::paste;
-pub use document::editing::search::{MAX_MATCHES, Search, TextSearch};
+pub use document::editing::search::{MAX_MATCHES, Search, SearchOptions, SearchStatus, TextSearch};
 pub use document::encoding::Encoding;
 pub use document::large::LargeText;
 pub use document::progress::ReadProgress;
 pub use document::{
     COPY_LIMIT, DiskChange, Document, EDIT_LIMIT, OpenError, PictureState, PreviewKind,
-    PreviewMode, Reading, TableState, TableView, Unsupported, looks_binary, size_text,
+    PreviewMode, Reading, TabSurface, TableState, TableView, Unsupported, looks_binary, size_text,
 };
 pub use document::{editorconfig, encoding};
 pub use navigation::{definition, keypath, symbols, usages};
@@ -102,12 +102,12 @@ pub struct Editor {
     ///
     /// 打开文件时移入对应文档，关闭标签时从文档取回。无法打开的文件（占位标签）没有文本，
     /// 其书签保留在此处，「重试」打开成功后再移入。
-    pub bookmarks: BookmarkMap,
+    bookmarks: BookmarkMap,
     /// 未打开文件中折叠的块，键为文件的规范路径；打开文件时移入文档，关闭标签时取回。
-    pub folds: FoldMap,
+    folds: FoldMap,
     /// 各类可预览的文件读取完成时采用的显示方式（[`Editor::finish_load`]），按
     /// [`PreviewKind::ALL`] 的顺序；默认为源代码。
-    pub preview_defaults: [PreviewMode; PreviewKind::ALL.len()],
+    preview_defaults: [PreviewMode; PreviewKind::ALL.len()],
     next_id: u64,
 }
 
@@ -166,6 +166,39 @@ impl Editor {
     /// 返回工作区根目录；没有打开目录时返回 `None`。
     pub fn root(&self) -> Option<&Path> {
         self.workspace.as_ref().map(|w| w.root.as_path())
+    }
+
+    /// 恢复会话中保存的未打开文件书签与折叠记录，随后打开文件时按路径自动认领。
+    pub fn restore_marks(&mut self, bookmarks: BookmarkMap, folds: FoldMap) {
+        self.bookmarks = bookmarks;
+        self.folds = folds;
+    }
+
+    /// 记录可预览类型 `kind` 下次打开文件时采用的默认显示方式。
+    pub fn set_preview_default(&mut self, kind: PreviewKind, mode: PreviewMode) {
+        self.preview_defaults[kind as usize] = mode;
+    }
+
+    /// 按映射函数 `resolve` 一次性初始化所有可预览类型的默认显示方式。
+    pub fn apply_preview_defaults(&mut self, resolve: impl Fn(PreviewKind) -> PreviewMode) {
+        for kind in PreviewKind::ALL {
+            self.preview_defaults[kind as usize] = resolve(kind);
+        }
+    }
+
+    /// 将所有可预览类型的默认显示方式重置为源代码。
+    pub fn reset_preview_defaults(&mut self) {
+        self.preview_defaults.fill(PreviewMode::Source);
+    }
+
+    /// 查询可预览类型 `kind` 的默认显示方式。
+    pub fn preview_default(&self, kind: PreviewKind) -> PreviewMode {
+        self.preview_defaults[kind as usize]
+    }
+
+    #[cfg(test)]
+    fn unopened_mark_counts(&self) -> (usize, usize) {
+        (self.bookmarks.len(), self.folds.len())
     }
 
     /// 打开文件并切换到其标签，返回标签序号（从 0 起）。
@@ -517,7 +550,7 @@ impl Editor {
     /// 关闭第 `index` 个标签并返回其文档；`index` 越界时返回 `None`。
     ///
     /// 关闭活动标签后，活动标签切换到右侧相邻的标签；右侧没有标签时切换到左侧。文档的书签
-    /// 存入 [`Self::bookmarks`]，折叠的块存入 [`Self::folds`]。
+    /// 和折叠的块由编辑器暂存，供再次打开同路径文件或保存会话时读取。
     pub fn close(&mut self, index: usize) -> Option<Document> {
         if index >= self.panes.shown {
             return None;
@@ -636,8 +669,8 @@ impl Editor {
 
     /// 返回所有文件的书签（键为路径）：未打开文件的书签加上已打开文档的书签。
     ///
-    /// 用于把书签写入会话状态。占位标签（无法打开的文件、图片）和尚未读取的标签的书签仍保存在
-    /// [`Self::bookmarks`] 中。
+    /// 用于把书签写入会话状态。占位标签（无法打开的文件、图片）和尚未读取的标签的书签仍保留在
+    /// 编辑器的未打开书签表中。
     pub fn all_bookmarks(&self) -> BookmarkMap {
         let mut all = self.bookmarks.clone();
         for doc in &self.documents {

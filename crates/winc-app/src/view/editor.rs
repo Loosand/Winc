@@ -296,16 +296,54 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) -> PaneView {
         return PaneView::Drawn;
     };
 
-    match app.editor.documents[index].picture.clone() {
-        Some(PictureState::Ready(picture)) => {
+    use winc_editor::TabSurface;
+    enum DrawPlan {
+        Picture(PictureState),
+        ConvertedMarkdown,
+        Reading(winc_editor::Reading),
+        Pdf,
+        Table {
+            state: winc_editor::TableState,
+            workbook: bool,
+        },
+        MarkdownPreview,
+        JsonPreview,
+        Diff,
+        Log,
+        Hex,
+        Loading,
+        Unsupported(Unsupported),
+        Text,
+    }
+    let plan = match app.editor.documents[index].tab_surface() {
+        TabSurface::Picture(state) => DrawPlan::Picture(state.clone()),
+        TabSurface::ConvertedMarkdown => DrawPlan::ConvertedMarkdown,
+        TabSurface::Reading(reading) => DrawPlan::Reading(reading.clone()),
+        TabSurface::Pdf => DrawPlan::Pdf,
+        TabSurface::Table { view, workbook } => DrawPlan::Table {
+            state: view.state.clone(),
+            workbook,
+        },
+        TabSurface::MarkdownPreview => DrawPlan::MarkdownPreview,
+        TabSurface::JsonPreview => DrawPlan::JsonPreview,
+        TabSurface::Diff => DrawPlan::Diff,
+        TabSurface::Log => DrawPlan::Log,
+        TabSurface::Hex => DrawPlan::Hex,
+        TabSurface::Loading => DrawPlan::Loading,
+        TabSurface::Unsupported(reason) => DrawPlan::Unsupported(reason.clone()),
+        TabSurface::Text => DrawPlan::Text,
+    };
+
+    match plan {
+        DrawPlan::Picture(PictureState::Ready(picture)) => {
             let id = app.editor.documents[index].id;
             let area = app.layout.editor;
             draw_picture(app, frame, id, &picture, area);
             return PaneView::Drawn;
         }
         // 仍在后台解码时留空，解码完成后重新绘制。
-        Some(PictureState::Loading) => return PaneView::Drawn,
-        Some(PictureState::Failed(reason)) => {
+        DrawPlan::Picture(PictureState::Loading) => return PaneView::Drawn,
+        DrawPlan::Picture(PictureState::Failed(reason)) => {
             app.preview.picture_cache = None;
             let message = t!("editor-preview-failed", reason = reason);
             draw_placeholder(
@@ -316,169 +354,162 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) -> PaneView {
             );
             return PaneView::Drawn;
         }
-        None => {}
-    }
-    // docx、EPUB：显示转换成 Markdown 后排版的阅读视图；读取或转换失败时说明原因。
-    if (app.editor.documents[index].unsupported.as_ref())
-        .is_some_and(Unsupported::reads_as_markdown)
-    {
-        match app.preview.markdown.failed.clone() {
-            Some(reason) => {
-                use PlaceholderAction::*;
-                let message = t!("editor-preview-failed", reason = reason);
-                let actions = [
-                    (Retry, t!("editor-retry")),
-                    (OpenWithDefaultApp, t!("editor-open-with-default-app")),
-                ];
-                draw_placeholder(app, frame, message, &actions);
-            }
-            None => {
-                let area = app.layout.editor;
-                super::preview::markdown::draw(app, frame, area);
-            }
-        }
-        return PaneView::Drawn;
-    }
-    // 阅读标签：内容取回之前提示正在读取，未能取回时说明并给出重试和在浏览器中查看的按钮，
-    // 取回后显示排版后的 Markdown。
-    if let Some(reading) = app.editor.documents[index].reading.clone() {
-        match reading {
-            // 本地笔记库关闭后，旧主页不再指向任何目录。
-            winc_editor::Reading::Library => {}
-            winc_editor::Reading::Loading => {
-                let name = app.editor.documents[index].name().into_owned();
-                draw_placeholder(app, frame, t!("editor-reading", name = name), &[]);
-            }
-            winc_editor::Reading::Failed => {
-                use PlaceholderAction::*;
-                let name = app.editor.documents[index].name().into_owned();
-                let actions = [
-                    (Retry, t!("editor-retry")),
-                    (OpenInBrowser, t!("editor-open-in-browser")),
-                ];
-                draw_placeholder(
-                    app,
-                    frame,
-                    t!("editor-reading-failed", name = name),
-                    &actions,
-                );
-            }
-            winc_editor::Reading::Ready(_) => {
-                let area = app.layout.editor;
-                super::preview::markdown::draw(app, frame, area);
-            }
-        }
-        return PaneView::Drawn;
-    }
-    // PDF：逐页显示；打开失败时说明原因。
-    if app.editor.documents[index].unsupported == Some(Unsupported::Pdf) {
-        match app.preview.pdf.pages.clone() {
-            Some(Err(reason)) => {
-                use PlaceholderAction::*;
-                let message = t!("editor-preview-failed", reason = reason);
-                let actions = [
-                    (Retry, t!("editor-retry")),
-                    (OpenWithDefaultApp, t!("editor-open-with-default-app")),
-                ];
-                draw_placeholder(app, frame, message, &actions);
-            }
-            _ => {
-                let area = app.layout.editor;
-                super::preview::pdf::draw(app, frame, area);
-            }
-        }
-        return PaneView::Drawn;
-    }
-    let doc = &app.editor.documents[index];
-    if let Some(view) = doc.table.as_deref().filter(|_| !doc.shows_text()) {
-        let workbook = doc.unsupported.is_some();
-        match &view.state {
-            winc_editor::TableState::Ready(_) => {
-                let area = app.layout.editor;
-                super::preview::table::draw(app, frame, index, area);
-            }
-            // 仍在后台读取时留空，读取完成后重新绘制。
-            winc_editor::TableState::Loading => {}
-            winc_editor::TableState::Failed(reason) => {
-                use PlaceholderAction::*;
-                let message = t!("editor-preview-failed", reason = reason.clone());
-                let actions: &[(PlaceholderAction, &str)] = if workbook {
-                    &[
+        // docx、EPUB：显示转换成 Markdown 后排版的阅读视图；读取或转换失败时说明原因。
+        DrawPlan::ConvertedMarkdown => {
+            match app.preview.markdown.failed.clone() {
+                Some(reason) => {
+                    use PlaceholderAction::*;
+                    let message = t!("editor-preview-failed", reason = reason);
+                    let actions = [
                         (Retry, t!("editor-retry")),
                         (OpenWithDefaultApp, t!("editor-open-with-default-app")),
-                    ]
-                } else {
-                    &[(ShowSource, t!("editor-show-source"))]
-                };
-                draw_placeholder(app, frame, message, actions);
+                    ];
+                    draw_placeholder(app, frame, message, &actions);
+                }
+                None => {
+                    let area = app.layout.editor;
+                    super::preview::markdown::draw(app, frame, area);
+                }
+            }
+            return PaneView::Drawn;
+        }
+        // 阅读标签：内容取回之前提示正在读取，未能取回时说明并给出重试和在浏览器中查看的按钮，
+        // 取回后显示排版后的 Markdown。
+        DrawPlan::Reading(reading) => {
+            match reading {
+                // 本地笔记库关闭后，旧主页不再指向任何目录。
+                winc_editor::Reading::Library => {}
+                winc_editor::Reading::Loading => {
+                    let name = app.editor.documents[index].name().into_owned();
+                    draw_placeholder(app, frame, t!("editor-reading", name = name), &[]);
+                }
+                winc_editor::Reading::Failed => {
+                    use PlaceholderAction::*;
+                    let name = app.editor.documents[index].name().into_owned();
+                    let actions = [
+                        (Retry, t!("editor-retry")),
+                        (OpenInBrowser, t!("editor-open-in-browser")),
+                    ];
+                    draw_placeholder(
+                        app,
+                        frame,
+                        t!("editor-reading-failed", name = name),
+                        &actions,
+                    );
+                }
+                winc_editor::Reading::Ready(_) => {
+                    let area = app.layout.editor;
+                    super::preview::markdown::draw(app, frame, area);
+                }
+            }
+            return PaneView::Drawn;
+        }
+        // PDF：逐页显示；打开失败时说明原因。
+        DrawPlan::Pdf => {
+            match app.preview.pdf.pages.clone() {
+                Some(Err(reason)) => {
+                    use PlaceholderAction::*;
+                    let message = t!("editor-preview-failed", reason = reason);
+                    let actions = [
+                        (Retry, t!("editor-retry")),
+                        (OpenWithDefaultApp, t!("editor-open-with-default-app")),
+                    ];
+                    draw_placeholder(app, frame, message, &actions);
+                }
+                _ => {
+                    let area = app.layout.editor;
+                    super::preview::pdf::draw(app, frame, area);
+                }
+            }
+            return PaneView::Drawn;
+        }
+        DrawPlan::Table { state, workbook } => {
+            match state {
+                winc_editor::TableState::Ready(_) => {
+                    let area = app.layout.editor;
+                    super::preview::table::draw(app, frame, index, area);
+                }
+                // 仍在后台读取时留空，读取完成后重新绘制。
+                winc_editor::TableState::Loading => {}
+                winc_editor::TableState::Failed(reason) => {
+                    use PlaceholderAction::*;
+                    let message = t!("editor-preview-failed", reason = reason);
+                    let actions: &[(PlaceholderAction, &str)] = if workbook {
+                        &[
+                            (Retry, t!("editor-retry")),
+                            (OpenWithDefaultApp, t!("editor-open-with-default-app")),
+                        ]
+                    } else {
+                        &[(ShowSource, t!("editor-show-source"))]
+                    };
+                    draw_placeholder(app, frame, message, actions);
+                }
+            }
+            return PaneView::Drawn;
+        }
+        DrawPlan::MarkdownPreview => {
+            let area = app.layout.editor;
+            super::preview::markdown::draw(app, frame, area);
+            return PaneView::Drawn;
+        }
+        other => {
+            // 分栏预览时缓存中保存的是右半部分的图片（`draw_split`），不清除。
+            if app.layout.split.w <= 0.0 {
+                app.preview.picture_cache = None;
+            }
+            match other {
+                DrawPlan::JsonPreview => {
+                    super::preview::json::draw(app, frame, app.layout.editor);
+                    return PaneView::Drawn;
+                }
+                DrawPlan::Diff => return PaneView::Diff(index),
+                DrawPlan::Log => return PaneView::Log(index),
+                DrawPlan::Hex => {
+                    hex::draw_hex(app, frame, index);
+                    return PaneView::Drawn;
+                }
+                // 文件仍在读取（仅读取耗时较长时执行到此处）：提示正在读取的文件名和读了多少。
+                DrawPlan::Loading => {
+                    let name = app.editor.documents[index].name().into_owned();
+                    match app.reading_bar(app.editor.documents[index].id) {
+                        Some(fraction) => draw_reading(app, frame, &name, fraction),
+                        None => {
+                            draw_placeholder(app, frame, t!("editor-reading", name = name), &[])
+                        }
+                    }
+                    return PaneView::Drawn;
+                }
+                DrawPlan::Unsupported(reason) => {
+                    use PlaceholderAction::*;
+                    let actions: &[(PlaceholderAction, &str)] = match reason {
+                        Unsupported::Binary(_) => &[
+                            (ShowHex, t!("editor-show-hex")),
+                            (OpenAsText, t!("editor-open-anyway")),
+                            (OpenWithDefaultApp, t!("editor-open-with-default-app")),
+                            (Reveal, system::reveal_label()),
+                        ],
+                        Unsupported::TooLarge(_) => &[
+                            (ShowHex, t!("editor-show-hex")),
+                            (OpenWithDefaultApp, t!("editor-open-with-default-app")),
+                            (Reveal, system::reveal_label()),
+                        ],
+                        Unsupported::Unreadable(_)
+                        | Unsupported::Image
+                        | Unsupported::Workbook
+                        | Unsupported::Docx
+                        | Unsupported::Epub
+                        | Unsupported::Pdf => &[
+                            (Retry, t!("editor-retry")),
+                            (Reveal, system::reveal_label()),
+                        ],
+                    };
+                    draw_placeholder(app, frame, reason.to_string(), actions);
+                    return PaneView::Drawn;
+                }
+                DrawPlan::Text => {}
+                _ => unreachable!(),
             }
         }
-        return PaneView::Drawn;
-    }
-    let doc = &app.editor.documents[index];
-    if doc.preview_kind() == Some(winc_editor::PreviewKind::Markdown)
-        && doc.preview_mode() == winc_editor::PreviewMode::Preview
-    {
-        let area = app.layout.editor;
-        super::preview::markdown::draw(app, frame, area);
-        return PaneView::Drawn;
-    }
-    // 分栏预览时缓存中保存的是右半部分的图片（`draw_split`），不清除。
-    if app.layout.split.w <= 0.0 {
-        app.preview.picture_cache = None;
-    }
-    if doc.preview_kind() == Some(winc_editor::PreviewKind::Json)
-        && doc.preview_mode() == winc_editor::PreviewMode::Preview
-        && !doc.is_pending()
-    {
-        super::preview::json::draw(app, frame, app.layout.editor);
-        return PaneView::Drawn;
-    }
-    if app.editor.documents[index].diff.is_some() {
-        return PaneView::Diff(index);
-    }
-    if app.editor.documents[index].log.is_some() {
-        return PaneView::Log(index);
-    }
-    if app.editor.documents[index].hex.is_some() {
-        hex::draw_hex(app, frame, index);
-        return PaneView::Drawn;
-    }
-    // 文件仍在读取（仅读取耗时较长时执行到此处）：提示正在读取的文件名和读了多少。
-    if app.editor.documents[index].is_pending() {
-        let name = app.editor.documents[index].name().into_owned();
-        match app.reading_bar(app.editor.documents[index].id) {
-            Some(fraction) => draw_reading(app, frame, &name, fraction),
-            None => draw_placeholder(app, frame, t!("editor-reading", name = name), &[]),
-        }
-        return PaneView::Drawn;
-    }
-    if let Some(reason) = app.editor.documents[index].unsupported.clone() {
-        use PlaceholderAction::*;
-        let actions: &[(PlaceholderAction, &str)] = match reason {
-            Unsupported::Binary(_) => &[
-                (ShowHex, t!("editor-show-hex")),
-                (OpenAsText, t!("editor-open-anyway")),
-                (OpenWithDefaultApp, t!("editor-open-with-default-app")),
-                (Reveal, system::reveal_label()),
-            ],
-            Unsupported::TooLarge(_) => &[
-                (ShowHex, t!("editor-show-hex")),
-                (OpenWithDefaultApp, t!("editor-open-with-default-app")),
-                (Reveal, system::reveal_label()),
-            ],
-            Unsupported::Unreadable(_)
-            | Unsupported::Image
-            | Unsupported::Workbook
-            | Unsupported::Docx
-            | Unsupported::Epub
-            | Unsupported::Pdf => &[
-                (Retry, t!("editor-retry")),
-                (Reveal, system::reveal_label()),
-            ],
-        };
-        draw_placeholder(app, frame, reason.to_string(), actions);
-        return PaneView::Drawn;
     }
 
     draw_text_area(app, frame, index);

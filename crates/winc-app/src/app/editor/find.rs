@@ -40,7 +40,7 @@ impl App {
             // 被替换的旧查找内容记入历史，按 `↑` 可以恢复。
             self.bars.find.input.remember();
             self.bars.find.input.set_text(&seed);
-            self.bars.search.query = seed;
+            self.bars.search.set_query(seed);
         } else {
             // 全选已有的查找内容，后续键入会直接替换该内容。
             self.bars.find.input.select_all();
@@ -49,7 +49,7 @@ impl App {
         self.bars.find.open = true;
         // 预览只读，不能替换。
         self.bars.find.replace_open = replace && !preview;
-        self.focus = if replace && !self.bars.search.query.is_empty() {
+        self.focus = if replace && self.bars.search.has_query() {
             Focus::Replace
         } else {
             Focus::Search
@@ -136,11 +136,11 @@ impl App {
             self.in_diff_search(|app| app.find_again(backwards));
             return;
         }
-        if self.bars.search.query.is_empty()
+        if !self.bars.search.has_query()
             && let Some(seed) = self.search_seed()
         {
             self.bars.find.input.set_text(&seed);
-            self.bars.search.query = seed;
+            self.bars.search.set_query(seed);
         }
 
         self.find_next(backwards);
@@ -237,7 +237,11 @@ impl App {
             return;
         }
         // 查询为空（尚未输入）时显示全部行。
-        let shown = (!self.bars.search.query.is_empty()).then(|| self.bars.search.lines());
+        let shown = self
+            .bars
+            .search
+            .has_query()
+            .then(|| self.bars.search.lines());
         let key = (
             doc.id,
             doc.revision,
@@ -284,11 +288,9 @@ impl App {
 
                 self.relayout();
             }
-            SearchButton::Case => {
-                self.bars.search.case_sensitive = !self.bars.search.case_sensitive
-            }
-            SearchButton::Word => self.bars.search.whole_word = !self.bars.search.whole_word,
-            SearchButton::Regex => self.bars.search.regex = !self.bars.search.regex,
+            SearchButton::Case => self.bars.search.toggle_case_sensitive(),
+            SearchButton::Word => self.bars.search.toggle_whole_word(),
+            SearchButton::Regex => self.bars.search.toggle_regex(),
             SearchButton::Prev => self.find_next(true),
             SearchButton::Next => self.find_next(false),
             SearchButton::Filter => self.toggle_line_filter(),
@@ -492,7 +494,7 @@ impl App {
         }
         self.bars.find.input.remember();
 
-        if self.bars.search.query.is_empty() {
+        if !self.bars.search.has_query() {
             return;
         }
         if let Some((_, selection)) = self.update_diff_find() {

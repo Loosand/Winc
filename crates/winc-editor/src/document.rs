@@ -48,6 +48,8 @@ mod indentation;
 pub(crate) mod large;
 mod preview;
 pub(crate) mod progress;
+
+pub use preview::TabSurface;
 #[cfg(test)]
 mod tests;
 

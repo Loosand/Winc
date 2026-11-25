@@ -1073,7 +1073,7 @@ fn finding_a_match_beyond_the_shown_part_of_a_line_keeps_text_on_screen() {
     let find = |app: &mut App| {
         app.open_search(false);
         app.bars.find.input.set_text("needle");
-        app.bars.search.query = "needle".into();
+        app.bars.search.set_query("needle");
         app.search_changed();
         app.status.message = None;
         app.find_next(false);

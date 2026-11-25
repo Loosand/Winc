@@ -169,12 +169,13 @@ pub(crate) fn restore_tabs(
     let mut active = None;
     // 先恢复书签和折叠的块，之后打开各文件时由文件自行取用。
     if let Some(session) = session {
-        editor.bookmarks = session
+        let bookmarks = session
             .bookmarks
             .iter()
             .map(|(path, lines)| (path.clone(), Bookmarks::from_lines(lines.clone())))
             .collect();
-        editor.folds = session.folds.iter().cloned().collect();
+        let folds = session.folds.iter().cloned().collect();
+        editor.restore_marks(bookmarks, folds);
     }
 
     // 正文读不出来的备份不恢复（和头坏了的一样跳过），文件原样留在磁盘上。
