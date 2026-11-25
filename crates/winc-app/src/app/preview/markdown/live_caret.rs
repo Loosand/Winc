@@ -1,273 +1,11 @@
-//! 可编辑 Markdown 的光标移动、折行归属和视口跟随。
+//! 可编辑 Markdown 的光标移动、折行归属和视口跟随适配器。
+//!
+//! 纯状态与导航算法位于 `winc_richtext::session`，本模块负责对接活动文档与滚动视图。
 
 use winc_core::{Selection, movement};
-use winc_editor::DocumentId;
+use winc_richtext::{row_affinity, vertical_move_target, visible_position};
 
-use super::line_end;
 use crate::app::{App, ScrollTarget};
-
-/// 刚插入的可编辑空段（光标离开或按退格时自动收回）。
-struct EmptyParagraph {
-    document: DocumentId,
-    revision: u64,
-    /// 本次回车插入的原文范围（字符偏移），包括光标后的分隔换行。
-    inserted: std::ops::Range<usize>,
-    caret: usize,
-}
-
-/// 可编辑 Markdown 预览的交互与导航状态。
-#[derive(Default)]
-pub(crate) struct LiveState {
-    /// 最近一次用于单光标排版的位置，拖选和键盘扩选时继续使用。
-    layout_caret: Option<(DocumentId, u64, usize)>,
-    /// 回车刚创建的空段，按退格时可整段收回。
-    empty_paragraph: Option<EmptyParagraph>,
-    /// ↑↓ 移动的目标横坐标（相对内容左边）和移动后光标位置（字符偏移）。
-    goal: Option<(f32, usize)>,
-    /// 折行处光标位于上一行末尾的归属标记（字符偏移、文档版本）。
-    line_end: Option<(usize, u64)>,
-    /// 表格工具刚修改的文档版本：后台排版接手时保持页面滚动位置。
-    table_edit_revision: Option<(DocumentId, u64)>,
-    /// 上一帧跟踪的文档、光标原文位置与版本号。
-    followed: Option<(DocumentId, usize, u64)>,
-    /// 已进入编辑态的文档（光标所在块显示原文）。
-    editing: Option<DocumentId>,
-    /// 最近一次单击放下的光标（原文字节偏移）。
-    clicked: Option<usize>,
-}
-
-impl LiveState {
-    /// 切换文档时清除仅对当前文档有效的编辑辅助状态。
-    pub(super) fn reset_doc(&mut self) {
-        self.empty_paragraph = None;
-        self.table_edit_revision = None;
-    }
-
-    /// 离开预览模式时清除编辑态与光标跟随记录。
-    pub(super) fn leave_mode(&mut self) {
-        self.followed = None;
-        self.editing = None;
-    }
-
-    /// 清除竖直移动目标列与折行行尾归属。
-    pub(super) fn clear_navigation(&mut self) {
-        self.goal = None;
-        self.line_end = None;
-    }
-
-    /// 结束一次编辑命令：重置目标列并标记当前文档进入实时编辑态。
-    pub(super) fn finish_edit(&mut self, doc: Option<DocumentId>, clear_line_end: bool) {
-        self.goal = None;
-        if clear_line_end {
-            self.line_end = None;
-        }
-        self.editing = doc;
-    }
-
-    /// 记录水平/拖动移动后的折行行尾归属。
-    pub(super) fn set_line_end(&mut self, upstream: bool, pos: usize, revision: u64) {
-        self.line_end = upstream.then_some((pos, revision));
-    }
-
-    /// 完成行首/行尾跳转：写入折行归属、清空目标列并进入编辑态。
-    fn finish_line_end_move(
-        &mut self,
-        doc: Option<DocumentId>,
-        wrapped: bool,
-        pos: usize,
-        revision: u64,
-    ) {
-        self.line_end = wrapped.then_some((pos, revision));
-        self.goal = None;
-        self.editing = doc;
-    }
-
-    /// 完成竖直方向移动：更新折行归属、目标横坐标并进入编辑态。
-    fn finish_vertical_move(
-        &mut self,
-        doc: Option<DocumentId>,
-        upstream: bool,
-        pos: usize,
-        revision: u64,
-        goal: f32,
-    ) {
-        self.line_end = upstream.then_some((pos, revision));
-        self.goal = Some((goal, pos));
-        self.editing = doc;
-    }
-
-    /// 记录单击落点与折行行尾归属，同时标记文档进入实时编辑态。
-    pub(super) fn record_click(
-        &mut self,
-        doc: DocumentId,
-        source: usize,
-        upstream: bool,
-        pos: usize,
-        revision: u64,
-    ) {
-        self.line_end = upstream.then_some((pos, revision));
-        self.clicked = Some(source);
-        self.editing = Some(doc);
-    }
-
-    /// 清除单光标排版锚点。
-    pub(super) fn clear_layout_caret(&mut self) {
-        self.layout_caret = None;
-    }
-
-    /// 记录单光标排版锚点。
-    pub(super) fn set_layout_caret(&mut self, id: DocumentId, revision: u64, at: usize) {
-        self.layout_caret = Some((id, revision, at));
-    }
-
-    /// 若单光标排版锚点仍属于当前文档与版本，返回其原文字节偏移。
-    pub(super) fn layout_caret_for(&self, id: DocumentId, revision: u64) -> Option<usize> {
-        self.layout_caret
-            .filter(|&(doc_id, rev, _)| doc_id == id && rev == revision)
-            .map(|(_, _, at)| at)
-    }
-
-    /// 记录表格工具修改的文档版本。
-    pub(super) fn record_table_edit(&mut self, id: DocumentId, revision: u64) {
-        self.table_edit_revision = Some((id, revision));
-    }
-
-    /// 重排前检查是否需要保持该光标在屏幕上的位置不动，同时消费掉单次点击标记。
-    fn allow_caret_anchor(
-        &mut self,
-        caret: usize,
-        keyed: bool,
-        source_changed: bool,
-        doc: Option<(DocumentId, u64)>,
-    ) -> bool {
-        let clicked = self.clicked.take();
-        if clicked == Some(caret) && !keyed {
-            return false;
-        }
-        if !source_changed {
-            return true;
-        }
-        let Some((id, revision)) = doc else {
-            return false;
-        };
-        self.table_edit_revision != Some((id, revision))
-            && self.followed == Some((id, caret, revision))
-    }
-
-    /// 判断当前光标位置是否命中上一显示行末尾归属。
-    fn is_upstream(&self, head: usize, revision: u64) -> bool {
-        self.line_end == Some((head, revision))
-    }
-
-    /// 计算本次竖直移动应沿用的目标横坐标。
-    fn goal_x_for(&self, head: usize, fallback_x: f32) -> f32 {
-        match self.goal {
-            Some((goal, at)) if at == head => goal,
-            _ => fallback_x,
-        }
-    }
-
-    /// 当前活动文档是否应显示实时编辑光标。
-    pub(super) fn caret_shown_for(&self, doc: Option<DocumentId>) -> bool {
-        doc.is_some() && self.editing == doc
-    }
-
-    /// 显式将文档置入实时编辑态；切换文档时同步清理过期的表格编辑版本标记。
-    fn begin_editing(&mut self, doc: Option<DocumentId>) {
-        if self.editing != doc {
-            self.table_edit_revision = None;
-        }
-        self.editing = doc;
-    }
-
-    /// 排版前同步编辑态：若光标或文档版本相对上一帧发生变化，则自动进入实时编辑态。
-    fn sync_editing(&mut self, id: DocumentId, source: usize, revision: u64) -> bool {
-        let now = (id, source, revision);
-        if self.followed.is_some_and(|f| f.0 == id && f != now) {
-            self.editing = Some(id);
-        }
-        self.editing == Some(id)
-    }
-
-    /// 排版后更新光标跟随记录，返回本帧是否发生了需要滚动跟随的光标移动。
-    fn advance_followed(&mut self, current: Option<(DocumentId, usize, u64)>) -> bool {
-        let Some(now) = current else {
-            self.followed = None;
-            return false;
-        };
-        let moved = self.followed.is_some_and(|f| f.0 == now.0 && f != now);
-        self.followed = Some(now);
-        moved && self.editing == Some(now.0)
-    }
-
-    /// 编程改写源码（任务框勾选、图片缩放）后保持原有编辑态并同步光标跟踪。
-    pub(super) fn sync_after_programmatic_edit(
-        &mut self,
-        was_editing: bool,
-        clear_editing: bool,
-        current: Option<(DocumentId, usize, u64)>,
-    ) {
-        if !was_editing {
-            if clear_editing {
-                self.editing = None;
-            }
-            if current.is_some() || clear_editing {
-                self.followed = current;
-            }
-        }
-    }
-
-    /// 记录刚刚由回车或文末点击创建的可编辑空段。
-    fn remember_empty(
-        &mut self,
-        document: DocumentId,
-        revision: u64,
-        inserted: std::ops::Range<usize>,
-        caret: usize,
-    ) {
-        self.empty_paragraph = Some(EmptyParagraph {
-            document,
-            revision,
-            inserted,
-            caret,
-        });
-    }
-
-    /// 清除可编辑空段记录（输入未产生新版本时调用）。
-    fn clear_empty(&mut self) {
-        self.empty_paragraph = None;
-    }
-
-    /// 检查当前光标是否仍停留在刚插入的可编辑空段上，是则返回 `(start, end, caret)`。
-    pub(super) fn matching_empty_paragraph(
-        &self,
-        id: DocumentId,
-        revision: u64,
-        selection: Selection,
-        has_cursors: bool,
-    ) -> Option<(usize, usize, usize)> {
-        let paragraph = self.empty_paragraph.as_ref()?;
-        if id != paragraph.document
-            || revision != paragraph.revision
-            || selection != Selection::point(paragraph.caret)
-            || has_cursors
-        {
-            return None;
-        }
-        Some((
-            paragraph.inserted.start,
-            paragraph.inserted.end,
-            paragraph.caret,
-        ))
-    }
-
-    /// 收回空段后清除记录、重置目标列并维持编辑态。
-    pub(super) fn finish_empty_paragraph_backspace(&mut self, doc: Option<DocumentId>) {
-        self.empty_paragraph = None;
-        self.goal = None;
-        self.editing = doc;
-    }
-}
 
 impl App {
     /// 结束一次可编辑 Markdown 的编辑操作：清除竖直目标列并保持实时编辑态。
@@ -442,8 +180,6 @@ impl App {
     }
 
     /// 光标落在块标记或分隔行时，返回移动方向上最近的可见位置（字符偏移）。
-    ///
-    /// 向后（`forward`）时取该行内容的开头；向前时优先停在上方可编辑的空行，否则取上一行文字的末尾。
     pub(super) fn live_visible(&self, pos: usize, forward: bool) -> usize {
         let Some(doc) = self.editor.active() else {
             return pos;
@@ -452,56 +188,20 @@ impl App {
             return pos;
         };
         let body_start = self.property_body_start().unwrap_or(0);
-        let mut pos = pos.max(body_start).min(rope.len_chars());
         let preview = &self.preview.markdown;
-        let current = preview.doc == Some(doc.id) && preview.checked == Some(doc.revision);
-        if current
-            && let Some(separator) = preview
-                .parsed
-                .as_ref()
-                .and_then(|md| md.collapsed_separator_at(rope.char_to_byte(pos)))
-        {
-            if !forward {
-                let above = rope.byte_to_line(separator.start) - 1;
-                return line_end(rope, above).max(body_start);
-            }
-            pos = rope.byte_to_char(separator.end);
-        }
-        let line = rope.char_to_line(pos);
-        let mapped = |line| {
-            current
-                && preview
-                    .layout
-                    .as_ref()
-                    .is_some_and(|laid| laid.blank_point(rope.line_to_byte(line)).is_some())
-        };
-        if mapped(line) {
-            return pos;
-        }
-        let start = rope.line_to_char(line);
-        let hidden = self.live_hidden_prefix(line);
-        if pos - start >= hidden
-            || (current
-                && preview
-                    .layout
-                    .as_ref()
-                    .is_some_and(|laid| laid.shows_source(rope.char_to_byte(pos))))
-        {
-            return pos;
-        }
-        if !forward {
-            let visible = |l| mapped(l) || !rope.line(l).chars().all(char::is_whitespace);
-            if let Some(above) = (0..line).rev().find(|&l| visible(l)) {
-                return line_end(rope, above).max(body_start);
-            }
-        }
-        start + hidden
+        let fresh = preview.doc == Some(doc.id) && preview.checked == Some(doc.revision);
+        visible_position(
+            rope,
+            preview.parsed.as_deref(),
+            preview.layout.as_ref(),
+            fresh,
+            pos,
+            forward,
+            body_start,
+        )
     }
 
     /// 编辑区的命令移动光标之后调用：光标落在不显示的块标记中时移到可见位置。
-    ///
-    /// `before` 是移动之前光标的位置（字符偏移），据此判断移动方向。按词移动、移到行首等
-    /// 命令按原文计算位置，结果可能落在列表记号或续行的缩进中。
     pub(in crate::app) fn live_settle_caret(&mut self, before: usize) {
         if !self.markdown_live() {
             return;
@@ -526,9 +226,6 @@ impl App {
     }
 
     /// 将光标移到所在显示行的开头或末尾（`end`），按住 ⇧ 时扩展选区。
-    ///
-    /// 正文按预览中折行后的行计算，一段原文折成多行时不会移到整段的开头、末尾。光标位于
-    /// 代码块、公式等按原文显示的块中时返回 `false`，按编辑区的方式处理。
     pub(super) fn live_line_edge(&mut self, end: bool) -> bool {
         if self.live_leaf().is_none_or(|l| !l.prose && !l.table) {
             return false;
@@ -579,21 +276,12 @@ impl App {
     }
 
     /// 原文位置 `source` 位于折行处时，判断窗口纵坐标 `y` 是否更接近上一显示行。
-    ///
-    /// 折行处的位置同时是上一行的末尾和下一行的开头：在上一行的右端点击、从上方按 ↓ 移到
-    /// 行尾时，光标应留在上一行。
     pub(super) fn live_row_affinity(&self, source: usize, y: f32) -> bool {
         let Some(laid) = self.preview.markdown.layout.as_ref() else {
             return false;
         };
-        let y = y - (self.preview.markdown.area.y - self.preview.markdown.scroll());
-        let far = |p: Option<(f32, f32, f32)>| p.map(|(_, top, h)| (top + h / 2.0 - y).abs());
-        let below = laid.caret_point_with_affinity(source, false);
-        let above = laid.caret_point_with_affinity(source, true);
-        match (far(above), far(below)) {
-            (Some(a), Some(b)) => a + 0.5 < b,
-            _ => false,
-        }
+        let content_y = y - (self.preview.markdown.area.y - self.preview.markdown.scroll());
+        row_affinity(laid, source, content_y)
     }
 
     /// 可编辑的预览中光标应画在上一显示行末尾时，返回光标的原文位置（字节偏移）。
@@ -624,41 +312,16 @@ impl App {
         };
         let head = self.editor.active().map_or(0, |d| d.selection.head);
         let goal = self.preview.markdown.live.goal_x_for(head, x);
-        let step = by.unwrap_or(h);
-        let sign = if down { 1.0 } else { -1.0 };
-        let height = laid.height();
-        let screen_x = laid.column_bounds().0 + goal;
-        let screen_top = self.preview.markdown.area.y - self.preview.markdown.scroll();
-        // 块间留白高于一行时，下一行的目标位置落在留白中，取到的最近一行仍是原来的行；
-        // 因此每次再前进半行，直到到达其他行或超出内容范围。
-        let center = y + h / 2.0;
-        let mut target = center + sign * step;
-        let moved = loop {
-            let probe = if by.is_none() {
-                laid.limit_blank_step(center, target)
-            } else {
-                target
-            };
-            if !(0.0..=height).contains(&probe) {
-                break None;
-            }
-            let screen_y = screen_top + probe;
-            let found = self
-                .preview
-                .markdown
-                .source_at(screen_x, screen_y)
-                .and_then(|source| {
-                    let upstream = self.live_row_affinity(source, screen_y);
-                    let point = laid.caret_point_with_affinity(source, upstream);
-                    point
-                        .is_none_or(|(_, row_y, _)| (row_y - y).abs() >= 0.5)
-                        .then_some((source, upstream))
-                });
-            if found.is_some() || by.is_some() || !(0.0..=height).contains(&target) {
-                break found;
-            }
-            target += sign * h / 2.0;
-        };
+        let moved = vertical_move_target(
+            laid,
+            self.preview.markdown.area.y,
+            self.preview.markdown.scroll(),
+            y,
+            h,
+            goal,
+            down,
+            by,
+        );
         // 文档以代码块、表格、分隔线等结束：再向下时在其后另起一段，光标有处可去。
         if moved.is_none() && down && !extend && self.live_append_paragraph() {
             return;
@@ -695,9 +358,6 @@ impl App {
     }
 
     /// 可编辑的预览在本帧是否将光标所在的块显示为原文。
-    ///
-    /// 在预览上点击、移动光标或输入之后才显示原文；刚打开、仅阅读时整篇均按排版显示，
-    /// 不会有某一块突然切换为原文。排版之前调用。
     pub(crate) fn live_editing(&mut self) -> bool {
         if !self.markdown_live() {
             return false;
@@ -711,8 +371,7 @@ impl App {
             .sync_editing(doc.id, source, doc.revision)
     }
 
-    /// 可编辑的预览中是否显示文字光标：在当前文档的预览上点击、移动光标或输入之后显示
-    /// （见 [`App::live_editing`]）。
+    /// 可编辑的预览中是否显示文字光标。
     pub(crate) fn live_caret_shown(&self) -> bool {
         let doc = self.editor.active().map(|d| d.id);
         self.preview.markdown.live.caret_shown_for(doc)
@@ -732,8 +391,6 @@ impl App {
 
     /// 可编辑的预览中光标位置改变（输入、点击、移动、查找）后，滚动使光标可见并与边缘保留
     /// 一行的距离；光标未移动、仅滚动时不处理。
-    ///
-    /// 排版完成之后、绘制之前调用。
     pub(crate) fn follow_live_caret(&mut self) {
         let source = self
             .markdown_live()

@@ -1,18 +1,12 @@
-//! Markdown 预览中的实时编辑：按键、回车、退格、列表缩进、围栏代码块和表格工具。
-//!
-//! 编辑器核心 · 结构编辑：进入本层的回车、退格、Tab 等先按所在块解释，再改写 Markdown 原文。
-//! 没有独立的可变富文本树；预览随原文重新解析。改动的字节范围在写入前换成文档的字符位置，
-//! 光标的定位与跨显示行移动则在 `live_caret` 中。
+//! Markdown 预览中的实时编辑适配器：将窗口按键与菜单操作转发至 `winc_richtext::commands`。
+
+use winc_richtext::{BackspaceAction, DeleteAction, EditPlan, commands};
 
 use super::*;
-
-use super::live_structure::fenced_lines;
 
 impl App {
     /// 可编辑的预览中 ↑↓ 按显示行移动光标（加 ⇧ 扩展选区），`PageUp` / `PageDown` 移动一屏；
     /// 正文里的回车、⇧ 回车见 [`App::live_enter`]。
-    ///
-    /// 其余的键返回 `false`，交给编辑区按普通编辑处理（输入、删除、←→、⌘↑↓ 等都作用于文档）。
     pub(super) fn live_key(&mut self, key: &Key, cmd: bool, area: winc_render::Rect) -> bool {
         self.parse_markdown_inline();
         // macOS 上 ⌘← / ⌘→ 与 Home / End 相同，移到显示行的开头、末尾。
@@ -82,14 +76,45 @@ impl App {
         true
     }
 
+    /// 将 `winc-richtext` 产出的 [`EditPlan`] 应用到当前活动文档。
+    pub(super) fn apply_edit_plan(&mut self, plan: EditPlan, record_table: bool) -> bool {
+        if plan.slide {
+            self.preview.markdown.slide = true;
+        }
+        let previous_revision = self.editor.active().map(|d| d.revision);
+        let changed = !plan.replace.is_empty() || !plan.insert.is_empty();
+        if let Some(doc) = self.editor.active_mut() {
+            doc.collapse_selections();
+            doc.selection = winc_core::Selection::new(plan.replace.start, plan.replace.end);
+        } else {
+            return false;
+        }
+        if changed {
+            let cmd = if plan.paste {
+                winc_editor::Command::Paste(plan.insert)
+            } else {
+                winc_editor::Command::Insert(plan.insert)
+            };
+            self.run_source_edit(cmd);
+        }
+        if let Some(doc) = self.editor.active_mut() {
+            let chars = doc.text().rope().map_or(0, ropey::Rope::len_chars);
+            doc.selection = winc_core::Selection::new(
+                plan.selection.anchor.min(chars),
+                plan.selection.head.min(chars),
+            );
+            if record_table && Some(doc.revision) != previous_revision {
+                self.preview
+                    .markdown
+                    .live
+                    .record_table_edit(doc.id, doc.revision);
+            }
+        }
+        true
+    }
+
     /// 执行表格工具栏或右键菜单「表格」中的操作 `op`。
-    ///
-    /// `op` 可用的值见 `view::preview::markdown` 的 `table_tools`。修改规则见
-    /// `winc_preview::markdown::cells::change`，`delete` 删除整张表，一次撤销即可恢复。
-    /// 光标不在表格中、或操作无效（删除表头、删除最后一列）时返回 `false`。
     pub(crate) fn live_table_tool(&mut self, op: &str) -> bool {
-        use winc_preview::markdown::Align;
-        use winc_preview::markdown::cells::{self, Change};
         let Some(live) = self.live_leaf().filter(|l| l.table) else {
             return false;
         };
@@ -99,85 +124,10 @@ impl App {
         let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
             return false;
         };
-        let leaf = live.leaf.start..live.leaf.end.min(rope.len_bytes());
-        let text = rope.byte_slice(leaf.clone()).to_string();
-        let change = match op {
-            "row-above" => Change::RowAbove,
-            "row" => Change::RowBelow,
-            "column-left" => Change::ColumnLeft,
-            "column" => Change::ColumnRight,
-            "delete-row" => Change::DeleteRow,
-            "delete-column" => Change::DeleteColumn,
-            "left" => Change::Align(Align::Left),
-            "center" => Change::Align(Align::Center),
-            "right" => Change::Align(Align::Right),
-            "none" => Change::Align(Align::None),
-            "delete" => {
-                // 删除表格后面的换行，避免留下空行。
-                let end = text.trim_end().len();
-                let (new, at) = (text[end..].trim_start_matches('\n').to_owned(), 0);
-                return self.replace_live_text(leaf.start, &text, &new, at);
-            }
-            _ => return false,
-        };
-        let Some((new, at)) = cells::change(&text, caret.saturating_sub(leaf.start), change) else {
+        let Some(plan) = commands::plan_table_tool(rope, &live, caret, op) else {
             return false;
         };
-        self.replace_live_text(leaf.start, &text, &new, at)
-    }
-
-    /// 将文档中从 `start` 起的原文 `old` 替换为 `new`。
-    ///
-    /// 只替换不同的部分，光标移到 `new` 中的 `caret` 处（字节偏移）。随后的重排中各块滑动到
-    /// 新位置。
-    pub(super) fn replace_live_text(
-        &mut self,
-        start: usize,
-        old: &str,
-        new: &str,
-        caret: usize,
-    ) -> bool {
-        self.preview.markdown.slide = true;
-        let prefix = old
-            .char_indices()
-            .zip(new.chars())
-            .find(|((_, a), b)| a != b)
-            .map_or(old.len().min(new.len()), |((i, _), _)| i);
-        let suffix = old[prefix..]
-            .chars()
-            .rev()
-            .zip(new[prefix..].chars().rev())
-            .take_while(|(a, b)| a == b)
-            .map(|(a, _)| a.len_utf8())
-            .sum::<usize>();
-        let Some(doc) = self.editor.active_mut() else {
-            return false;
-        };
-        let Some(rope) = doc.text().rope() else {
-            return false;
-        };
-        let (a, b) = (
-            rope.byte_to_char(start + prefix),
-            rope.byte_to_char(start + old.len() - suffix),
-        );
-        let previous_revision = doc.revision;
-        doc.collapse_selections();
-        doc.selection = winc_core::Selection::new(a, b);
-        self.run_source_edit(winc_editor::Command::Insert(
-            new[prefix..new.len() - suffix].to_owned(),
-        ));
-        if let Some(doc) = self.editor.active_mut()
-            && let Some(rope) = doc.text().rope()
-        {
-            let at = rope.byte_to_char((start + caret).min(rope.len_bytes()));
-            doc.selection = winc_core::Selection::point(at);
-            if doc.revision != previous_revision {
-                self.preview
-                    .markdown
-                    .live
-                    .record_table_edit(doc.id, doc.revision);
-            }
-        }
+        self.apply_edit_plan(plan, true);
         self.finish_live_edit();
         true
     }
@@ -205,12 +155,8 @@ impl App {
         ])
     }
 
-    /// 光标在表格的单元格中时，按 Tab、⇧Tab、回车切换单元格（见 `winc_preview::markdown::cells`）。
-    ///
-    /// 选中目标单元格的内容，随后的输入将替换该内容；在最后一行继续向下时新增一行。不在表格
-    /// 中、或位于表头下方的分隔行时返回 `false`，交给编辑区处理（缩进、换行）。
+    /// 光标在表格的单元格中时，按 Tab、⇧Tab、回车切换单元格。
     pub(super) fn live_table_step(&mut self, step: winc_preview::markdown::cells::Step) -> bool {
-        use winc_preview::markdown::cells;
         let Some(live) = self.live_leaf().filter(|l| l.table) else {
             return false;
         };
@@ -220,21 +166,13 @@ impl App {
         let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
             return false;
         };
-        if !(live.leaf.start..=live.leaf.end).contains(&caret) {
-            return false;
-        }
-        let text = rope.byte_slice(live.leaf.clone()).to_string();
-        let Some(target) = cells::step(&text, caret - live.leaf.start, step) else {
+        let Some(plan) = commands::plan_table_step(rope, &live, caret, step) else {
             return false;
         };
-        let mut select = target.select;
-        if let Some((at, row)) = target.insert {
+        let mut select = plan.select_bytes;
+        if let Some((pos, row)) = plan.insert {
             let before = rope.len_bytes();
-            let at = live.leaf.start + at;
-            if let Some(doc) = self.editor.active_mut()
-                && let Some(rope) = doc.text().rope()
-            {
-                let pos = rope.byte_to_char(at);
+            if let Some(doc) = self.editor.active_mut() {
                 doc.collapse_selections();
                 doc.selection = winc_core::Selection::point(pos);
             }
@@ -252,7 +190,8 @@ impl App {
         if let Some(doc) = self.editor.active_mut()
             && let Some(rope) = doc.text().rope()
         {
-            let char_at = |b: usize| rope.byte_to_char((live.leaf.start + b).min(rope.len_bytes()));
+            let char_at =
+                |b: usize| rope.byte_to_char((plan.leaf_start_byte + b).min(rope.len_bytes()));
             let (a, b) = (char_at(select.start), char_at(select.end));
             doc.goal_cell = None;
             doc.collapse_selections();
@@ -264,115 +203,38 @@ impl App {
         true
     }
 
-    /// 处理正文（段落、标题、块之间的空行）中的回车：另起一段、列表续一项、空项退出一层；
-    /// 按住 ⇧ 时段内换行（见 `winc_preview::markdown::enter`）。
-    ///
-    /// 光标在代码块、公式、表格、HTML 块中时返回 `false`，按编辑区的方式换行并保持缩进。
-    /// 有选区时先替换选区：光标之前的文字截至选区开头，之后的文字从选区末尾算起。
+    /// 处理正文中的回车：另起一段、列表续一项、空项退出一层；按住 ⇧ 时段内换行。
     pub(super) fn live_enter(&mut self, shift: bool) -> bool {
-        use winc_preview::markdown::enter::{self, NextLine};
         if !shift && let Some(handled) = self.live_fence() {
             return handled;
         }
         let leaf = self.live_leaf();
-        if leaf.as_ref().is_some_and(|l| !l.prose) {
-            return false;
-        }
+        let operation = self.markdown_operation_range();
         let Some(doc) = self.editor.active() else {
             return false;
         };
         let Some(rope) = doc.text().rope() else {
             return false;
         };
-        let chars = rope.len_chars();
-        let selection = self
-            .markdown_operation_range()
-            .unwrap_or_else(|| doc.selection.range());
-        let (from, to) = (selection.start.min(chars), selection.end.min(chars));
-        let (from, to) = (rope.char_to_byte(from), rope.char_to_byte(to));
-        let line_of = |at: usize| rope.byte_to_line(at);
-        let line_text = |line: usize| {
-            let text = rope.line(line).to_string();
-            text.trim_end_matches(['\n', '\r']).to_owned()
+        let Some(plan) = commands::plan_enter(
+            rope,
+            leaf.as_ref(),
+            doc.selection,
+            operation,
+            shift,
+            doc.line_ending,
+        ) else {
+            return false;
         };
-        let start = rope.line_to_byte(line_of(from));
-        let before = rope.byte_slice(start..from).to_string();
-        let to_line = line_of(to);
-        let rest = line_text(to_line);
-        let after = rest[(to - rope.line_to_byte(to_line)).min(rest.len())..].to_owned();
-        let (edit, trailing) = if shift {
-            (enter::hard_break(&before), "")
-        } else {
-            let next_line = to_line + 1;
-            let next = if next_line >= rope.len_lines()
-                || rope.line(next_line).chars().all(char::is_whitespace)
-            {
-                NextLine::BlankOrEnd
-            } else if leaf.as_ref().is_some_and(|leaf| {
-                leaf.leaf.contains(&to) && rope.line_to_byte(next_line) < leaf.leaf.end
-            }) {
-                NextLine::Continuation
-            } else {
-                NextLine::Block
-            };
-            let first = line_of(from);
-            let above: Vec<String> = (first.saturating_sub(200)..first)
-                .rev()
-                .map(line_text)
-                .collect();
-            enter::enter(&before, &after, next, above.iter().map(String::as_str))
-        };
-        let a = from - edit.before;
-        let b = if edit.after > after.len() && to_line + 1 < rope.len_lines() {
-            // `enter` works on logical lines. Consume the whole physical line ending (LF or CRLF).
-            rope.line_to_byte(to_line + 1)
-        } else {
-            (to + edit.after).min(rope.len_bytes())
-        };
-        // 有序列表中续出一项：其后同一层各项的序号顺延，与新增的一项在同一次修改中完成，
-        // 撤销一步即可恢复。
-        let item = edit.text.rsplit('\n').next().unwrap_or_default();
-        let below = (to_line + 1..rope.len_lines()).map(line_text);
-        let changes = if shift || !edit.text.contains('\n') {
-            Vec::new()
-        } else {
-            enter::renumber(item, below)
-        };
-        let mut text = edit.text.clone();
-        text.push_str(trailing);
-        let mut end = b;
-        for (i, range, number) in changes {
-            let start = rope.line_to_byte(to_line + 1 + i);
-            text.push_str(&rope.byte_slice(end..start + range.start).to_string());
-            text.push_str(&number.to_string());
-            end = start + range.end;
-        }
-        let (a, b) = (rope.byte_to_char(a), rope.byte_to_char(end));
         let previous_revision = doc.revision;
-        let opens_empty_paragraph =
-            a == b && doc.selection.is_empty() && after.is_empty() && edit.text == "\n\n";
-        if text.len() > edit.text.len() || selection != doc.selection.range() {
-            // 保留右侧的块边界或同次更新后续列表项时，光标停在插入文本中间。随事务记录该位置，
-            // 重做后也回到这里。新换行按文档风格写，后续列表中复制的文字保持原样。
-            if !doc.fits_edit(a, b) {
+        let start = plan.replace.start;
+        let opens_empty = plan.opens_empty_paragraph;
+        let trailing = plan.trailing_len;
+        if plan.explicit_transaction {
+            if !doc.fits_edit(plan.replace.start, plan.replace.end) {
                 return true;
             }
-            let ending = doc.line_ending.as_str();
-            let caret = a + edit.text.replace('\n', ending).chars().count();
-            let tail = edit.text.len() + trailing.len();
-            let mut inserted = text[..tail].replace('\n', ending);
-            inserted.push_str(&text[tail..]);
-            let change = winc_core::Change {
-                start: a,
-                removed: rope.slice(a..b).to_string(),
-                inserted,
-            };
-            let transaction = winc_core::Transaction::new(
-                vec![change],
-                doc.selection,
-                winc_core::Selection::point(caret),
-                winc_core::EditKind::Other,
-            );
+            let transaction = plan.into_transaction(rope, doc.selection, doc.line_ending);
             if let Some(doc) = self.editor.active_mut() {
                 doc.collapse_selections();
                 doc.goal_cell = None;
@@ -385,51 +247,30 @@ impl App {
         } else {
             if let Some(doc) = self.editor.active_mut() {
                 doc.collapse_selections();
-                doc.selection = winc_core::Selection::new(a, b);
+                doc.selection = winc_core::Selection::new(plan.replace.start, plan.replace.end);
             }
-            self.run_source_edit(winc_editor::Command::Insert(text));
+            self.run_source_edit(winc_editor::Command::Insert(plan.text));
         }
-        if opens_empty_paragraph {
-            self.remember_empty_paragraph(previous_revision, a, trailing.len());
+        if opens_empty {
+            self.remember_empty_paragraph(previous_revision, start, trailing);
         }
         self.finish_live_edit();
         true
     }
 
-    /// 补全闭围栏：在围栏行（```` ```rust ````、`$$`）末尾按回车时，光标移到两行围栏之间的空行。
-    ///
-    /// 已补全返回 `Some(true)`；已有闭围栏返回 `Some(false)`，直接交给普通换行。
-    /// 其他位置返回 `None`，继续判断段落和列表规则。按原文判断可覆盖后台解析尚未完成的情况。
+    /// 补全闭围栏：在围栏行末尾按回车时，光标移到两行围栏之间的空行。
     fn live_fence(&mut self) -> Option<bool> {
-        use winc_preview::markdown::enter::{self, Fence};
         let leaf = self.live_leaf();
         let doc = self.editor.active()?;
         let rope = doc.text().rope()?;
         if !doc.selection.is_empty() || !doc.extra_selections().is_empty() {
             return None;
         }
-        let caret = doc.selection.head.min(rope.len_chars());
-        let line = rope.char_to_line(caret);
-        if leaf.is_some_and(|l| !l.prose && rope.byte_to_line(l.leaf.start) != line) {
-            return None;
-        }
-        let byte = rope.char_to_byte(caret);
-        let start = rope.line_to_byte(line);
-        let before = rope.byte_slice(start..byte).to_string();
-        let text = |l: usize| {
-            let text = rope.line(l).to_string();
-            text.trim_end_matches(['\n', '\r']).to_owned()
-        };
-        let after = text(line)[byte - start..].to_owned();
-        if !before.contains(['`', '~', '$']) {
-            return None;
-        }
-        let below: Vec<String> = (line + 1..rope.len_lines()).map(text).collect();
-        let fence = enter::fence(&before, &after, below.iter().map(String::as_str))?;
-        let Fence::Open { head, tail } = fence else {
-            return Some(false);
-        };
-        // 分两次插入：换行符按文档的行尾风格生成，光标停在两段文字之间。
+        let (head, tail) =
+            match commands::plan_fence_enter(rope, leaf.as_ref(), doc.selection.head)? {
+                Some(pair) => pair,
+                None => return Some(false),
+            };
         self.run(winc_editor::Command::Insert(head));
         let at = self.editor.active().map(|d| d.selection.head);
         self.run(winc_editor::Command::Insert(tail));
@@ -443,104 +284,29 @@ impl App {
     }
 
     /// 按 Tab、⇧Tab 调整列表项的层级：缩进为上一项的子项，或退出一层。
-    ///
-    /// 规则见 `winc_preview::markdown::enter::shift`，光标和选区随该行移动，子项和续行随该项
-    /// 移动。不是列表项、有多个光标或选区跨行时返回 `false`，交给编辑区按普通缩进处理。
     pub(super) fn live_list_shift(&mut self, outdent: bool) -> bool {
-        if self.live_leaf().is_some_and(|l| !l.prose) {
-            return false;
-        }
+        let leaf = self.live_leaf();
         let Some(doc) = self.editor.active() else {
             return false;
         };
+        if !doc.extra_selections().is_empty() {
+            return false;
+        }
         let Some(rope) = doc.text().rope() else {
             return false;
         };
-        let chars = rope.len_chars();
-        let sel = doc.selection;
-        let line = rope.char_to_line(sel.head.min(chars));
-        if !doc.extra_selections().is_empty() || rope.char_to_line(sel.anchor.min(chars)) != line {
-            return false;
-        }
-        let line_text = |l: usize| {
-            let text = rope.line(l).to_string();
-            text.trim_end_matches(['\n', '\r']).to_owned()
-        };
-        let above: Vec<String> = (line.saturating_sub(200)..line)
-            .rev()
-            .map(line_text)
-            .collect();
-        let text = line_text(line);
-        let Some((range, indent)) =
-            winc_preview::markdown::enter::shift(&text, above.iter().map(String::as_str), outdent)
+        let Some(plan) = commands::plan_list_shift(rope, doc.selection, leaf.as_ref(), outdent)
         else {
             return false;
         };
-        if text[range.clone()] == indent {
-            return true;
+        if let Some(plan) = plan {
+            self.apply_edit_plan(plan, false);
+            self.finish_live_edit();
         }
-        // 替换的范围只含空格、Tab 和有序列表的序号，字节数等于字符数。
-        let start = rope.line_to_char(line);
-        let (a, b) = (start + range.start, start + range.end);
-        let moved = |c: usize| {
-            if c >= b {
-                (c + indent.len()).saturating_sub(range.len())
-            } else {
-                c.min(a + indent.len())
-            }
-        };
-        let after = winc_core::Selection::new(moved(sel.anchor), moved(sel.head));
-        // 子项和续行（缩进多于该项的各行）随该项移动同样的宽度，层级关系不变。
-        use winc_preview::markdown::enter::margins;
-        let (quote, old) = margins(&text);
-        let new = indent.len() - indent.trim_start_matches([' ', '\t']).len();
-        let mut lines = vec![format!(
-            "{}{indent}{}",
-            &text[..range.start],
-            &text[range.end..]
-        )];
-        let (mut last, mut blanks) = (line, 0);
-        for l in line + 1..rope.len_lines() {
-            let child = line_text(l);
-            if child.trim().is_empty() {
-                blanks += 1;
-                continue;
-            }
-            let (q, i) = margins(&child);
-            if q != quote || i <= old {
-                break;
-            }
-            lines.extend(std::iter::repeat_n(String::new(), blanks));
-            blanks = 0;
-            let (head, tail) = child.split_at(q);
-            lines.push(if new >= old {
-                format!("{head}{}{tail}", " ".repeat(new - old))
-            } else {
-                format!("{head}{}", &tail[(old - new).min(i)..])
-            });
-            last = l;
-        }
-        let (a, b, indent) = if last == line {
-            (a, b, indent)
-        } else {
-            (start, line_end(rope, last), lines.join("\n"))
-        };
-        if let Some(doc) = self.editor.active_mut() {
-            doc.selection = winc_core::Selection::new(a, b);
-        }
-        self.run_source_edit(winc_editor::Command::Insert(indent));
-        if let Some(doc) = self.editor.active_mut() {
-            doc.selection = after;
-        }
-        self.finish_live_edit();
         true
     }
 
-    /// 处理正文中的删除键：移除光标前的一层块标记（列表记号、任务框、引用的 `>`、标题的 `#`）。
-    ///
-    /// 规则见 `winc_preview::markdown::enter::backspace`。光标位于块的开头时删到上一块的末尾，
-    /// 两段正文合并为一段。有选区、有多个光标、位于代码块等块中、或光标前还有文字时返回
-    /// `false`，按普通删除处理。
+    /// 处理正文中的删除键。
     pub(super) fn live_backspace(&mut self) -> bool {
         if let Some(start) = self.property_body_start()
             && self
@@ -556,9 +322,7 @@ impl App {
         if let Some(done) = self.live_fenced_backspace() {
             return done;
         }
-        if self.live_leaf().is_some_and(|l| !l.prose) {
-            return false;
-        }
+        let leaf = self.live_leaf();
         let Some(doc) = self.editor.active() else {
             return false;
         };
@@ -568,87 +332,54 @@ impl App {
         if !doc.selection.is_empty() || !doc.extra_selections().is_empty() {
             return false;
         }
-        let caret = rope.char_to_byte(doc.selection.head.min(rope.len_chars()));
-        let line = rope.byte_to_line(caret);
-        let start = rope.line_to_byte(line);
-        let before = rope.byte_slice(start..caret).to_string();
-        let Some(edit) = winc_preview::markdown::enter::backspace(&before) else {
-            // 光标位于块的开头：预览中看不到光标前的缩进和块之间的空行，逐个删除时光标
-            // 看起来不动。一次删到上一行的末尾；隔着空行时与上一块合并。
-            if line == 0 || !before.trim().is_empty() {
-                return false;
-            }
-            let blank = |l: usize| rope.line(l).chars().all(char::is_whitespace);
-            if before.is_empty() && blank(line) && blank(line - 1) {
-                // On a run of empty rows, ordinary Backspace removes just one line ending.
-                return false;
-            }
-            let to = rope.byte_to_char(caret);
-            let from = if !blank(line - 1) {
-                // 同一段的续行：没有缩进时按普通删除合并两行。
-                if before.is_empty() {
-                    return false;
-                }
-                line_end(rope, line - 1)
-            } else {
-                let Some(above) = (0..line).rev().find(|&l| !blank(l)) else {
-                    return false;
-                };
-                let from = line_end(rope, above);
-                let Some(prose) = self.live_prose_at(rope.char_to_byte(from)) else {
-                    return false;
-                };
-                // 上一块是代码块、表格等时不合并：光标所在行有文字时只移动光标，移到上一块
-                // 内容的末尾（闭围栏的上一行、最后一个单元格的文字之后）。
-                if !prose && !blank(line) {
-                    let last = rope.line(above).to_string();
-                    let last = last.trim_end();
-                    let closed = self.preview.markdown.parsed.as_ref().and_then(|parsed| {
-                        let end = rope.char_to_byte(from);
-                        let i = parsed
-                            .leaves
-                            .partition_point(|leaf| leaf.range.start <= end);
-                        let leaf = parsed.leaves.get(i.checked_sub(1)?)?;
-                        if leaf.prose || leaf.table {
-                            return None;
-                        }
-                        fenced_lines(rope, leaf.range.clone())
-                            .filter(|f| f.closed && f.last == above)
-                    });
-                    let from = if let Some(fence) = closed {
-                        // Empty blocks have no content line; stay before the closing marker.
-                        line_end(rope, fence.last - 1)
-                    } else if let Some(cell) = last.strip_suffix('|') {
-                        from - (last.chars().count() - cell.trim_end().chars().count())
-                    } else {
-                        from
-                    };
-                    if let Some(doc) = self.editor.active_mut() {
-                        doc.selection = winc_core::Selection::point(from);
-                    }
-                    self.finish_live_edit();
-                    self.request_redraw();
-                    return true;
-                }
-                from
-            };
-            if let Some(doc) = self.editor.active_mut() {
-                doc.selection = winc_core::Selection::new(from, to);
-            }
-            self.run_source_edit(winc_editor::Command::Insert(String::new()));
-            self.finish_live_edit();
-            return true;
+        let checked = self
+            .preview
+            .markdown
+            .checked
+            .filter(|_| self.preview.markdown.doc == Some(doc.id));
+        let Some(action) = commands::plan_backspace(
+            rope,
+            self.preview.markdown.parsed.as_deref(),
+            leaf.as_ref(),
+            doc.selection.head,
+            doc.revision,
+            checked,
+        ) else {
+            return false;
         };
-        let (a, b) = (
-            rope.byte_to_char(caret - edit.before),
-            rope.byte_to_char(caret),
-        );
-        if let Some(doc) = self.editor.active_mut() {
-            doc.selection = winc_core::Selection::new(a, b);
-        }
-        self.run_source_edit(winc_editor::Command::Insert(edit.text));
-        self.finish_live_edit();
+        self.apply_backspace_action(action);
         true
+    }
+
+    fn apply_backspace_action(&mut self, action: BackspaceAction) {
+        match action {
+            BackspaceAction::Consume => {}
+            BackspaceAction::MoveCaret(pos) => {
+                if let Some(doc) = self.editor.active_mut() {
+                    doc.selection = winc_core::Selection::point(pos);
+                }
+                self.finish_live_edit();
+                self.request_redraw();
+            }
+            BackspaceAction::Replace {
+                range,
+                insert,
+                caret,
+            } => {
+                if let Some(doc) = self.editor.active_mut() {
+                    doc.collapse_selections();
+                    doc.selection = winc_core::Selection::new(range.start, range.end);
+                }
+                self.run_source_edit(winc_editor::Command::Insert(insert));
+                if let Some(pos) = caret
+                    && let Some(doc) = self.editor.active_mut()
+                {
+                    doc.selection = winc_core::Selection::point(pos);
+                }
+                self.finish_live_edit();
+                self.request_redraw();
+            }
+        }
     }
 
     fn backspace_empty_paragraph(&mut self) -> bool {
@@ -677,7 +408,6 @@ impl App {
         ) {
             return false;
         }
-
         let doc_id = doc.id;
         self.preview
             .markdown
@@ -690,18 +420,12 @@ impl App {
         true
     }
 
-    /// 处理正文末尾的向前删除键：光标位于块的最后一行末尾、其后隔着空行时，与下一块合并。
-    ///
-    /// 预览中不显示块之间的空行，逐个删除换行符时内容不变化。下一块不是正文（代码块、表格等）
-    /// 时不合并，光标移到下一块的开头。有选区、有多个光标、光标不在行尾、或解析结果不是当前
-    /// 版本时返回 `false`，按普通删除处理。
+    /// 处理正文末尾的向前删除键。
     pub(super) fn live_delete(&mut self) -> bool {
         if self.live_fenced_delete() {
             return true;
         }
-        if self.live_leaf().is_none_or(|l| !l.prose) {
-            return false;
-        }
+        let leaf = self.live_leaf();
         let Some(doc) = self.editor.active() else {
             return false;
         };
@@ -711,108 +435,81 @@ impl App {
         if !doc.selection.is_empty() || !doc.extra_selections().is_empty() {
             return false;
         }
-        let head = doc.selection.head.min(rope.len_chars());
-        let line = rope.char_to_line(head);
-        let blank = |l: usize| rope.line(l).chars().all(char::is_whitespace);
-        if head != line_end(rope, line) || line + 1 >= rope.len_lines() || !blank(line + 1) {
-            return false;
-        }
-        let Some(below) = (line + 1..rope.len_lines()).find(|&l| !blank(l)) else {
+        let checked = self
+            .preview
+            .markdown
+            .checked
+            .filter(|_| self.preview.markdown.doc == Some(doc.id));
+        let Some(action) = commands::plan_delete(
+            rope,
+            self.preview.markdown.parsed.as_deref(),
+            leaf.as_ref(),
+            doc.selection.head,
+            doc.revision,
+            checked,
+        ) else {
             return false;
         };
-        let to = rope.line_to_char(below) + self.live_hidden_prefix(below);
-        let Some(prose) = self.live_prose_at(rope.char_to_byte(to)) else {
-            return false;
-        };
-        if let Some(doc) = self.editor.active_mut() {
-            doc.selection = if prose {
-                winc_core::Selection::new(head, to)
-            } else {
-                winc_core::Selection::point(to)
-            };
+        match action {
+            DeleteAction::Consume => {}
+            DeleteAction::MoveCaret(pos) => {
+                if let Some(doc) = self.editor.active_mut() {
+                    doc.selection = winc_core::Selection::point(pos);
+                }
+                self.finish_live_edit();
+                self.request_redraw();
+            }
+            DeleteAction::Delete(range) => {
+                if let Some(doc) = self.editor.active_mut() {
+                    doc.selection = winc_core::Selection::new(range.start, range.end);
+                }
+                self.run_source_edit(winc_editor::Command::Insert(String::new()));
+                self.finish_live_edit();
+                self.request_redraw();
+            }
         }
-        if prose {
-            self.run_source_edit(winc_editor::Command::Insert(String::new()));
-        }
-        self.finish_live_edit();
-        self.request_redraw();
         true
     }
 
-    /// 处理正文中输入的空格：行首的任务框简写（`[]`、`-[]`、`- [`）换成任务项 `- [ ] `。
-    ///
-    /// 规则见 `winc_preview::markdown::enter::task`。不是简写、有选区、有多个光标、输入法
-    /// 正在组字、或光标位于代码块等块中时返回 `false`，按普通输入处理。
+    /// 处理正文中输入的空格（任务框简写转换为 `- [ ] `）。
     pub(super) fn live_space(&mut self) -> bool {
-        let composing = !self.preedit_at(Focus::Editor).is_empty();
-        if composing || self.live_leaf().is_some_and(|l| !l.prose) {
+        if !self.preedit_at(Focus::Editor).is_empty() {
             return false;
         }
+        let leaf = self.live_leaf();
         let Some(doc) = self.editor.active() else {
             return false;
         };
+        if !doc.extra_selections().is_empty() {
+            return false;
+        }
         let Some(rope) = doc.text().rope() else {
             return false;
         };
-        if !doc.selection.is_empty() || !doc.extra_selections().is_empty() {
-            return false;
-        }
-        let caret = rope.char_to_byte(doc.selection.head.min(rope.len_chars()));
-        let line = rope.byte_to_line(caret);
-        let text = rope.line(line).to_string();
-        let text = text.trim_end_matches(['\n', '\r']);
-        let at = (caret - rope.line_to_byte(line)).min(text.len());
-        let Some(edit) = winc_preview::markdown::enter::task(&text[..at], &text[at..]) else {
+        let Some(plan) = commands::plan_space_rule(rope, doc.selection, leaf.as_ref()) else {
             return false;
         };
-        let (a, b) = (
-            rope.byte_to_char(caret - edit.before),
-            rope.byte_to_char(caret + edit.after),
-        );
-        if let Some(doc) = self.editor.active_mut() {
-            doc.selection = winc_core::Selection::new(a, b);
-        }
-        self.run_source_edit(winc_editor::Command::Insert(edit.text));
+        self.apply_edit_plan(plan, false);
         self.finish_live_edit();
         true
     }
 
-    /// 处理正文中输入的 `` ` ``、`~`（`mark`）：输入后该行成为未闭合的开围栏时，立即在下一行
-    /// 补上闭围栏，光标留在开围栏之后，可以继续输入语言名。
-    ///
-    /// 未闭合的围栏会使其后的全部内容成为代码，补全之前整篇的外观都会改变。不构成开围栏、
-    /// 下方已有闭围栏、有选区、或光标位于代码块等块中时返回 `false`，按普通输入处理。
+    /// 处理正文中输入的 `` ` ``、`~`：自动补全闭围栏。
     pub(super) fn live_fence_char(&mut self, mark: &str) -> bool {
-        let composing = !self.preedit_at(Focus::Editor).is_empty();
-        if composing || self.live_leaf().is_some_and(|l| !l.prose) {
+        if !self.preedit_at(Focus::Editor).is_empty() {
             return false;
         }
+        let leaf = self.live_leaf();
         let Some(doc) = self.editor.active() else {
             return false;
         };
+        if !doc.extra_selections().is_empty() {
+            return false;
+        }
         let Some(rope) = doc.text().rope() else {
             return false;
         };
-        if !doc.selection.is_empty() || !doc.extra_selections().is_empty() {
-            return false;
-        }
-        let caret = rope.char_to_byte(doc.selection.head.min(rope.len_chars()));
-        let line = rope.byte_to_line(caret);
-        let text = |l: usize| {
-            let text = rope.line(l).to_string();
-            text.trim_end_matches(['\n', '\r']).to_owned()
-        };
-        let current = text(line);
-        let at = (caret - rope.line_to_byte(line)).min(current.len());
-        let typed = format!("{}{mark}", &current[..at]);
-        // 只在恰好输入第三个字符时补全：更长的围栏由回车补全。
-        if typed.len() - typed.trim_end_matches(mark).len() != 3 * mark.len() {
-            return false;
-        }
-        let below: Vec<String> = (line + 1..rope.len_lines()).map(text).collect();
-        let below = below.iter().map(String::as_str);
-        let fence = winc_preview::markdown::enter::fence(&typed, &current[at..], below);
-        let Some(winc_preview::markdown::enter::Fence::Open { tail, .. }) = fence else {
+        let Some(tail) = commands::plan_fence_char(rope, doc.selection, leaf.as_ref(), mark) else {
             return false;
         };
         self.run(winc_editor::Command::Insert(mark.to_owned()));
@@ -827,30 +524,7 @@ impl App {
         true
     }
 
-    /// 将围栏代码块 `fenced` 的全部各行替换为 `text`，光标放在其开头。
-    pub(super) fn replace_fenced(&mut self, fenced: &Fenced, text: String) {
-        let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
-            return;
-        };
-        let (a, b) = (rope.line_to_char(fenced.first), line_end(rope, fenced.last));
-        if let Some(doc) = self.editor.active_mut() {
-            doc.collapse_selections();
-            doc.selection = winc_core::Selection::new(a, b);
-        }
-        self.run_source_edit(winc_editor::Command::Insert(text));
-        if let Some(doc) = self.editor.active_mut() {
-            doc.selection = winc_core::Selection::point(a);
-        }
-        self.finish_live_edit();
-        self.request_redraw();
-    }
-
-    /// 处理围栏代码块、公式中的删除键，返回是否已处理；不属于以下情形时为 `None`。
-    ///
-    /// 逐字删除围栏会使代码块失去一侧的围栏，其后的全部内容成为代码。因此：
-    /// - 光标在内容第一行的开头：空的代码块整块删除，有内容时不删除。
-    /// - 光标在不带语言名的开围栏上：空的代码块整块删除，有内容时移除两行围栏、保留内容。
-    /// - 光标在闭围栏上：空的代码块整块删除，有内容时光标移到内容的末尾。
+    /// 处理围栏代码块、公式中的删除键。
     pub(super) fn live_fenced_backspace(&mut self) -> Option<bool> {
         let fenced = self.live_fenced()?;
         let doc = self.editor.active()?;
@@ -858,41 +532,12 @@ impl App {
         if !doc.selection.is_empty() || !doc.extra_selections().is_empty() {
             return None;
         }
-        let head = doc.selection.head.min(rope.len_chars());
-        let line = rope.char_to_line(head);
-        let col = head - rope.line_to_char(line);
-        let on_close = fenced.closed && line == fenced.last;
-        let on_open = line == fenced.first && fenced.bare && col > 0;
-        let at_start = line == fenced.first + 1 && col == 0;
-        if !on_close && !on_open && !at_start {
-            return None;
-        }
-        if fenced.empty {
-            self.replace_fenced(&fenced, String::new());
-        } else if on_close {
-            let end = line_end(rope, fenced.last - 1);
-            if let Some(doc) = self.editor.active_mut() {
-                doc.selection = winc_core::Selection::point(end);
-            }
-            self.request_redraw();
-        } else if on_open {
-            let lines: Vec<String> = fenced
-                .content
-                .clone()
-                .map(|l| {
-                    let text = rope.line(l).to_string();
-                    text.trim_end_matches(['\n', '\r']).to_owned()
-                })
-                .collect();
-            self.replace_fenced(&fenced, lines.join("\n"));
-        }
+        let action = commands::plan_fenced_backspace(rope, &fenced, doc.selection.head)?;
+        self.apply_backspace_action(action);
         Some(true)
     }
 
-    /// 处理围栏代码块、公式中的向前删除键，返回是否已处理。
-    ///
-    /// 光标在开围栏的末尾、或内容最后一行的末尾时不删除：删除其后的换行符会使内容与围栏
-    /// 连成一行，代码块失去一侧的围栏。
+    /// 处理围栏代码块、公式中的向前删除键。
     pub(super) fn live_fenced_delete(&mut self) -> bool {
         let Some(fenced) = self.live_fenced() else {
             return false;
@@ -906,14 +551,10 @@ impl App {
         if !doc.selection.is_empty() || !doc.extra_selections().is_empty() {
             return false;
         }
-        let head = doc.selection.head.min(rope.len_chars());
-        let line = rope.char_to_line(head);
-        let before_close = fenced.closed && line + 1 == fenced.last;
-        head == line_end(rope, line) && (line == fenced.first || before_close)
+        commands::fenced_delete_blocked(rope, &fenced, doc.selection.head)
     }
 
-    /// 在光标所在的围栏代码块、公式之后另起一段，光标移到新的一段；光标不在已闭合的这类
-    /// 块中时返回 `false`。
+    /// 在光标所在的围栏代码块、公式之后另起一段。
     pub(super) fn live_leave_fenced(&mut self) -> bool {
         let Some(fenced) = self.live_fenced().filter(|f| f.closed) else {
             return false;
@@ -943,86 +584,31 @@ impl App {
         let Some(rope) = doc.text().rope() else {
             return false;
         };
-        let (a, b) = (doc.selection.from(), doc.selection.to());
-        let line = rope.char_to_line(a);
-        if rope.char_to_line(b) != line {
-            return false;
-        }
-        match self.markdown_live().then(|| self.live_leaf()).flatten() {
-            Some(leaf) if leaf.table => {
-                let start = rope.line_to_byte(line);
-                let (a, b) = (rope.char_to_byte(a) - start, rope.char_to_byte(b) - start);
-                let text = rope.line(line).to_string();
-                let text = text.trim_end_matches(['\n', '\r']);
-                !markdown::cells::is_delimiter(text)
-                    && markdown::cells::cells(text)
-                        .into_iter()
-                        .any(|c| c.segment.start <= a && b <= c.segment.end)
-            }
-            Some(leaf) => leaf.prose,
-            None => true,
-        }
+        let leaf = self.markdown_live().then(|| self.live_leaf()).flatten();
+        commands::inline_format_available(rope, doc.selection, leaf.as_ref())
     }
 
-    /// 对选区切换行内格式的标记 `mark`（`**`、`*`、`` ` ``、`~~`、`==`），规则见
-    /// `winc_preview::markdown::format::toggle`。
-    ///
-    /// 只处理一行之内的单个选区；选区跨行、有多个光标、或光标位于代码块、公式等按原文显示的
-    /// 块中时不修改。
+    /// 对选区切换行内格式的标记 `mark`（`**`、`*`、`` ` ``、`~~`、`==`）。
     pub(in crate::app) fn live_format(&mut self, mark: &str) {
         self.parse_markdown_inline();
         if !self.inline_format_available() {
             return;
         }
+        let leaf = self.markdown_live().then(|| self.live_leaf()).flatten();
         let Some(doc) = self.editor.active() else {
-            return;
-        };
-        let Some(rope) = doc.text().rope() else {
             return;
         };
         if !doc.extra_selections().is_empty() {
             return;
         }
-        let chars = rope.len_chars();
-        let (from, to) = (
-            doc.selection.from().min(chars),
-            doc.selection.to().min(chars),
-        );
-        let line = rope.char_to_line(from);
-        if rope.char_to_line(to) != line {
+        let Some(rope) = doc.text().rope() else {
             return;
-        }
-        let start = rope.line_to_byte(line);
-        let text = rope.line(line).to_string();
-        let text = text.trim_end_matches(['\n', '\r']);
-        let local = |c: usize| (rope.char_to_byte(c) - start).min(text.len());
-        let t = winc_preview::markdown::format::toggle(text, local(from)..local(to), mark);
-        // 修改只涉及这一行：行首之前的字符数不变，行内的位置按修改之后的文字换算。
-        let first = rope.line_to_char(line);
-        let chars_to = |text: &str, byte: usize| first + text[..byte].chars().count();
-        let (a, b) = (chars_to(text, t.range.start), chars_to(text, t.range.end));
-        let edited = format!(
-            "{}{}{}",
-            &text[..t.range.start],
-            t.text,
-            &text[t.range.end..]
-        );
-        let select = (
-            chars_to(&edited, t.select.start),
-            chars_to(&edited, t.select.end),
-        );
-        let changed = a != b || !t.text.is_empty();
-        if let Some(doc) = self.editor.active_mut() {
-            doc.collapse_selections();
-            doc.selection = winc_core::Selection::new(a, b);
-        }
-        if changed {
-            // 按粘贴处理：整段替换，不触发输入单个字符时的括号、引号配对。
-            self.run_source_edit(winc_editor::Command::Paste(t.text));
-        }
-        if let Some(doc) = self.editor.active_mut() {
-            doc.selection = winc_core::Selection::new(select.0, select.1);
-        }
+        };
+        let Some(plan) = commands::plan_inline_format(rope, doc.selection, leaf.as_ref(), mark)
+        else {
+            return;
+        };
+        self.apply_edit_plan(plan, false);
         self.finish_live_edit_reset_line();
         self.reset_blink();
         self.request_redraw();

@@ -44,7 +44,8 @@ mod writing;
 pub(crate) use laid::{Fading, LiveLeaf, Moves};
 pub(crate) use scroll::TocListLayout;
 pub(crate) use viewer::{DiagramLaid, DiagramTool, DiagramView, MAX_ZOOM, MIN_ZOOM};
-pub(crate) use writing::paragraph_lines;
+pub(crate) use winc_richtext::paragraph_lines;
+use winc_richtext::{LiveState, in_fence, line_end};
 
 /// docx、EPUB 包中的图片：Markdown 中引用的地址和图片文件的内容。
 type Media = Vec<(String, Arc<[u8]>)>;
@@ -177,7 +178,7 @@ pub(crate) struct MarkdownPreview {
     /// 可编辑预览中拖动选择文字的状态。
     live_drag: Option<live_selection::LiveDrag>,
     /// 可编辑预览的交互与导航状态（空段收回、目标列、折行归属、编辑态和光标跟随）。
-    pub(crate) live: live_caret::LiveState,
+    pub(crate) live: LiveState<DocumentId>,
     /// 下一次重排时各块滑动到新位置（见 [`BlockMotion`]）：表格工具增删行列后置位。
     ///
     /// 输入文字引起的重排不滑动，内容直接到位。
@@ -295,7 +296,7 @@ impl Default for MarkdownPreview {
             find_serial: 0,
             synced: None,
             live_drag: None,
-            live: live_caret::LiveState::default(),
+            live: LiveState::default(),
             slide: false,
             align: None,
             motion: None,
@@ -382,69 +383,6 @@ impl MarkdownPreview {
         self.failed = None;
         self.contents = None;
     }
-}
-
-/// 光标所在的围栏代码块或 `$$` 公式，见 [`App::live_fenced`]。
-struct Fenced {
-    /// 开围栏所在的行号。
-    first: usize,
-    /// 该块最后一行的行号：已闭合时为闭围栏。
-    last: usize,
-    /// 是否有闭围栏。
-    closed: bool,
-    /// 开围栏是否只有围栏字符，不带语言名。
-    bare: bool,
-    /// 内容是否为空（没有行，或各行均为空白）。
-    empty: bool,
-    /// 内容各行的行号。
-    content: std::ops::Range<usize>,
-}
-
-/// 返回第 `line` 行末尾（换行符之前）的位置（字符偏移）。
-fn line_end(rope: &ropey::Rope, line: usize) -> usize {
-    let text = rope.line(line);
-    let ending = text
-        .chars_at(text.len_chars())
-        .reversed()
-        .take_while(|c| matches!(c, '\n' | '\r'))
-        .count();
-    rope.line_to_char(line) + text.len_chars() - ending
-}
-
-/// `lines` 中的各行结束后是否处于围栏代码块内。
-///
-/// 依据 `CommonMark` 统计开、闭围栏：行首最多 3 个空格，之后为至少 3 个反引号或波浪号；
-/// 闭围栏与开围栏字符相同、长度不短于开围栏，且其后没有其他字符。
-fn in_fence<'a>(lines: impl Iterator<Item = ropey::RopeSlice<'a>>) -> bool {
-    let mut open: Option<(u8, usize)> = None;
-    for line in lines {
-        // 一行在 rope 的同一块里时不复制。
-        let text = std::borrow::Cow::<str>::from(line);
-        let text = text.trim_end_matches(['\n', '\r']);
-        let trimmed = text.trim_start_matches(' ');
-        if text.len() - trimmed.len() > 3 {
-            continue;
-        }
-        let Some(&mark) = trimmed
-            .as_bytes()
-            .first()
-            .filter(|b| matches!(b, b'`' | b'~'))
-        else {
-            continue;
-        };
-        let run = trimmed.bytes().take_while(|&b| b == mark).count();
-        if run < 3 {
-            continue;
-        }
-        match open {
-            None if mark == b'~' || !trimmed[run..].contains('`') => open = Some((mark, run)),
-            Some((m, n)) if m == mark && run >= n && trimmed[run..].trim().is_empty() => {
-                open = None
-            }
-            _ => {}
-        }
-    }
-    open.is_some()
 }
 
 impl App {

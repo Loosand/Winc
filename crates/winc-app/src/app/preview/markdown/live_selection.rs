@@ -244,7 +244,7 @@ impl App {
             let leaf = [base + part.start, base + part.end - 1]
                 .into_iter()
                 .find_map(|at| {
-                    super::live_structure::leaf_at_or_before(parsed, at)
+                    winc_richtext::leaf_at_or_before(parsed, at)
                         .filter(|leaf| leaf.prose && leaf.range.contains(&at))
                 });
             let Some(leaf) = leaf else {

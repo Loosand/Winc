@@ -17,6 +17,7 @@ winc-syntax.workspace = true
 winc-render.workspace = true
 winc-editor.workspace = true
 winc-preview.workspace = true
+winc-richtext.workspace = true
 winc-typeset.workspace = true
 winc-vim.workspace = true
 winc-pty.workspace = true

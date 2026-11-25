@@ -24,6 +24,7 @@ winc-i18n = { path = "crates/winc-i18n" }
 winc-version = { path = "crates/winc-version" }
 winc-backend = { path = "crates/winc-backend" }
 winc-app = { path = "crates/winc-app" }
+winc-richtext = { path = "crates/winc-richtext" }
 winc-typeset = { path = "crates/winc-typeset" }
 winc-vim = { path = "crates/winc-vim" }
 winc-watch = { path = "crates/winc-watch" }

@@ -1,0 +1,20 @@
+[package]
+name = "winc-richtext"
+description = "Minc 富文本编辑器内核：文本坐标与位置映射、排版几何与双向定位、实时编辑会话与结构化编辑命令。不依赖窗口系统与应用层。"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+ropey.workspace = true
+winc-core.workspace = true
+winc-preview.workspace = true
+winc-render.workspace = true
+winc-syntax.workspace = true
+winc-typeset.workspace = true
+
+[lints]
+workspace = true

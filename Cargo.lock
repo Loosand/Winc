@@ -3586,6 +3586,7 @@ dependencies = [
  "winc-preview",
  "winc-pty",
  "winc-render",
+ "winc-richtext",
  "winc-syntax",
  "winc-typeset",
  "winc-version",
@@ -3715,6 +3716,18 @@ dependencies = [
  "winc-emoji",
  "windows-sys 0.59.0",
  "winit",
+]
+
+[[package]]
+name = "winc-richtext"
+version = "0.0.0"
+dependencies = [
+ "ropey",
+ "winc-core",
+ "winc-preview",
+ "winc-render",
+ "winc-syntax",
+ "winc-typeset",
 ]
 
 [[package]]
