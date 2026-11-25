@@ -136,6 +136,38 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
     if settings::draw_cached(app, frame) || settings::draw_scrolling(app, frame) {
         return;
     }
+    // 模态对话框或提示框稳定打开期间，若仅模态自身状态变化（悬停、勾选、切焦点、输入框选区），
+    // 直接恢复底下的静态主区快照，跳过整个侧栏、编辑区排版与状态栏的 CPU 重绘。
+    let dialog_open = app.overlays.form_dialog.is_some();
+    let alert_open = app.overlays.alert.is_some();
+    let modal_static = (dialog_open || alert_open)
+        && !app.settings.open
+        && app.settings.motion.is_none()
+        && app.motion.dialog_card.motion.is_none()
+        && app.motion.alert_card.motion.is_none()
+        && app.notice.leaving.is_none()
+        && app.popup().is_none()
+        && !app.animating();
+    if modal_static
+        && app
+            .frame
+            .backdrop
+            .restore(frame, frame.bounds(), &(), Color::hex(0).alpha(0.0))
+    {
+        frame.end_wallpaper();
+        if dialog_open {
+            app.overlays.tooltip.link.take();
+            dialog::draw(app, frame);
+            draw_modal(app, frame);
+        } else {
+            draw_modal(app, frame);
+            app.overlays.tooltip.link.take();
+        }
+        return;
+    }
+    if !dialog_open && !alert_open {
+        app.frame.backdrop.clear();
+    }
     app.hits.clear();
     frame.base(&base(app));
     let layout = app.layout;
@@ -263,8 +295,13 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
     draw_tab_drag(app, frame);
 
     // 新建工作树对话框覆盖整个窗口，打开时同样不绘制悬停提示。
-    let dialog_open = app.overlays.form_dialog.is_some();
     app.track_card(Card::Dialog, dialog_open);
+    if modal_static
+        && app.motion.dialog_card.motion.is_none()
+        && app.motion.alert_card.motion.is_none()
+    {
+        app.frame.backdrop.capture(frame, frame.bounds(), ());
+    }
     dialog::draw_ghost(app, frame);
     if dialog_open {
         app.overlays.tooltip.link.take();
@@ -1078,16 +1115,7 @@ fn center(rect: Rect) -> (f32, f32) {
     (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
 }
 
-/// 对话框、提示框底部按钮的种类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ButtonRole {
-    /// 主按钮：强调色实底、白色文字，按回车等同于点击该按钮。
-    Primary,
-    /// 其他按钮：浅灰底。
-    Normal,
-    /// 危险操作（如「不保存」）：浅灰底，文字用错误色。
-    Destructive,
-}
+use crate::ui::widgets::ButtonKind as ButtonRole;
 
 /// 绘制对话框、提示框底部的一个按钮，文字居中。
 ///

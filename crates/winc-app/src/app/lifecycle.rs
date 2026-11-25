@@ -42,6 +42,8 @@ pub(crate) struct FrameState {
     presented: usize,
     /// 是否需要重新绘制。
     pub(in crate::app) dirty: bool,
+    /// 静态底层主区的像素快照缓存：模态对话框/提示框或高频局部浮层刷新时复用，跳过主区重绘。
+    pub(crate) backdrop: crate::ui::SurfaceCache<()>,
 }
 
 /// 各字体的行高、基线等尺寸和字符格的宽度（逻辑像素），随字体设置和缩放比例更新。

@@ -222,6 +222,7 @@ impl App {
                 frame_log: crate::frame_log::FrameLog::from_env(),
                 presented: 0,
                 dirty: true,
+                backdrop: crate::ui::SurfaceCache::default(),
             },
             link: crate::app::lifecycle::AppLink {
                 proxy,

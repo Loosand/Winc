@@ -37,6 +37,7 @@ mod system;
 mod theme;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod trash;
+mod ui;
 #[cfg(not(target_os = "macos"))]
 mod updates;
 mod view;

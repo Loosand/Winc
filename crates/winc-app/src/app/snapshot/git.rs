@@ -139,7 +139,14 @@ fn press_alert(app: &mut App, button: usize) {
         app.poll_branch_ops();
         return;
     }
-    let rect = app.overlays.alert.as_ref().unwrap().parts.buttons[button];
+    let rect = app
+        .overlays
+        .alert
+        .as_ref()
+        .unwrap()
+        .hits
+        .rect_of(&crate::app::AlertPart::Button(button))
+        .unwrap();
     app.on_mouse_move(rect.x + 4.0, rect.y + 4.0);
     app.alert_mouse_down();
 }

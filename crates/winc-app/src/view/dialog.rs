@@ -5,6 +5,7 @@
 //! 置灰，原因显示在输入框右端（[`FormPlan`]）。`Tab` 焦点在名称以外的部件上时绘制强调色细线，
 //! `git` 执行期间主按钮显示「正在创建…」，`git` 拒绝时原因以错误色显示在底部按钮左侧。
 
+use std::borrow::Cow;
 use std::f32::consts::{FRAC_PI_2, PI};
 
 use winc_i18n::t;
@@ -13,6 +14,8 @@ use winc_render::{FontKind, Frame, Rect, Stroke};
 use super::*;
 use crate::app::git::form::{FormKind, FormPlan};
 use crate::layout::{DialogLayout, DialogPart, QUESTION_LINE_H, REBASE_PILL_W, REBASE_ROW_H};
+use crate::ui::widgets::{self, ButtonKind, ButtonSpec};
+use crate::ui::{self, TextAlign, TextBasis};
 
 /// 绘制对话框：遮罩，再绘制卡片（淡入途中按 [`draw_moving_card`] 整张叠上去）。
 pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
@@ -107,33 +110,8 @@ fn draw_card(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
     let card = layout.card;
     frame.rounded(card, p.editor_bg, RADIUS_CARD);
 
-    let header = layout.header;
-    let x = header.x + SETTINGS_PAD;
-    ui_text(frame, app, x, header, &title, p.text, card);
-    let close = layout.close;
-    draw_button(
-        frame,
-        p,
-        close,
-        card,
-        hover == Some(DialogPart::Close),
-        false,
-    );
-    icons::close(frame, center(close), 7.0, p.text_muted, close);
-
-    // 标签在名称列里右对齐，紧挨着输入框。
-    for (rect, text) in layout.labels.iter().zip(labels) {
-        let w = frame.measure(FontKind::Ui, app.fonts.ui, text);
-        ui_text(
-            frame,
-            app,
-            rect.right() - w,
-            *rect,
-            text,
-            p.text_muted,
-            card,
-        );
-    }
+    render_dialog_header(app, frame, layout.header, &title, hover);
+    render_right_labels(app, frame, &layout.labels, labels);
 
     draw_field(
         app,
@@ -191,36 +169,37 @@ fn draw_card(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
         }
     }
 
-    // 按下「创建」后 git 仍在执行时，主按钮显示「正在创建…」且不可再按；完成后才关闭对话框。
-    draw_action(
-        app,
-        frame,
-        layout.cancel,
-        t!("common-cancel"),
-        false,
-        true,
-        hover,
-    );
     // 待推送的提交：每个标题一行，没有列出的写明个数。
     if let Some((_, subjects, total)) = &push {
-        let block = layout.message;
-        let line = |i: usize| {
-            let y = block.y + i as f32 * crate::layout::QUESTION_LINE_H;
-            Rect::new(block.x, y, block.w, crate::layout::QUESTION_LINE_H)
-        };
-        for (i, subject) in subjects.iter().enumerate() {
-            let text = ellipsize(frame, subject, app.fonts.ui_small, block.w);
-            ui_text_small(frame, app, block.x, line(i), &text, p.text_muted, card);
-        }
         let rest = match (subjects.is_empty(), total - subjects.len().min(*total)) {
             (true, 0) => Some(t!("git-push-form-nothing").to_owned()),
             (_, 0) => None,
             (_, more) => Some(t!("git-push-confirm-more", count = more)),
         };
-        if let Some(rest) = rest {
-            let row = line(subjects.len());
-            ui_text_small(frame, app, block.x, row, &rest, p.text_dim, card);
-        }
+        let list = ui::vstack()
+            .w_full()
+            .h_full()
+            .overflow_hidden()
+            .children(subjects.iter().map(|subject| {
+                let text = ellipsize(frame, subject, app.fonts.ui_small, layout.message.w);
+                ui::text::<()>(text.into_owned())
+                    .w_full()
+                    .h(QUESTION_LINE_H)
+                    .text_size(app.fonts.ui_small)
+                    .line_height(QUESTION_LINE_H)
+                    .color(p.text_muted)
+            }))
+            .when_some(rest, |col, rest| {
+                col.child(
+                    ui::text::<()>(rest)
+                        .w_full()
+                        .h(QUESTION_LINE_H)
+                        .text_size(app.fonts.ui_small)
+                        .line_height(QUESTION_LINE_H)
+                        .color(p.text_dim),
+                )
+            });
+        let _ = ui::render(frame, text_basis(app), layout.message, list);
     }
 
     let (confirm, enabled) = match running {
@@ -228,10 +207,15 @@ fn draw_card(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
         true => (t!("common-dialog-creating"), false),
         false => (plan.confirm, plan.enabled),
     };
-    draw_action(app, frame, layout.confirm, confirm, true, enabled, hover);
-    if let Some(error) = error {
-        draw_error(app, frame, layout, &error);
-    }
+    render_dialog_footer(
+        app,
+        frame,
+        layout,
+        error.as_deref(),
+        confirm,
+        enabled,
+        hover,
+    );
 
     // 键盘焦点（经 `Tab` 移入）在名称以外的部件上时，部件外绘制一圈强调色细线；
     // 名称框有焦点时由输入框自行绘制外圈。
@@ -271,47 +255,23 @@ fn draw_question(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
     let card = layout.card;
     frame.rounded(card, p.editor_bg, RADIUS_CARD);
 
-    let header = layout.header;
-    ui_text(
-        frame,
-        app,
-        header.x + SETTINGS_PAD,
-        header,
-        &view.title,
-        p.text,
-        card,
-    );
-    let close = layout.close;
-    let closing = hover == Some(DialogPart::Close);
-    draw_button(frame, p, close, card, closing, false);
-    icons::close(frame, center(close), 7.0, p.text_muted, close);
+    render_dialog_header(app, frame, layout.header, &view.title, hover);
 
     if let Some(message) = &view.message {
         let area = layout.message;
-        let lines: Vec<&str> = (message.lines())
-            .flat_map(|line| super::git::log::wrap(frame, app.fonts.ui, line, area.w))
-            .take(view.message_lines)
-            .collect();
-        for (i, line) in lines.into_iter().enumerate() {
-            let y = area.y + i as f32 * QUESTION_LINE_H;
-            let row = Rect::new(area.x, y, area.w, QUESTION_LINE_H);
-            ui_text(frame, app, area.x, row, line, p.text_muted, area);
-        }
+        let msg = ui::vstack().w_full().h_full().overflow_hidden().child(
+            ui::text::<()>(message.as_str())
+                .w_full()
+                .text_size(app.fonts.ui)
+                .line_height(QUESTION_LINE_H)
+                .color(p.text_muted)
+                .wrap(),
+        );
+        let _ = ui::render(frame, text_basis(app), area, msg);
     }
 
     let labels = (view.values.iter().map(|v| v.label)).chain(view.inputs.iter().map(|i| i.label));
-    for (rect, text) in layout.labels.iter().zip(labels) {
-        let w = frame.measure(FontKind::Ui, app.fonts.ui, text);
-        ui_text(
-            frame,
-            app,
-            rect.right() - w,
-            *rect,
-            text,
-            p.text_muted,
-            card,
-        );
-    }
+    render_right_labels(app, frame, &layout.labels, labels);
     for (rect, value) in layout.values.iter().zip(&view.values) {
         let area = rect.inset(DIALOG_FIELD_INSET, 0.0);
         if value.mono {
@@ -331,7 +291,8 @@ fn draw_question(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
         draw_field(app, frame, rect, part, &plan, input.placeholder);
     }
     for &(_, row) in &layout.options {
-        draw_check_option(app, frame, row, t!("git-question-remember"), remember);
+        let check = widgets::checkbox(p, app.fonts.ui, t!("git-question-remember"), remember, ());
+        let _ = ui::render(frame, text_basis(app), row, check);
     }
     // 密钥文件右端选文件的按钮，样子同「位置」右端的目录按钮。
     if let Some(choose) = layout.choose {
@@ -342,28 +303,16 @@ fn draw_question(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
         let at = ((cx - 7.5).round(), (cy - 6.0).round());
         icons::folder(frame, at, false, p.text_dim, card);
     }
-    draw_action(
-        app,
-        frame,
-        layout.cancel,
-        t!("common-cancel"),
-        false,
-        true,
-        hover,
-    );
     let enabled = plan.enabled && !running;
-    draw_action(
+    render_dialog_footer(
         app,
         frame,
-        layout.confirm,
+        layout,
+        error.as_deref(),
         plan.confirm,
-        true,
         enabled,
         hover,
     );
-    if let Some(error) = error {
-        draw_error(app, frame, layout, &error);
-    }
     let ring = match focus {
         DialogPart::Change => layout.choose,
         DialogPart::Cancel => Some(layout.cancel),
@@ -396,21 +345,7 @@ fn draw_rebase(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
     let (hover, focus, plan) = (dialog.hover, dialog.focus, app.form_plan(dialog));
     let card = layout.card;
     frame.rounded(card, p.editor_bg, RADIUS_CARD);
-    let header = layout.header;
-    let title = t!("git-rebase-title");
-    ui_text(
-        frame,
-        app,
-        header.x + SETTINGS_PAD,
-        header,
-        title,
-        p.text,
-        card,
-    );
-    let close = layout.close;
-    let closing = hover == Some(DialogPart::Close);
-    draw_button(frame, p, close, card, closing, false);
-    icons::close(frame, center(close), 7.0, p.text_muted, close);
+    render_dialog_header(app, frame, layout.header, t!("git-rebase-title"), hover);
     if form.pushed > 0 {
         let warning = t!("git-rebase-pushed-warning", count = form.pushed);
         ui_text_small(
@@ -562,24 +497,7 @@ fn draw_rebase(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
     };
     let note = ellipsize(frame, &note, app.fonts.ui_small, row.w);
     ui_text_small(frame, app, left, row, &note, color, card);
-    draw_action(
-        app,
-        frame,
-        layout.cancel,
-        t!("common-cancel"),
-        false,
-        true,
-        hover,
-    );
-    draw_action(
-        app,
-        frame,
-        layout.confirm,
-        plan.confirm,
-        true,
-        plan.enabled,
-        hover,
-    );
+    render_dialog_buttons(app, frame, layout, plan.confirm, plan.enabled, hover);
     let ring = match focus {
         DialogPart::Cancel => Some(layout.cancel),
         DialogPart::Confirm => Some(layout.confirm),
@@ -606,34 +524,13 @@ fn draw_clone(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
     let (running, error) = (dialog.running.is_some(), dialog.error.clone());
     let card = layout.card;
     frame.rounded(card, p.editor_bg, RADIUS_CARD);
-    let header = layout.header;
-    let title = t!("git-clone-title");
-    ui_text(
-        frame,
+    render_dialog_header(app, frame, layout.header, t!("git-clone-title"), hover);
+    render_right_labels(
         app,
-        header.x + SETTINGS_PAD,
-        header,
-        title,
-        p.text,
-        card,
+        frame,
+        &layout.labels,
+        [t!("git-clone-url"), t!("common-dialog-location")],
     );
-    let close = layout.close;
-    let closing = hover == Some(DialogPart::Close);
-    draw_button(frame, p, close, card, closing, false);
-    icons::close(frame, center(close), 7.0, p.text_muted, close);
-    let labels = [t!("git-clone-url"), t!("common-dialog-location")];
-    for (rect, text) in layout.labels.iter().zip(labels) {
-        let w = frame.measure(FontKind::Ui, app.fonts.ui, text);
-        ui_text(
-            frame,
-            app,
-            rect.right() - w,
-            *rect,
-            text,
-            p.text_muted,
-            card,
-        );
-    }
     let placeholder = t!("git-clone-url-placeholder");
     draw_field(
         app,
@@ -646,25 +543,21 @@ fn draw_clone(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
     if let Some((rect, change)) = layout.location {
         draw_location(app, frame, layout, rect, change, &plan, false);
     }
-    draw_action(
-        app,
-        frame,
-        layout.cancel,
-        t!("common-cancel"),
-        false,
-        true,
-        hover,
-    );
     let confirm = if running {
         t!("git-clone-running")
     } else {
         plan.confirm
     };
     let enabled = plan.enabled && !running;
-    draw_action(app, frame, layout.confirm, confirm, true, enabled, hover);
-    if let Some(error) = error {
-        draw_error(app, frame, layout, &error);
-    }
+    render_dialog_footer(
+        app,
+        frame,
+        layout,
+        error.as_deref(),
+        confirm,
+        enabled,
+        hover,
+    );
     let ring = match focus {
         DialogPart::Change => layout.location.map(|(_, change)| change),
         DialogPart::Cancel => Some(layout.cancel),
@@ -699,35 +592,133 @@ fn focus_outline(frame: &mut Frame<'_>, rect: Rect, r: f32, color: Color, clip: 
     frame.stroke(&edges, 1.5, color, clip);
 }
 
-/// 以错误色小字在底部按钮左侧绘制创建失败的原因，最多两行，超出部分截短。
-fn draw_error(app: &App, frame: &mut Frame<'_>, layout: &DialogLayout, error: &str) {
+fn text_basis(app: &App) -> TextBasis {
+    TextBasis {
+        ui_size: app.fonts.ui,
+        x_height: app.metrics.ui.x_height,
+        cap_height: app.metrics.ui.cap_height,
+    }
+}
+
+/// 用声明式 [`widgets::dialog_header`] 绘制对话框标题栏与右上角关闭按钮。
+fn render_dialog_header(
+    app: &App,
+    frame: &mut Frame<'_>,
+    header: Rect,
+    title: &str,
+    hover: Option<DialogPart>,
+) {
+    let node = widgets::dialog_header(
+        app.palette,
+        app.fonts.ui,
+        title,
+        hover == Some(DialogPart::Close),
+        DialogPart::Close,
+    );
+    let _ = ui::render(frame, text_basis(app), header, node);
+}
+
+/// 用声明式右对齐文本绘制表单名称列。
+fn render_right_labels<'a>(
+    app: &App,
+    frame: &mut Frame<'_>,
+    rects: &[Rect],
+    labels: impl IntoIterator<Item = &'a str>,
+) {
     let p = app.palette;
-    let size = app.fonts.ui_small;
-    let left = layout.card.x + SETTINGS_PAD;
-    let room = (layout.cancel.x - 16.0 - left).max(0.0);
-    // 逐字符测量宽度，放不下时换行；第二行仍放不下时截短。
-    let text = error.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut lines = vec![String::new()];
-    let mut width = 0.0;
-    for c in text.chars() {
-        let w = frame.measure(FontKind::Ui, size, c.encode_utf8(&mut [0; 4]));
-        if width + w > room && lines.len() < 2 {
-            lines.push(String::new());
-            width = 0.0;
-        }
-        width += w;
-        if let Some(line) = lines.last_mut() {
-            line.push(c);
-        }
+    let basis = text_basis(app);
+    for (&rect, label) in rects.iter().zip(labels) {
+        let node = ui::text::<()>(label)
+            .w_full()
+            .h_full()
+            .text_size(app.fonts.ui)
+            .line_height(rect.h)
+            .color(p.text_muted)
+            .text_align(TextAlign::End);
+        let _ = ui::render(frame, basis, rect, node);
     }
-    let last = lines.len() - 1;
-    lines[last] = ellipsize(frame, &lines[last], size, room).into_owned();
-    let h = 16.0;
-    let top = layout.cancel.y + (layout.cancel.h - h * lines.len() as f32) / 2.0;
-    for (i, line) in lines.iter().enumerate() {
-        let row = Rect::new(left, top + i as f32 * h, room, h);
-        ui_text_small(frame, app, left, row, line, p.error, layout.card);
-    }
+}
+
+/// 用声明式 [`widgets::dialog_footer`] 绘制底部错误说明与「取消 / 确认」按钮组。
+fn render_dialog_footer(
+    app: &App,
+    frame: &mut Frame<'_>,
+    layout: &DialogLayout,
+    error: Option<&str>,
+    confirm: &str,
+    enabled: bool,
+    hover: Option<DialogPart>,
+) {
+    let footer_rect = Rect::new(
+        layout.card.x + SETTINGS_PAD,
+        layout.cancel.y,
+        (layout.confirm.right() - (layout.card.x + SETTINGS_PAD)).max(0.0),
+        layout.cancel.h,
+    );
+    let normalized = error.map(|e| Cow::Owned(e.split_whitespace().collect::<Vec<_>>().join(" ")));
+    let node = widgets::dialog_footer(
+        app.palette,
+        (app.fonts.ui, app.fonts.ui_small),
+        normalized,
+        ButtonSpec {
+            label: Cow::Borrowed(t!("common-cancel")),
+            kind: ButtonKind::Normal,
+            enabled: true,
+            hovered: hover == Some(DialogPart::Cancel),
+            action: DialogPart::Cancel,
+        },
+        ButtonSpec {
+            label: Cow::Borrowed(confirm),
+            kind: ButtonKind::Primary,
+            enabled,
+            hovered: hover == Some(DialogPart::Confirm),
+            action: DialogPart::Confirm,
+        },
+    );
+    let _ = ui::render(frame, text_basis(app), footer_rect, node);
+}
+
+/// 仅绘制右下角「取消 / 确认」按钮组（用于左侧已有自定义控件的变基对话框）。
+fn render_dialog_buttons(
+    app: &App,
+    frame: &mut Frame<'_>,
+    layout: &DialogLayout,
+    confirm: &str,
+    enabled: bool,
+    hover: Option<DialogPart>,
+) {
+    let rect = Rect::new(
+        layout.cancel.x,
+        layout.cancel.y,
+        (layout.confirm.right() - layout.cancel.x).max(0.0),
+        layout.cancel.h,
+    );
+    let node = ui::hstack()
+        .w_full()
+        .h_full()
+        .gap(8.0)
+        .items_center()
+        .child(widgets::action_button_with(
+            app.palette,
+            app.fonts.ui,
+            t!("common-cancel"),
+            ButtonKind::Normal,
+            true,
+            hover == Some(DialogPart::Cancel),
+            Some(layout.cancel.w),
+            DialogPart::Cancel,
+        ))
+        .child(widgets::action_button_with(
+            app.palette,
+            app.fonts.ui,
+            confirm,
+            ButtonKind::Primary,
+            enabled,
+            hover == Some(DialogPart::Confirm),
+            Some(layout.confirm.w),
+            DialogPart::Confirm,
+        ));
+    let _ = ui::render(frame, text_basis(app), rect, node);
 }
 
 /// 绘制 `part` 对应的输入框：有焦点时与设置中正在编辑的输入框相同，编辑区底色、外圈强调色。
@@ -833,28 +824,4 @@ fn draw_location(
     let (cx, cy) = center(change);
     let at = ((cx - 7.5).round(), (cy - 6.0).round());
     icons::folder(frame, at, false, p.text_dim, layout.card);
-}
-
-/// 绘制底部的一个按钮（见 [`draw_action_button`]）。
-fn draw_action(
-    app: &App,
-    frame: &mut Frame<'_>,
-    rect: Rect,
-    text: &str,
-    primary: bool,
-    enabled: bool,
-    hover: Option<DialogPart>,
-) {
-    let part = if primary {
-        DialogPart::Confirm
-    } else {
-        DialogPart::Cancel
-    };
-    let role = if primary {
-        ButtonRole::Primary
-    } else {
-        ButtonRole::Normal
-    };
-    let hovered = hover == Some(part);
-    draw_action_button(app, frame, rect, text, role, enabled, hovered);
 }

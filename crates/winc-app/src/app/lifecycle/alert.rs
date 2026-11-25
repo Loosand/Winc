@@ -75,8 +75,8 @@ pub(crate) struct InAppAlert {
     pub checked: bool,
     /// 鼠标停在的部分。
     pub hover: Option<AlertPart>,
-    /// 绘制时记下的几何。
-    pub parts: AlertParts,
+    /// 本帧声明式绘制产出的可点击命中表。
+    pub hits: crate::ui::HitMap<AlertPart>,
     done: AlertDone,
 }
 
@@ -98,25 +98,10 @@ pub(crate) enum AlertPart {
     Checkbox,
 }
 
-/// 提示框绘制时记下的几何。
-#[derive(Debug, Clone, Default)]
-pub(crate) struct AlertParts {
-    /// 各按钮，序号同 `buttons`。
-    pub buttons: Vec<Rect>,
-    /// 勾选框连同文字；没有勾选框时为 `None`。
-    pub checkbox: Option<Rect>,
-}
-
 impl InAppAlert {
     /// 点 `(x, y)` 落在哪个部分上。
     fn part_at(&self, x: f32, y: f32) -> Option<AlertPart> {
-        if let Some(i) = self.parts.buttons.iter().position(|r| r.contains(x, y)) {
-            return Some(AlertPart::Button(i));
-        }
-        self.parts
-            .checkbox
-            .filter(|r| r.contains(x, y))
-            .map(|_| AlertPart::Checkbox)
+        self.hits.at(x, y).copied()
     }
 
     /// 按键 `key`（`command` 为按着 ⌘，其他平台是 Ctrl）对应的按钮。
@@ -218,7 +203,7 @@ impl App {
             suppression: suppression.map(|(text, _)| text.to_owned()),
             checked: suppression.is_some_and(|(_, checked)| checked),
             hover: None,
-            parts: AlertParts::default(),
+            hits: crate::ui::HitMap::default(),
             done: Box::new(done),
         });
         self.set_hover(Hover::None);
@@ -264,7 +249,7 @@ impl App {
         let part = alert.part_at(x, y);
         if part != alert.hover {
             alert.hover = part;
-            self.request_redraw();
+            self.request_overlay_redraw();
         }
         true
     }
@@ -281,7 +266,7 @@ impl App {
             Some(AlertPart::Button(i)) => self.press_alert(i),
             Some(AlertPart::Checkbox) => {
                 alert.checked = !alert.checked;
-                self.request_redraw();
+                self.request_overlay_redraw();
             }
             None => {}
         }
@@ -300,7 +285,7 @@ impl App {
             self.press_alert(i);
         } else if *key == Key::Named(NamedKey::Space) && alert.suppression.is_some() {
             alert.checked = !alert.checked;
-            self.request_redraw();
+            self.request_overlay_redraw();
         }
         true
     }

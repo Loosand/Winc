@@ -849,9 +849,11 @@ fn alerts_without_a_system_dialog_are_drawn_in_the_window() {
 
     // 没有系统提示框：画在窗口里；第一个按钮在最右边，其余依次向左。
     ask(&mut app);
-    let parts = app.overlays.alert.as_ref().unwrap().parts.clone();
-    assert_eq!(parts.buttons.len(), 3);
-    assert!(parts.buttons[0].x > parts.buttons[1].x && parts.buttons[1].x > parts.buttons[2].x);
+    let hits = app.overlays.alert.as_ref().unwrap().hits.clone();
+    let b0 = hits.rect_of(&AlertPart::Button(0)).unwrap();
+    let b1 = hits.rect_of(&AlertPart::Button(1)).unwrap();
+    let b2 = hits.rect_of(&AlertPart::Button(2)).unwrap();
+    assert!(b0.x > b1.x && b1.x > b2.x);
     // 已经有提示框时不再弹第二个。
     assert!(!app.show_alert(
         "另一个",
@@ -862,19 +864,36 @@ fn alerts_without_a_system_dialog_are_drawn_in_the_window() {
     ));
 
     // 打开期间别的按键不处理；勾选框可以点，点按钮关掉提示框并处理它的事件。
+    // 同时验证：模态稳定打开后，仅悬停和勾选触发的重绘会命中底层静态主区快照（`backdrop.reuses()` 递增）。
     let center = |r: Rect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
-    let (x, y) = center(parts.checkbox.unwrap());
+    let (x, y) = center(hits.rect_of(&AlertPart::Checkbox).unwrap());
     app.on_mouse_move(x, y);
     assert_eq!(
         app.overlays.alert.as_ref().unwrap().hover,
         Some(AlertPart::Checkbox)
     );
+    let reuses_before = app.frame.backdrop.reuses();
+    paint(&mut app);
+    assert!(
+        app.frame.backdrop.reuses() > reuses_before,
+        "悬停提示框时应复用底层静态主区快照"
+    );
     app.on_mouse_down(MouseButton::Left);
     assert!(app.overlays.alert.as_ref().unwrap().checked);
-    let (x, y) = center(parts.buttons[0]);
+    paint(&mut app);
+    assert!(
+        app.frame.backdrop.reuses() > reuses_before + 1,
+        "切换勾选框时也应复用底层静态主区快照"
+    );
+    let (x, y) = center(b0);
     app.on_mouse_move(x, y);
     app.on_mouse_down(MouseButton::Left);
     assert!(app.overlays.alert.is_none());
+    paint(&mut app);
+    assert!(
+        !app.frame.backdrop.is_valid(),
+        "提示框关闭后应释放底层静态快照，避免常驻内存膨胀"
+    );
     assert!(app.settings.open);
     app.close_settings();
 
@@ -919,7 +938,14 @@ fn shoot_alert() {
             |_, _| None,
         );
         paint(&mut app);
-        let button = app.overlays.alert.as_ref().unwrap().parts.buttons[1];
+        let button = app
+            .overlays
+            .alert
+            .as_ref()
+            .unwrap()
+            .hits
+            .rect_of(&crate::app::AlertPart::Button(1))
+            .unwrap();
         app.on_mouse_move(button.x + 10.0, button.y + 10.0);
         shoot(&mut app, &format!("alert-{theme}"));
 

@@ -468,7 +468,7 @@ impl App {
     }
 
     /// 是否有动画正在进行，包括滚动条的淡入、淡出和变色。
-    pub(super) fn animating(&self) -> bool {
+    pub(crate) fn animating(&self) -> bool {
         self.panels.sidebar.motion.is_some()
             || self.panels.tree.motion.is_some()
             || (self

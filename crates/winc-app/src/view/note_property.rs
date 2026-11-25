@@ -1,15 +1,19 @@
 //! Compact property editors anchored to the value that opened them.
+//!
+//! 选择列表与日期日历浮层使用 [`crate::ui`] 声明式 Flexbox 布局构建，内嵌既有 `TextField`
+//! 输入槽，并自动产出日历按钮的命中区域。
 
 use super::*;
 use crate::app::Focus;
 use crate::app::git::branch::picker::PickerPart;
 use crate::app::preview::markdown::properties::popup::{
-    CALENDAR_FOOTER, CALENDAR_HEADER, CALENDAR_PAD, CALENDAR_WEEK, CALENDAR_WEEKDAYS, CalendarPart,
-    ChoiceRow, PropertyInput, PropertyPopup, first_weekday, today,
+    CALENDAR_FOOTER, CALENDAR_HEADER, CALENDAR_PAD, CALENDAR_WEEK, CALENDAR_WEEKDAYS, CHOICE_ROW,
+    CalendarPart, ChoiceRow, PropertyInput, PropertyPopup, first_weekday, today,
 };
 use crate::layout::PickerParts;
+use crate::ui::widgets;
+use crate::ui::{self, Node, TextAlign, TextBasis};
 use winc_preview::markdown::properties::{date_parts, days_in_month};
-use winc_render::Stroke;
 
 pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let rect = app.layout.picker;
@@ -61,150 +65,248 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
             return;
         }
     }
+
     let p = app.palette;
     draw_card(frame, p, rect, 8.0, p.popup_bg);
-    let popup = app.overlays.picker.property.as_ref().unwrap();
-    let parts = popup.parts(rect);
+    let basis = text_basis(app);
+    let parts = app
+        .overlays
+        .picker
+        .property
+        .as_ref()
+        .expect("property popup is open")
+        .parts(rect);
+
     if calendar {
-        app.hits
-            .picker_parts
-            .extend(draw_calendar(app, frame, popup, parts));
+        let popup = app
+            .overlays
+            .picker
+            .property
+            .as_ref()
+            .expect("property popup is open");
+        let hits = render_calendar(app, frame, basis, popup, parts);
+        app.hits.picker_parts.extend(hits);
         return;
     }
-    let shell = parts.bar.inset(6.0, 4.0);
-    frame.rect_clipped(
-        shell,
-        p.text.alpha(if p.dark { 0.075 } else { 0.047 }),
-        5.0,
-        rect,
-    );
-    let field = shell.inset(9.0, 0.0);
-    let mut text = std::mem::take(&mut app.overlays.picker.input);
-    app.ime.cursor = draw_bar_field(
-        app,
-        frame,
-        field,
-        &mut text,
-        placeholder,
-        app.focus == Focus::Picker,
-    );
-    app.overlays.picker.input = text;
-    frame.rect_clipped(
-        Rect::new(rect.x + 1.0, parts.bar.bottom(), rect.w - 2.0, 1.0),
-        p.border,
-        0.0,
-        rect,
-    );
-    draw_choices(
-        app,
-        frame,
-        app.overlays.picker.property.as_ref().unwrap(),
-        parts,
-    );
+
+    render_choices_card(app, frame, basis, rect, parts, placeholder);
 }
 
-fn highlight(frame: &mut Frame<'_>, palette: &Palette, r: Rect, clip: Rect) {
-    frame.rect_clipped(
-        r,
-        palette.text.alpha(if palette.dark { 0.1 } else { 0.06 }),
-        5.0,
-        clip,
-    );
-}
-
-fn centered(frame: &mut Frame<'_>, app: &App, rect: Rect, text: &str, color: Color, clip: Rect) {
-    let width = frame.measure(FontKind::Ui, app.fonts.ui_small, text);
-    ui_text_small(
-        frame,
-        app,
-        rect.x + (rect.w - width) * 0.5,
-        rect,
-        text,
-        color,
-        clip,
-    );
-}
-
-fn draw_choices(app: &App, frame: &mut Frame<'_>, popup: &PropertyPopup, parts: PickerParts) {
-    let p = app.palette;
-    let picker = &app.overlays.picker;
-    ui_text_small(
-        frame,
-        app,
-        parts.actions.x + 12.0,
-        parts.actions,
-        t!("properties-choice-caption"),
-        p.text_dim,
-        parts.actions,
-    );
-    if popup.rows.is_empty() {
-        ui_text_small(
-            frame,
-            app,
-            parts.list.x + 12.0,
-            parts.list,
-            t!("properties-choice-empty"),
-            p.text_dim,
-            parts.list,
-        );
+fn text_basis(app: &App) -> TextBasis {
+    TextBasis {
+        ui_size: app.fonts.ui,
+        x_height: app.metrics.ui.x_height,
+        cap_height: app.metrics.ui.cap_height,
     }
-    for i in parts.visible(picker.scroll, popup.rows.len()) {
-        let row = parts.row(i, picker.scroll).inset(5.0, 1.0);
-        let clip = row.intersect(parts.list);
-        if i == picker.selected || app.pointer.hover == Hover::PickerRow(i) {
-            highlight(frame, p, row, parts.list);
-        }
-        let flag = Rect::new(row.right() - 29.0, row.y, 24.0, row.h);
-        match popup.rows[i] {
+}
+
+fn hover_tint(p: &Palette) -> Color {
+    p.text.alpha(if p.dark { 0.1 } else { 0.06 })
+}
+
+/// 用声明式布局绘制单选/多选属性浮层：顶部搜索输入槽、分割线、说明栏与可滚动选项列表。
+fn render_choices_card(
+    app: &mut App,
+    frame: &mut Frame<'_>,
+    basis: TextBasis,
+    rect: Rect,
+    parts: PickerParts,
+    placeholder: &str,
+) {
+    let p = app.palette;
+    let ui_size = app.fonts.ui;
+    let small = app.fonts.ui_small;
+    let focused = app.focus == Focus::Picker;
+    let shell_bg = p.text.alpha(if p.dark { 0.075 } else { 0.047 });
+
+    // 先从 `app` 拆出 `TextField` 所有权，以便安全嵌入声明式 `field_slot` 回调。
+    let mut input = std::mem::take(&mut app.overlays.picker.input);
+    let mut ime_cursor = app.ime.cursor;
+    let input_text = input.text().trim().to_owned();
+
+    let (selected, scroll, hover, rows, options, chosen) = {
+        let picker = &app.overlays.picker;
+        let popup = picker.property.as_ref().expect("property popup is open");
+        (
+            picker.selected,
+            picker.scroll,
+            app.pointer.hover,
+            popup.rows.clone(),
+            popup.options.clone(),
+            popup.chosen.clone(),
+        )
+    };
+
+    let list_node = build_choices_list(
+        p,
+        (ui_size, small),
+        parts,
+        (selected, scroll, hover),
+        &rows,
+        &options,
+        &chosen,
+        &input_text,
+    );
+
+    let bar_h = parts.bar.h;
+    let card_clip = rect;
+    let search_bar = widgets::field_slot(bar_h, |frame, bar_rect, _| {
+        let shell = bar_rect.inset(6.0, 4.0);
+        frame.rect_clipped(shell, shell_bg, 5.0, card_clip);
+        let field = shell.inset(9.0, 0.0);
+        ime_cursor = draw_bar_field(app, frame, field, &mut input, placeholder, focused);
+    });
+
+    let caption_bar = ui::hstack()
+        .w_full()
+        .h(parts.actions.h)
+        .px(12.0)
+        .items_center()
+        .flex_shrink(0.0)
+        .child(
+            ui::text(t!("properties-choice-caption"))
+                .text_size(small)
+                .line_height(parts.actions.h)
+                .color(p.text_dim),
+        );
+
+    let sep_line = ui::hstack()
+        .w_full()
+        .px(1.0)
+        .flex_shrink(0.0)
+        .child(ui::divider(p.border));
+
+    let pad_top = (parts.bar.y - rect.y).max(0.0);
+    let tree: Node<'_, ()> = ui::vstack()
+        .w_full()
+        .h_full()
+        .pt(pad_top)
+        .child(search_bar)
+        .child(sep_line)
+        .child(caption_bar)
+        .child(list_node);
+
+    let _ = ui::render(frame, basis, rect, tree);
+    app.overlays.picker.input = input;
+    app.ime.cursor = ime_cursor;
+}
+
+/// 构造虚拟滚动的选项列表子树：只生成可见区间的行节点，行位置与 `PickerParts::row` 严格对齐。
+#[allow(clippy::too_many_arguments)]
+fn build_choices_list<'a>(
+    p: &Palette,
+    (ui_size, small): (f32, f32),
+    parts: PickerParts,
+    (selected, scroll, hover): (usize, f32, Hover),
+    rows: &[ChoiceRow],
+    options: &'a [String],
+    chosen: &[String],
+    input_text: &str,
+) -> Node<'a, ()> {
+    let list_h = parts.list.h.max(0.0);
+    if rows.is_empty() {
+        return ui::vstack()
+            .w_full()
+            .h(list_h)
+            .px(12.0)
+            .overflow_hidden()
+            .child(
+                ui::text(t!("properties-choice-empty"))
+                    .text_size(small)
+                    .line_height(CHOICE_ROW)
+                    .color(p.text_dim),
+            );
+    }
+
+    let visible = parts.visible(scroll, rows.len());
+    let first_offset = visible.start as f32 * CHOICE_ROW - scroll;
+    let highlight_bg = hover_tint(p);
+    let chip_h = (CHOICE_ROW - 8.0).max(0.0);
+
+    let row_nodes = visible.map(|i| {
+        let active = i == selected || hover == Hover::PickerRow(i);
+        let inner = match rows[i] {
             ChoiceRow::Option(index) => {
-                let label = &popup.options[index];
+                let label = &options[index];
                 let (fg, bg) = winc_typeset::property_chip_colors(label, p.dark);
-                let width = frame.measure(FontKind::Ui, app.fonts.ui, label) + 14.0;
-                let chip = Rect::new(
-                    row.x + 6.0,
-                    row.y + 3.0,
-                    width.min((row.w - 40.0).max(0.0)),
-                    (row.h - 6.0).max(0.0),
-                );
-                frame.rect_clipped(chip, bg, 4.0, clip);
-                ui_text(
-                    frame,
-                    app,
-                    chip.x + 7.0,
-                    chip,
-                    label,
-                    fg,
-                    clip.intersect(chip.inset(3.0, 0.0)),
-                );
-                if popup.chosen.contains(label) {
-                    centered(frame, app, flag, "✓", p.accent, clip);
-                }
+                let checked = chosen.contains(label);
+                ui::hstack()
+                    .w_full()
+                    .h_full()
+                    .pl(6.0)
+                    .pr(5.0)
+                    .items_center()
+                    .justify_between()
+                    .gap(6.0)
+                    .rounded(5.0)
+                    .when(active, |n| n.bg(highlight_bg))
+                    .child(widgets::chip(label.as_str(), fg, bg, ui_size, chip_h))
+                    .when(checked, |n| {
+                        n.child(
+                            ui::text("✓")
+                                .w(24.0)
+                                .flex_shrink(0.0)
+                                .text_size(small)
+                                .line_height(CHOICE_ROW - 2.0)
+                                .color(p.accent)
+                                .text_align(TextAlign::Center),
+                        )
+                    })
             }
             ChoiceRow::Create => {
-                let text = t!(
-                    "properties-choice-create",
-                    name = picker.input.text().trim().to_owned()
-                );
-                ui_text(frame, app, row.x + 8.0, row, &text, p.text, clip);
+                let label = t!("properties-choice-create", name = input_text.to_owned());
+                ui::hstack()
+                    .w_full()
+                    .h_full()
+                    .px(8.0)
+                    .items_center()
+                    .rounded(5.0)
+                    .overflow_hidden()
+                    .when(active, |n| n.bg(highlight_bg))
+                    .child(
+                        ui::text(label)
+                            .min_w(0.0)
+                            .text_size(ui_size)
+                            .line_height(CHOICE_ROW - 2.0)
+                            .color(p.text),
+                    )
             }
-            ChoiceRow::Clear => {
-                ui_text_small(
-                    frame,
-                    app,
-                    row.x + 8.0,
-                    row,
-                    t!("properties-clear"),
-                    p.text_dim,
-                    clip,
-                );
-            }
-        }
-    }
+            ChoiceRow::Clear => ui::hstack()
+                .w_full()
+                .h_full()
+                .px(8.0)
+                .items_center()
+                .rounded(5.0)
+                .when(active, |n| n.bg(highlight_bg))
+                .child(
+                    ui::text(t!("properties-clear"))
+                        .text_size(small)
+                        .line_height(CHOICE_ROW - 2.0)
+                        .color(p.text_dim),
+                ),
+        };
+
+        ui::hstack()
+            .w_full()
+            .h(CHOICE_ROW)
+            .px(5.0)
+            .py(1.0)
+            .flex_shrink(0.0)
+            .child(inner)
+    });
+
+    ui::vstack()
+        .w_full()
+        .h(list_h)
+        .scroll_y(-first_offset)
+        .children(row_nodes)
 }
 
-fn draw_calendar(
+/// 用声明式 7 列 Flexbox 网格绘制日期选择器，并返回自动收集的按钮命中列表。
+fn render_calendar(
     app: &App,
     frame: &mut Frame<'_>,
+    basis: TextBasis,
     popup: &PropertyPopup,
     parts: PickerParts,
 ) -> Vec<(Rect, PickerPart)> {
@@ -217,148 +319,164 @@ fn draw_calendar(
     let header_h = CALENDAR_HEADER * scale;
     let weekday_h = CALENDAR_WEEKDAYS * scale;
     let week_h = CALENDAR_WEEK * scale;
-    let day_w = area.w / 7.0;
-    let header = Rect {
-        h: header_h,
-        ..area
-    };
-    let grid_y = header.bottom() + weekday_h;
-    let cell = |col: u32, top: f32, height: f32| {
-        Rect::new(area.x + col as f32 * day_w, top, day_w, height)
-    };
-    let mut hits = Vec::with_capacity(35);
-    let mut button = |frame: &mut Frame<'_>,
-                      rect: Rect,
-                      text: &str,
-                      part: CalendarPart,
-                      selected: bool,
-                      is_today: bool| {
-        if rect.w <= 0.0 || rect.h <= 0.0 {
-            return;
-        }
-        let part = PickerPart::PropertyCalendar(part);
-        let hovered = app.pointer.hover == Hover::PickerPart(part);
-        let paint = rect.inset(2.0, 1.0);
-        if selected {
-            frame.rect_clipped(paint, p.accent_fill, 5.0, area);
-        } else if hovered {
-            highlight(frame, p, paint, area);
-        }
-        let ink = if selected {
-            p.text_on_accent
-        } else if is_today {
-            p.accent
-        } else {
-            p.text
+    let footer_h = (CALENDAR_FOOTER * scale).max(0.0);
+    let small = app.fonts.ui_small;
+    let hover = app.pointer.hover;
+
+    let cell_btn =
+        |part: CalendarPart, weight: f32, content: Node<'static, PickerPart>, selected: bool| {
+            let target = PickerPart::PropertyCalendar(part);
+            let hovered = hover == Hover::PickerPart(target);
+            let bg = if selected {
+                Some(p.accent_fill)
+            } else if hovered {
+                Some(hover_tint(p))
+            } else {
+                None
+            };
+            ui::hstack()
+                .flex_weight(weight)
+                .h_full()
+                .px(2.0)
+                .py(1.0)
+                .hit(target)
+                .child(
+                    ui::hstack()
+                        .w_full()
+                        .h_full()
+                        .items_center()
+                        .justify_center()
+                        .rounded(5.0)
+                        .when_some(bg, |n, color| n.bg(color))
+                        .child(content),
+                )
         };
-        match part {
-            PickerPart::PropertyCalendar(CalendarPart::Previous | CalendarPart::Next) => {
-                let x = (rect.x + rect.w * 0.5).round();
-                let y = (rect.y + rect.h * 0.5).round();
-                let dx = if part == PickerPart::PropertyCalendar(CalendarPart::Previous) {
-                    -2.0
-                } else {
-                    2.0
-                };
-                frame.stroke(
-                    &[
-                        Stroke::Line(x - dx, y - 4.0, x + dx, y),
-                        Stroke::Line(x + dx, y, x - dx, y + 4.0),
-                    ],
-                    1.35,
-                    ink,
-                    area,
-                );
-            }
-            _ => centered(frame, app, rect, text, ink, area),
-        }
-        hits.push((rect, part));
+
+    let cell_label = |label: String, ink: Color, height: f32| {
+        ui::text(label)
+            .w_full()
+            .text_size(small)
+            .line_height(height)
+            .color(ink)
+            .text_align(TextAlign::Center)
     };
+
     let month_label = t!(
         "properties-calendar-month",
         year = format!("{year:04}"),
         month = format!("{month:02}")
     );
-    let month_box = Rect {
-        w: day_w * 4.0,
-        ..header
-    };
-    ui_text(
-        frame,
-        app,
-        month_box.x + 5.0,
-        month_box,
-        &month_label,
-        p.text,
-        month_box,
-    );
-    button(
-        frame,
-        cell(4, header.y, header.h),
-        t!("properties-today"),
-        CalendarPart::Today,
-        false,
-        true,
-    );
-    button(
-        frame,
-        cell(5, header.y, header.h),
-        "",
-        CalendarPart::Previous,
-        false,
-        false,
-    );
-    button(
-        frame,
-        cell(6, header.y, header.h),
-        "",
-        CalendarPart::Next,
-        false,
-        false,
-    );
-    for (col, label) in t!("properties-weekdays").split('|').enumerate() {
-        centered(
-            frame,
-            app,
-            cell(col as u32, header.bottom(), weekday_h),
-            label,
-            p.text_muted,
-            area,
-        );
-    }
+    let header = ui::hstack()
+        .w_full()
+        .h(header_h)
+        .flex_shrink(0.0)
+        .child(
+            ui::hstack()
+                .flex_weight(4.0)
+                .h_full()
+                .pl(5.0)
+                .items_center()
+                .overflow_hidden()
+                .child(
+                    ui::text(month_label)
+                        .min_w(0.0)
+                        .text_size(app.fonts.ui)
+                        .line_height(header_h)
+                        .color(p.text),
+                ),
+        )
+        .child(cell_btn(
+            CalendarPart::Today,
+            1.0,
+            cell_label(t!("properties-today").to_owned(), p.accent, header_h),
+            false,
+        ))
+        .child(cell_btn(
+            CalendarPart::Previous,
+            1.0,
+            widgets::chevron(true, p.text),
+            false,
+        ))
+        .child(cell_btn(
+            CalendarPart::Next,
+            1.0,
+            widgets::chevron(false, p.text),
+            false,
+        ));
+
+    let weekdays = ui::hstack()
+        .w_full()
+        .h(weekday_h)
+        .flex_shrink(0.0)
+        .children(t!("properties-weekdays").split('|').map(|label| {
+            ui::hstack()
+                .flex_1()
+                .h_full()
+                .items_center()
+                .justify_center()
+                .child(cell_label(label.to_owned(), p.text_muted, weekday_h))
+        }));
+
     let start = first_weekday(year, month);
-    for day in 1..=days_in_month(year, month) {
-        let i = start + day - 1;
-        let rect = cell(i % 7, grid_y + (i / 7) as f32 * week_h, week_h);
-        button(
-            frame,
-            rect,
-            &day.to_string(),
-            CalendarPart::Day(day),
-            selected_date == Some((year, month, day)),
-            local_today == (year, month, day),
+    let total_days = days_in_month(year, month);
+    let weeks = (0..popup.calendar_weeks()).map(|week| {
+        let cells = (0..7u32).map(|col| {
+            let slot = week * 7 + col;
+            if slot < start || slot >= start + total_days {
+                return ui::box_().flex_1().h_full();
+            }
+            let day = slot - start + 1;
+            let selected = selected_date == Some((year, month, day));
+            let is_today = local_today == (year, month, day);
+            let ink = if selected {
+                p.text_on_accent
+            } else if is_today {
+                p.accent
+            } else {
+                p.text
+            };
+            cell_btn(
+                CalendarPart::Day(day),
+                1.0,
+                cell_label(day.to_string(), ink, week_h),
+                selected,
+            )
+        });
+        ui::hstack()
+            .w_full()
+            .h(week_h)
+            .flex_shrink(0.0)
+            .children(cells)
+    });
+
+    let clear_h = (footer_h - 4.0).max(0.0);
+    let footer = ui::vstack()
+        .w_full()
+        .h(footer_h)
+        .pt(2.0)
+        .gap(1.0)
+        .flex_shrink(0.0)
+        .child(ui::divider(p.separator))
+        .child(
+            ui::hstack()
+                .w_full()
+                .h(clear_h)
+                .child(ui::spacer().flex_weight(5.0))
+                .child(cell_btn(
+                    CalendarPart::Clear,
+                    2.0,
+                    cell_label(t!("properties-clear").to_owned(), p.text, clear_h),
+                    false,
+                )),
         );
-    }
-    let footer_y = grid_y + popup.calendar_weeks() as f32 * week_h;
-    frame.rect_clipped(
-        Rect::new(area.x, footer_y + 2.0, area.w, 1.0),
-        p.separator,
-        0.0,
-        area,
-    );
-    let clear = Rect::new(
-        area.right() - day_w * 2.0,
-        footer_y + 4.0,
-        day_w * 2.0,
-        (CALENDAR_FOOTER * scale - 4.0).max(0.0),
-    );
-    button(
-        frame,
-        clear,
-        t!("properties-clear"),
-        CalendarPart::Clear,
-        false,
-        false,
-    );
-    hits
+
+    let tree = ui::vstack()
+        .w_full()
+        .h_full()
+        .child(header)
+        .child(weekdays)
+        .children(weeks)
+        .child(footer);
+
+    ui::render(frame, basis, area, tree).into_entries()
 }

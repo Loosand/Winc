@@ -105,7 +105,14 @@ fn dialogs_fade_in_and_out_like_settings() {
             Card::Picker => app.layout.picker,
             Card::Bar => crate::layout::goto_bar(app.layout.editor),
             Card::Dialog => app.dialog_layout().card,
-            Card::Alert => app.overlays.alert.as_ref().unwrap().parts.buttons[0],
+            Card::Alert => app
+                .overlays
+                .alert
+                .as_ref()
+                .unwrap()
+                .hits
+                .rect_of(&crate::app::AlertPart::Button(0))
+                .unwrap(),
         };
         // 卡片左上角内侧的一点：底色与下方的编辑区不同。
         let probe = (r.x + 6.0, r.y + 6.0);

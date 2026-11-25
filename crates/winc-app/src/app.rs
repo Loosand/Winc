@@ -53,7 +53,7 @@ pub(crate) use input::context_menu::{
 };
 pub use input::context_menu::{ContextMenu, MenuButton, MenuCommand};
 pub use input::palette::palette;
-pub(crate) use lifecycle::alert::{AlertButton, AlertKey, AlertPart, AlertParts, InAppAlert};
+pub(crate) use lifecycle::alert::{AlertButton, AlertKey, AlertPart, InAppAlert};
 use lifecycle::appearance::{forced_theme, unusable_font};
 pub(crate) use lifecycle::backup::{restore_at_launch, restore_tabs};
 pub use lifecycle::closing::{CloseRequest, SaveChoice, SavePrompt};
@@ -995,9 +995,16 @@ impl App {
     /// 请求在下一帧重绘本窗口。
     ///
     /// 文件树的可见行变化后都会请求重绘：其中尚未读取的目录在此交给后台（[`App::fetch_tree`]）。
+    /// 标记画面为脏，下一帧完整重绘，并使底层静态快照失效。
     pub(crate) fn request_redraw(&mut self) {
         self.frame.dirty = true;
+        self.frame.backdrop.invalidate();
         self.fetch_tree();
+    }
+
+    /// 标记画面为脏，但声明本帧变更仅发生在顶层浮层/模态卡片内部，保留底层静态主区快照可复用。
+    pub(crate) fn request_overlay_redraw(&mut self) {
+        self.frame.dirty = true;
     }
 
     /// 在后台线程上执行 `job`，完成后发送事件 `done` 唤醒界面线程处理结果（[`App::finished`]）。

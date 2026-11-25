@@ -78,6 +78,8 @@ fluent-bundle = "0.16"
 unic-langid = "0.9"
 # 读取系统的首选语言，界面语言为「跟随系统」时使用。
 sys-locale = "0.3"
+# 声明式面板的 Flexbox 布局计算（仅启用 flexbox，不引入 CSS Grid 和解析器）。
+taffy = { version = "0.16", default-features = false, features = ["std", "taffy_tree", "flexbox"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
