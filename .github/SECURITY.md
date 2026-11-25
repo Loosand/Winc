@@ -4,9 +4,7 @@
 
 Please do not report security vulnerabilities in public issues, pull requests, or discussions.
 
-Report them privately, either through GitHub's
-[private vulnerability reporting](https://github.com/DEEIX-AI/Winc/security/advisories/new) or by
-email to support@winc.si. Please include:
+Report them privately through the repository's GitHub Private Vulnerability Reporting feature. Please include:
 
 - a description of the problem and its impact
 - the affected version and platform
@@ -37,5 +35,4 @@ Out of scope:
 
 ## Supported Versions
 
-Security fixes go into the latest release. Update to the newest version through the in-app updater
-or from [winc.si](https://winc.si/#download).
+Security fixes go into the latest release. Update to the newest version from the repository releases or by rebuilding from source.

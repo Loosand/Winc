@@ -26,8 +26,8 @@ requests, discussions, and any other channel run by the project.
 Maintainers may edit or remove comments, close issues and pull requests, and temporarily or
 permanently block anyone from participating when this code of conduct is violated.
 
-Report unacceptable behavior to support@winc.si. Reports are handled confidentially, and the
-maintainers will respond as quickly as they can.
+Report unacceptable behavior privately to the repository maintainers. Reports are handled
+confidentially, and the maintainers will respond as quickly as they can.
 
 ## Scope
 

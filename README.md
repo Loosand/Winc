@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="./crates/winc-app/assets/icon.svg" alt="winc" width="128" />
+  <img src="./crates/winc-app/assets/icon.svg" alt="Minc" width="128" />
 </p>
 
-<h1 align="center">Winc</h1>
+<h1 align="center">Minc</h1>
 
 <p align="center">
-  A lighter, faster, more comfortable desktop editor.
+  A fast, local-first Markdown writing app built for focused writing and Agent collaboration.
 </p>
 
 <p align="center">
@@ -13,162 +13,100 @@
 </p>
 
 <p align="center">
-  <a href="https://winc.si"><img alt="Website" src="https://img.shields.io/badge/Website-winc.si-black" /></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-blue" /></a>
   <img alt="Rust" src="https://img.shields.io/badge/Rust-2024-b7410e" />
   <img alt="Platforms" src="https://img.shields.io/badge/Platforms-macOS%20%7C%20Linux%20%7C%20Windows-555" />
 </p>
 
-<p align="center">
-  <a href="https://winc.si/#download"><img alt="Download Winc" src="./.github/assets/download-en.svg" /></a>
-</p>
-
 ## Overview
 
-winc is built with Rust and its own rendering engine: it starts in 0.1 seconds and uses just 52 MB
-of memory with 100,000 lines open. Multiple cursors, find and replace, and side-by-side diffs are
-all there, and every keystroke and scroll responds instantly.
+Minc is built with Rust and a custom CPU-rasterized rendering engine—no Electron and no WebView. It combines native-grade startup and typing responsiveness with a Typora-style, single-view formatted Markdown writing experience.
+
+Every note stays a plain `.md` file inside your local folder, with no proprietary database or cloud lock-in.
 
 | Measure | Result |
 | --- | --- |
-| Cold start to first frame | 119 ms (median of 20 runs) |
-| Resident memory with 100,000 lines open | 52 MB |
-| A 1 GB file, editable and highlighted | 220 ms |
+| Cold start to first frame | ~119 ms (median of 20 runs on macOS) |
+| Resident memory with 100,000 lines open | ~52 MB |
+| First-frame typing latency (105 KiB mixed Markdown) | ~12 ms (p50) |
 
-Measured on macOS; results vary with hardware and system load.
+Measured on macOS; actual numbers vary by hardware and system load.
 
-## Features
+## Core Capabilities
 
 | Area | Capabilities |
 | --- | --- |
-| Editing | Multiple cursors, find and replace, native input methods, smooth scrolling in gigabyte-sized files, and an experimental Vim mode |
-| Syntax | Highlighting for common programming, markup, data, and configuration languages, plus lightweight go-to-definition and usages without a language server |
-| Formatting | Whole-file formatting with external tools such as rustfmt, Prettier, Black, Ruff, and gofmt |
-| Markdown | Edit in a single formatted view, with math and Mermaid diagrams; notes stay plain `.md` files |
-| Note library | Browse the local workspace's files and folders in the main area. Selecting a folder in the sidebar shows its contents. |
-| Preview | Images, SVG, JSON graphs, PDF (macOS and Windows), Word documents (docx), and spreadsheets (xlsx, csv) |
-| Git | Side-by-side diffs with word-level highlights, staging by hunk, commit and push, a commit graph, and blame |
-| Project | A file tree, quick open, and project search that follows `.gitignore` |
-| Terminal | An integrated terminal with automatic loading of project-local Python environments |
-| Remote | Experimental SSH remote: open a folder on a Linux host and edit, search, format, use Git, and open terminals there. On Windows, open folders inside WSL distributions |
-| Interface | Sixteen built-in themes, light and dark, and a complete interface in English and Simplified Chinese |
-| Modules | Git, the terminal, and SSH remote can each be turned off. Appearance, theme, language, and modules are available in Settings |
-| Updates | Signed in-app updates on all three platforms, with the release notes shown in the app after each update |
+| Live-Formatted Writing | Single editable formatted view (WYSIWYG) with math, Mermaid diagrams, reliable CJK IME input, and fidelity-preserving HTML table & rich-text paste |
+| Local Note Library | Open any local folder as a workspace; includes a paper-card Home view, file tree, and `⌘P` quick search across titles and content |
+| Note Properties | Collapsible frontmatter property panel supporting text, number, date, checkbox, single/multi-select, stored cleanly as YAML |
+| Links & Backlinks | Supports both standard Markdown links and `[[WikiLinks]]`, with a backlinks panel and jump-to-context navigation |
+| Reference Previews | Built-in local previews for images, SVG, PDF (macOS / Windows), Word (`docx`), spreadsheets (`xlsx` / `csv`), and JSON graphs |
+| Interface | 16 built-in light and dark themes, English and Simplified Chinese UI, trackpad zoom, and touch gestures |
 
-Touchscreens support tapping buttons and placing the caret, double-tapping to select a word,
-swiping to scroll, and dragging scrollbars and panel dividers. Hold for 500 ms to open the context
-menu. Swipes stay in the region where they started and stop on release. Additional fingers cancel
-the current gesture; lift all fingers before starting another. On Windows, drag the title bar to
-move the window, double-tap it to maximize or restore, and drag the window edges to resize.
-Window dragging and edge snapping use the same native Windows behavior as mouse input.
+## Direction: Evergreen Writing Core + Evolving Agent Layer
 
-Image and SVG previews zoom like the PDF preview: hold Ctrl (⌘ on macOS) and scroll, pinch, or
-press Ctrl/⌘ with `+`, `-` or `0`; the point under the pointer stays in place. Scroll or drag a
-zoomed image to pan, and double-click to fit it again. This also works in the SVG split preview.
+Minc separates slow-changing writing fundamentals from fast-changing LLM/Agent capabilities across a thin process boundary:
 
-JSON files offer Source, Split, and Preview at the right of the tab bar. Split shows a local,
-interactive graph that updates as you edit, even before you save. Click a container row to fold
-or unfold its branch. Drag to pan, use Ctrl/⌘ + scroll or pinch to zoom, and use **Fit to window**
-to see the whole graph. The graph reads standard JSON, not JSONC, JSON5, or JSON Lines.
-
-### Note sidebar
-
-The sidebar opens folders and lists recent workspaces. Inside a folder, use its name to switch workspaces or open **Home** for note cards. Use the search button to search the workspace and **New file** at the bottom to create a Markdown note.
+- **Evergreen Core (Local Writing Host)**: Preserves startup speed, typing feel, predictable undo, and plain `.md` file ownership, while providing four stable collaboration primitives—inline annotations, selection Diff with single-step undo, a collapsible side stream, and safe workspace file sync.
+- **Evolving Layer (External Agent Runtime)**: Connects on demand via an isolated RPC sidecar for proofreading, translation, refinement, web research saved locally, fact-checking, diagram/image generation, and Skills workflows. When AI is not invoked, no sidecar process is started and editor performance remains unaffected.
 
 ## Platforms
 
-| Platform | Requirements | Package |
-| --- | --- | --- |
-| macOS | macOS 11 or later, Apple silicon or Intel | Disk image |
-| Linux | x86_64, X11 or Wayland | AppImage, deb, Arch repository |
-| Windows | Windows 10 1809 or later, x86_64 | NSIS, MSI, portable ZIP |
+| Platform | Requirements |
+| --- | --- |
+| macOS | macOS 11 or later (Apple silicon / Intel) |
+| Linux | x86_64 (X11 / Wayland) |
+| Windows | Windows 10 1809 or later (x86_64) |
 
-The portable ZIP keeps settings and state in the `data` folder beside `winc.exe`; delete that
-folder to keep them in the user profile instead.
-
-winc is developed and tested mainly on macOS. Download it from
-[winc.si](https://winc.si/#download); all versions are on
-[GitHub Releases](https://github.com/DEEIX-AI/Winc/releases).
-
-## Command Line
-
-```bash
-winc .                  # open the current folder
-winc file.rs:12:5       # open a file at a line and column
-winc --wait file        # wait until the tab closes, for example as the Git editor
-cargo build 2>&1 | winc -   # read standard input
-```
-
-The Windows installers and the Linux deb and Arch packages add `winc` to `PATH`; the Windows portable ZIP leaves `PATH` unchanged. On macOS, choose **Winc → Install winc Command…** from the menu bar or run **Shell Command: Install winc Command** from the command palette; with the Linux AppImage, use the command palette.
-
-On macOS the app is started by the system, so it does not inherit the environment variables of your shell. Use `winc --new-instance` to keep them.
+Primary development and desktop verification currently target macOS.
 
 ## Building from Source
 
-winc builds with Rust 1.99.1; `rust-toolchain.toml` selects the toolchain automatically.
+The Rust toolchain is pinned in `rust-toolchain.toml`:
 
 ```bash
-cargo run --release                 # build and run
-cargo run --release -- <path>       # open a file or folder
+cargo run --release                   # build and run
+cargo run --release -- <notes-dir>    # open a folder or Markdown file
 ```
 
-For versioning, signing configuration and release workflows, see [Releasing winc](release/README.md).
+## Development & Verification
 
-## Development
+On macOS, run the local dev launcher for isolated desktop testing (keeps dev settings and sessions separate from personal notes):
 
 ```bash
-cargo xtask test                    # test the crates changed since HEAD
-cargo xtask test --all              # test the whole workspace
+python3 scripts/dev.py                # watch, rebuild, and relaunch the dev app
+python3 scripts/dev.py --once         # build and launch once
+```
+
+Tests and benchmarks:
+
+```bash
+cargo xtask test                      # test crates changed since HEAD
+cargo xtask test --all                # test the entire workspace
 cargo clippy --workspace --all-targets -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-cargo xtask bench                   # measure startup, memory, and scrolling against budgets
+cargo xtask bench                     # run startup, memory, and scroll benchmarks
 ```
 
-The interface is written in Rust. Windows come from winit, and rendering is done by winc's own
-CPU rasterizer. On macOS, frames are written directly to an IOSurface.
+## Workspace Layout
 
-The workspace is split into crates by responsibility:
+The UI is written in Rust using `winit` for windowing and a custom CPU rasterizer (presenting directly to `IOSurface` on macOS):
 
 | Crate | Responsibility |
 | --- | --- |
-| `winc-core` | Text, editing, undo, and diffing, independent of the interface |
-| `winc-syntax` | Lexers for syntax highlighting |
-| `winc-editor` | Editor logic: documents, file tree, search, Git, and formatting |
-| `winc-vim` | Vim mode without the interface: key notation, the command table, parsing, and evaluation |
-| `winc-backend` | File system access for local paths and for paths on remote hosts |
-| `winc-server` | The server process that runs on a remote host and serves file operations over SSH |
-| `winc-watch` | Watches folders on the machine that holds them (WSL distributions, remote hosts) |
-| `winc-render` | Rendering: glyphs, rasterization, and presentation |
-| `winc-preview` | Previews for images, SVG, JSON, Markdown, PDF, Word documents, and spreadsheets |
-| `winc-typeset` | Layout for the Markdown preview |
-| `winc-pty` | Terminal emulation and the pseudo-terminal helper process |
-| `winc-config` | Configuration and state files |
-| `winc-i18n` | Interface strings (Fluent bundles) |
-| `winc-version` | The product version, read from the `VERSION` file |
-| `winc-app` | The application: windows, events, and views |
-| `winc` | The executable's entry point, which only calls into `winc-app` |
-| `xtask` | Development automation: tests, benchmarks, and packaging |
+| `winc-core` | Text buffer (Rope), editing commands, undo stack, and word-level diffing |
+| `winc-editor` | Document state, file tree, and workspace search |
+| `winc-preview` | Markdown parsing, note-link indexing, and previews for images, SVG, PDF, docx, spreadsheets, and JSON |
+| `winc-typeset` | Layout engine for live-formatted Markdown |
+| `winc-render` | Glyph handling, rasterization, and presentation |
+| `winc-watch` | Local workspace file watching |
+| `winc-config` | Configuration, themes, and session persistence |
+| `winc-i18n` | Interface localization (Fluent bundles) |
+| `winc-app` | Desktop application: windows, events, and views |
+| `winc` | Binary entry point |
+| `xtask` | Testing, benchmarking, and build automation |
 
-## Contributing
+> Note: Several lower-level crates inherited from the upstream code editor (`winc-syntax`, `winc-vim`, `winc-pty`, `winc-backend`, `winc-server`) remain in the workspace and are gradually being hidden from the writing UI or trimmed as the roadmap progresses.
 
-Contributions are welcome. Please read [CONTRIBUTING.md](.github/CONTRIBUTING.md) before you open a
-pull request, and open it against the `dev` branch. All contributors sign the [Contributor License
-Agreement](.github/CLA.md) and follow the [Code of Conduct](.github/CODE_OF_CONDUCT.md). To report a
-vulnerability, see [SECURITY.md](.github/SECURITY.md).
+## License & Attribution
 
-## Contact
-
-- Website: [winc.si](https://winc.si)
-- Email: [support@deeix.com](mailto:support@deeix.com)
-- Telegram: [t.me/deeix_chat](https://t.me/deeix_chat)
-- X: [@DEEIX_AI](https://x.com/DEEIX_AI)
-
-## Links
-
-- [Rust](https://www.rust-lang.org)
-- [DEEIX AI](https://deeix.com)
-- [LINUX DO](https://linux.do)
-
-## License
-
-winc is licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE).
+This project is a derivative work based on Winc, licensed under the [Apache License, Version 2.0](LICENSE). Original license and attribution notices are preserved in [LICENSE](LICENSE) and [NOTICE](NOTICE).

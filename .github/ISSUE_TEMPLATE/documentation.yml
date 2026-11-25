@@ -9,7 +9,7 @@ body:
     attributes:
       label: Location
       description: >-
-        Link to the page or file (README, winc.si, release notes), or name the screen where the
+        Link to the page or file (README, release notes), or name the screen where the
         text appears.
       placeholder: "README.md#building-from-source, Settings → Editor, Release Notes 0.1.688"
     validations:
