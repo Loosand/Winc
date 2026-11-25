@@ -81,89 +81,168 @@ fn draw_plain(frame: &mut Frame<'_>, items: &[Item], (left, top): (f32, f32), cl
     }
 }
 
-/// 绘制非侵入式装饰层（区间高亮、下划线、删除线与行内虚文字挂件）。
-fn draw_decorations(
+/// 在矩形 `r` 上按 `style` 绘制非背景类行内装饰（实线/虚线下划线、删除线）。
+fn draw_mark_overlay(frame: &mut Frame<'_>, r: Rect, style: winc_richtext::MarkStyle, clip: Rect) {
+    use winc_richtext::MarkStyle;
+    match style {
+        MarkStyle::Background(_) => {}
+        MarkStyle::SolidUnderline(color) => {
+            frame.rect_clipped(
+                Rect::new(r.x, (r.bottom() - 1.5).round(), r.w, 1.5),
+                color,
+                0.0,
+                clip,
+            );
+        }
+        MarkStyle::DashedUnderline(color) => {
+            let y = (r.bottom() - 1.5).round();
+            let mut x = r.x;
+            while x < r.right() {
+                let w = 2.0f32.min(r.right() - x);
+                frame.rect_clipped(Rect::new(x, y, w, 1.0), color, 0.0, clip);
+                x += 4.0;
+            }
+        }
+        MarkStyle::Strikethrough(color) => {
+            let y = (r.y + r.h * 0.5).round();
+            frame.rect_clipped(Rect::new(r.x, y, r.w, 1.0), color, 0.0, clip);
+        }
+    }
+}
+
+/// 绘制落在块间/文末空行槽位中的区间装饰。
+fn draw_decoration_gaps(
     frame: &mut Frame<'_>,
     laid: &Laid,
     decorations: &winc_richtext::DecorationSet,
     left: f32,
     origin_y: f32,
     clip: Rect,
-    base: f32,
 ) {
     use winc_richtext::{DecorationKind, MarkStyle};
     for dec in decorations.all() {
-        match &dec.kind {
-            DecorationKind::Mark { style } => {
-                for rect in laid.mark_rects(dec.range.clone()) {
-                    let r = Rect::new(left + rect.x, origin_y + rect.y, rect.w, rect.h);
-                    if r.bottom() <= clip.y || r.y >= clip.bottom() {
-                        continue;
-                    }
-                    match *style {
-                        MarkStyle::Background(color) => {
-                            frame.rect_clipped(r, color, 2.0, clip);
-                        }
-                        MarkStyle::SolidUnderline(color) => {
-                            frame.rect_clipped(
-                                Rect::new(r.x, (r.bottom() - 1.5).round(), r.w, 1.5),
-                                color,
-                                0.0,
-                                clip,
-                            );
-                        }
-                        MarkStyle::DashedUnderline(color) => {
-                            let y = (r.bottom() - 1.5).round();
-                            let mut x = r.x;
-                            while x < r.right() {
-                                let w = 2.0f32.min(r.right() - x);
-                                frame.rect_clipped(Rect::new(x, y, w, 1.0), color, 0.0, clip);
-                                x += 4.0;
-                            }
-                        }
-                        MarkStyle::Strikethrough(color) => {
-                            let y = (r.y + r.h * 0.5).round();
-                            frame.rect_clipped(Rect::new(r.x, y, r.w, 1.0), color, 0.0, clip);
-                        }
-                    }
-                }
+        let DecorationKind::Mark { style } = dec.kind else {
+            continue;
+        };
+        for rect in laid.blank_selection_rects(dec.range.start, dec.range.end) {
+            let r = Rect::new(left + rect.x, origin_y + rect.y, rect.w, rect.h);
+            if r.bottom() <= clip.y || r.y >= clip.bottom() {
+                continue;
             }
-            DecorationKind::InlineWidget { text, style } => {
-                if let Some((x, y, h)) = laid.inline_widget_point(dec.range.start) {
-                    let sy = origin_y + laid.content_y(y);
-                    if sy + h <= clip.y || sy >= clip.bottom() {
-                        continue;
-                    }
-                    let sx = left + x;
-                    let faux = winc_render::Faux {
-                        bold: false,
-                        italic: style.italic,
-                    };
-                    if let Some(bg) = style.background {
-                        let w = frame.measure_faux(FontKind::Ui, faux, base, text);
-                        frame.rect_clipped(Rect::new(sx, sy, w, h), bg, 2.0, clip);
-                    }
-                    let baseline = sy + base * 1.05;
-                    frame.text_faux(
-                        FontKind::Ui,
-                        faux,
-                        base,
-                        sx,
-                        baseline,
-                        text,
-                        style.color,
-                        clip,
-                    );
-                }
+            match style {
+                MarkStyle::Background(color) => frame.rect_clipped(r, color, 2.0, clip),
+                other => draw_mark_overlay(frame, r, other, clip),
             }
-            DecorationKind::BlockWidget { .. } => {}
         }
     }
 }
 
-/// 在指向不存在的文件或标题的链接下方绘制错误色的虚线。
+/// 绘制行内虚拟挂件（幽灵补全）与块级虚拟区块卡片（批注卡片、AI 修订建议等）。
+#[allow(clippy::too_many_arguments)]
+fn draw_decoration_widgets(
+    frame: &mut Frame<'_>,
+    laid: &Laid,
+    decorations: &winc_richtext::DecorationSet,
+    p: &Palette,
+    left: f32,
+    origin_y: f32,
+    clip: Rect,
+    base: f32,
+) {
+    use winc_richtext::{DecorationKind, DecorationLayer};
+    for dec in decorations.all() {
+        if let DecorationKind::InlineWidget { text, style } = &dec.kind
+            && let Some((x, y, h)) = laid.inline_widget_point(dec.range.start)
+        {
+            let sy = origin_y + laid.content_y(y);
+            if sy + h <= clip.y || sy >= clip.bottom() {
+                continue;
+            }
+            let sx = left + x;
+            let faux = winc_render::Faux {
+                bold: false,
+                italic: style.italic,
+            };
+            if let Some(bg) = style.background {
+                let w = frame.measure_faux(FontKind::Ui, faux, base, text);
+                frame.rect_clipped(Rect::new(sx, sy, w, h), bg, 2.0, clip);
+            }
+            let baseline = sy + base * 1.05;
+            frame.text_faux(
+                FontKind::Ui,
+                faux,
+                base,
+                sx,
+                baseline,
+                text,
+                style.color,
+                clip,
+            );
+        }
+    }
+    for widget in laid.widgets() {
+        let r = Rect::new(
+            left + widget.rect.x,
+            origin_y + widget.rect.y,
+            widget.rect.w,
+            widget.rect.h,
+        );
+        if r.bottom() <= clip.y || r.y >= clip.bottom() || r.h <= 0.0 {
+            continue;
+        }
+        let tone = match widget.layer {
+            DecorationLayer::AiPreview => p.accent,
+            DecorationLayer::Diagnostic => p.error,
+            DecorationLayer::Annotation | DecorationLayer::Search => p.warning,
+        };
+        let bg = tone.alpha(if p.dark { 0.12 } else { 0.08 });
+        let bar = tone.alpha(0.75);
+        frame.rect_clipped(r, bg, 8.0, clip);
+        frame.rect_clipped(
+            Rect::new(r.x, r.y + 4.0, 3.0, (r.h - 8.0).max(0.0)),
+            bar,
+            1.5,
+            clip,
+        );
+        let caption = if widget.label.is_empty() {
+            &*widget.key
+        } else {
+            &*widget.label
+        };
+        if !caption.is_empty() {
+            let size = (base * 0.85).round().max(11.0);
+            let baseline = r.y + (r.h + size * 0.72) * 0.5;
+            frame.text_faux(
+                FontKind::Ui,
+                Default::default(),
+                size,
+                r.x + 12.0,
+                baseline,
+                caption,
+                p.text,
+                r.intersect(clip),
+            );
+        }
+    }
+}
+
+/// 在未被装饰层覆盖的失效链接（如纯图片链接）下方绘制错误色虚线。
 fn draw_broken_links(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     let color = app.palette.error.alpha(0.7);
+    let mut covered: Vec<Rect> = Vec::new();
+    if let Some(laid) = app.preview.markdown.layout.as_ref() {
+        let (left, _) = laid.column_bounds();
+        let max = (app.preview.markdown.height - area.h).max(0.0);
+        let scroll = app.preview.markdown.scroll().min(max);
+        let origin_y = laid.origin_y(area.y, scroll);
+        for dec in app.preview.markdown.decorations.all() {
+            if dec.layer == winc_richtext::DecorationLayer::Diagnostic {
+                for rect in laid.mark_rects(dec.range.clone()) {
+                    covered.push(Rect::new(left + rect.x, origin_y + rect.y, rect.w, rect.h));
+                }
+            }
+        }
+    }
     // 检查链接需要可变借用 `app`，检查期间暂时移出本帧的链接。
     let links = std::mem::take(&mut app.hits.markdown_links);
     for (rect, url) in &links {
@@ -171,13 +250,18 @@ fn draw_broken_links(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         if url.starts_with('\u{1}') || app.check_markdown_link(url).is_none() {
             continue;
         }
-        let y = (rect.bottom() - 1.5).round();
-        let mut x = rect.x;
-        while x < rect.right() {
-            let w = 2.0f32.min(rect.right() - x);
-            frame.rect_clipped(Rect::new(x, y, w, 1.0), color, 0.0, area);
-            x += 4.0;
+        if covered.iter().any(|c| {
+            let hit = c.intersect(*rect);
+            hit.w > 0.0 && hit.h > 0.0
+        }) {
+            continue;
         }
+        draw_mark_overlay(
+            frame,
+            *rect,
+            winc_richtext::MarkStyle::DashedUnderline(color),
+            area,
+        );
     }
     app.hits.markdown_links = links;
 }
@@ -274,9 +358,10 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             blocks: caret.into_iter().chain(head).chain(picked).collect(),
         }
     };
+    let widgets_hash = app.preview.markdown.decorations.block_widget_fingerprint();
     let mut laid = match app.preview.markdown.layout.take() {
         Some(laid)
-            if laid.matches_frame(key, source, live_key.as_ref(), &near, area.h)
+            if laid.matches_frame(key, source, live_key.as_ref(), widgets_hash, &near, area.h)
                 && loaded.is_empty()
                 && toggled.is_none()
                 && !property_changed =>
@@ -287,7 +372,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             // 继续上一帧未完成的排版，或视口移到了保留的范围之外：排版条件和文字都未变，选区、
             // 查找结果和光标位置保留。
             let resumed = old.as_ref().is_some_and(|l| {
-                l.can_resume(key, source, live_key.as_ref())
+                l.can_resume(key, source, live_key.as_ref(), widgets_hash)
                     && loaded.is_empty()
                     && toggled.is_none()
             });
@@ -393,6 +478,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                     editable,
                     checked,
                     properties: properties.clone(),
+                    decorations: Some(&app.preview.markdown.decorations),
                 };
                 let (laid, wanted_images) = Laid::build(
                     input,
@@ -503,19 +589,12 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         .selection
         .map(|(a, b)| (a.min(b), a.max(b)))
         .filter(|(a, b)| a < b);
-    // 查找条在查预览的文字时，标出匹配。
+    // 查找条在查预览的文字时，标出匹配（可编辑预览的查找匹配已统一走 `DecorationLayer::Search`）。
     let search = &app.bars.search;
     let matches = (app.layout.search.h > 0.0
         && md.find_doc.is_some()
         && search.document() == md.find_doc.as_ref().map(|d| d.id))
     .then(|| (search, search.current_match()));
-    // 可编辑的预览中查找对着文档：匹配是原文中的位置（字符偏移），换算到每段文字里的字。
-    let live_matches = (live_caret.is_some() && app.layout.search.h > 0.0)
-        .then(|| app.editor.active())
-        .flatten()
-        .filter(|d| search.document() == Some(d.id))
-        .and_then(|d| d.text().rope())
-        .map(|rope| (rope, search.current_match()));
     let mut wanted = Vec::new();
     // 这一帧绘制范围内的图片。
     let mut images = Vec::new();
@@ -539,15 +618,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         selection::draw_gaps(frame, &laid, left, origin_y, area, range, p.selection);
     }
     if !md.decorations.is_empty() && motion.as_ref().is_none_or(|m| !m.moving()) {
-        draw_decorations(
-            frame,
-            &laid,
-            &md.decorations,
-            left,
-            origin_y,
-            area,
-            key.base,
-        );
+        draw_decoration_gaps(frame, &laid, &md.decorations, left, origin_y, area);
     }
     for (i, block_top, block) in laid.iter_blocks().skip(first) {
         let opacity = match focused {
@@ -675,20 +746,25 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                         if yaml_editor.is_some_and(|(y, h)| (y..y + h).contains(baseline)) {
                             continue;
                         }
+                        let mut span_overlays: Vec<(Rect, winc_richtext::MarkStyle)> = Vec::new();
                         if let Some(span) = span {
                             let from = laid.block_start(i) + span.start;
                             let to = from + span.advances.len();
-                            let mut mark = |a: usize, b: usize, color: Color| {
+                            let span_rect = |a: usize, b: usize| -> Option<Rect> {
                                 let (a, b) = (a.max(from), b.min(to));
                                 if a >= b {
-                                    return;
+                                    return None;
                                 }
                                 let (a, b) = (a - from, b - from);
                                 let x0: f32 = span.advances[..a].iter().sum();
                                 let x1: f32 = x0 + span.advances[a..b].iter().sum::<f32>();
                                 let (y0, h) = line_box(top + baseline, *size);
-                                let r = Rect::new(left + x + x0, y0, x1 - x0, h);
-                                frame.rect_clipped(r, color, 2.0, area);
+                                Some(Rect::new(left + x + x0, y0, x1 - x0, h))
+                            };
+                            let mut mark = |a: usize, b: usize, color: Color| {
+                                if let Some(r) = span_rect(a, b) {
+                                    frame.rect_clipped(r, color, 2.0, area);
+                                }
                             };
                             if let Some((search, current)) = matches {
                                 for &(a, b) in search.matches_in(from, to) {
@@ -705,20 +781,29 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                             }
                             let start = laid.block_range(i).map_or(0, |r| r.start);
                             let local = |s: usize| span.chars_before(text, s.saturating_sub(start));
-                            if let Some((rope, current)) = live_matches
+                            if !md.decorations.is_empty()
                                 && let Some(first) = span.source_of(text, 0)
                                 && let Some(last) = span.source_of(text, span.advances.len())
                             {
-                                let chars = |b: usize| rope.byte_to_char(b.min(rope.len_bytes()));
-                                let byte = |c: usize| rope.char_to_byte(c.min(rope.len_chars()));
-                                let (c0, c1) = (chars(start + first), chars(start + last));
-                                for &(a, b) in search.matches_in(c0, c1.max(c0 + 1)) {
-                                    let color = if current == Some((a, b)) {
-                                        p.search_current
-                                    } else {
-                                        p.search_match
-                                    };
-                                    mark(from + local(byte(a)), from + local(byte(b)), color);
+                                let (s0, s1) = (start + first, start + last);
+                                for dec in md.decorations.in_range(s0..s1.max(s0 + 1)) {
+                                    if let winc_richtext::DecorationKind::Mark { style } = dec.kind
+                                    {
+                                        let (a, b) = (
+                                            from + local(dec.range.start),
+                                            from + local(dec.range.end),
+                                        );
+                                        match style {
+                                            winc_richtext::MarkStyle::Background(bg) => {
+                                                mark(a, b, bg);
+                                            }
+                                            other => {
+                                                if let Some(r) = span_rect(a, b) {
+                                                    span_overlays.push((r, other));
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             if let Some((a, b)) = live_selection
@@ -742,6 +827,9 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                             },
                             area,
                         );
+                        for (r, style) in span_overlays {
+                            draw_mark_overlay(frame, r, style, area);
+                        }
                     }
                     Item::Fill {
                         rect,
@@ -890,6 +978,20 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         for (s, scroller) in block.scrollers().iter().enumerate() {
             bars.push((i, s, fixed(&scroller.rect), laid.hscroll_of(i, s)));
         }
+    }
+    if (!md.decorations.is_empty() || !laid.widgets().is_empty())
+        && motion.as_ref().is_none_or(|m| !m.moving())
+    {
+        draw_decoration_widgets(
+            frame,
+            &laid,
+            &md.decorations,
+            p,
+            left,
+            origin_y,
+            area,
+            key.base,
+        );
     }
     // 显示滚动条的表格：鼠标所在的表格，其次是最近一次横向滚动的表格。
     let mut chosen = None;

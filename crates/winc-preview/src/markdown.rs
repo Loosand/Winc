@@ -95,6 +95,99 @@ impl Markdown {
         let separator = self.collapsed_separator_before(next)?;
         separator.contains(&source).then_some(separator)
     }
+
+    /// 枚举整篇解析文档中所有正文链接的原文 UTF-8 字节范围与目标地址。
+    ///
+    /// 用于把断链校验等诊断信息统一接入非侵入式装饰层。
+    pub fn links_with_ranges(&self) -> Vec<(Range<usize>, &str)> {
+        fn collect_inline<'a>(
+            inline: &'a Inline,
+            block_start: usize,
+            out: &mut Vec<(Range<usize>, &'a str)>,
+        ) {
+            if inline.links.is_empty() || inline.map.is_empty() {
+                return;
+            }
+            let base = block_start.saturating_add(inline.source);
+            let mut run_start = 0usize;
+            let mut active: Option<(u16, usize, usize)> = None;
+            let flush = |active: Option<(u16, usize, usize)>,
+                         out: &mut Vec<(Range<usize>, &'a str)>| {
+                if let Some((link, from, to)) = active
+                    && let Some(url) = inline.links.get(link.saturating_sub(1) as usize)
+                    && let (Some(a), Some(b)) = (inline.map.source(from), inline.map.source_end(to))
+                    && a < b
+                {
+                    out.push((base + a..base + b, url.as_str()));
+                }
+            };
+            for run in &inline.runs {
+                let link = run.style.link;
+                if link > 0 {
+                    match active {
+                        Some((cur, from, _)) if cur == link => {
+                            active = Some((cur, from, run.end));
+                        }
+                        _ => {
+                            flush(active, out);
+                            active = Some((link, run_start, run.end));
+                        }
+                    }
+                } else {
+                    flush(active, out);
+                    active = None;
+                }
+                run_start = run.end;
+            }
+            flush(active, out);
+        }
+
+        fn collect_block<'a>(
+            block: &'a Block,
+            block_start: usize,
+            out: &mut Vec<(Range<usize>, &'a str)>,
+        ) {
+            match block {
+                Block::Paragraph(inline) | Block::Heading(_, inline) => {
+                    collect_inline(inline, block_start, out);
+                }
+                Block::Quote(_, blocks) | Block::Footnote(_, blocks) => {
+                    for b in blocks {
+                        collect_block(b, block_start, out);
+                    }
+                }
+                Block::List(_, items) => {
+                    for item in items {
+                        for b in &item.blocks {
+                            collect_block(b, block_start, out);
+                        }
+                    }
+                }
+                Block::Table(_, rows, _) => {
+                    for row in rows {
+                        for cell in row {
+                            collect_inline(cell, block_start, out);
+                        }
+                    }
+                }
+                Block::Details {
+                    summary, blocks, ..
+                } => {
+                    collect_inline(summary, block_start, out);
+                    for b in blocks {
+                        collect_block(b, block_start, out);
+                    }
+                }
+                Block::Code { .. } | Block::Math(..) | Block::Rule(_) => {}
+            }
+        }
+
+        let mut out = Vec::new();
+        for (block, range) in self.blocks.iter().zip(&self.ranges) {
+            collect_block(block, range.start, &mut out);
+        }
+        out
+    }
 }
 
 /// Source starts of blank rows. Each nonempty slice ends with the exclusive byte limit.
@@ -159,6 +252,16 @@ impl SourceMap {
         let i = self
             .0
             .partition_point(|a| a.text as usize <= at)
+            .checked_sub(1)?;
+        let a = self.0[i];
+        Some(a.source as usize + (at - a.text as usize).min(a.len as usize))
+    }
+
+    /// 文字中第 `at` 个字节作为半开区间终点时，对应原文的排他终点字节偏移（不跨越到下一段标记之后）。
+    pub fn source_end(&self, at: usize) -> Option<usize> {
+        let i = self
+            .0
+            .partition_point(|a| (a.text as usize) < at)
             .checked_sub(1)?;
         let a = self.0[i];
         Some(a.source as usize + (at - a.text as usize).min(a.len as usize))

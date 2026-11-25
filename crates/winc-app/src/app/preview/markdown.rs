@@ -205,10 +205,14 @@ pub(crate) struct MarkdownPreview {
     pub(crate) menu_image: Option<resize::ImageAt>,
     /// 正在拖动把手的图片。
     pub(crate) resizing: Option<resize::Resizing>,
-    /// 非侵入式视图装饰层（批注、校验提示、AI 原位预览等），随编辑自动同步锚点。
+    /// 非侵入式视图装饰层（搜索高亮、断链诊断、批注、AI 原位预览等），随编辑自动同步锚点。
     pub(crate) decorations: winc_richtext::DecorationSet,
     /// `decorations` 最近一次同步对应的文档版本号。
     decorations_revision: Option<u64>,
+    /// `DecorationLayer::Search` 最近一次同步时的缓存键（文档、版本、匹配摘要、主题）。
+    search_deco_key: Option<(DocumentId, u64, u64)>,
+    /// `DecorationLayer::Diagnostic` 最近一次同步时的缓存键（文档、解析指针、校验代数、主题）。
+    diag_deco_key: Option<(DocumentId, usize, u64, u32)>,
 }
 
 /// 可编辑的预览重排后的过渡动画。
@@ -316,6 +320,8 @@ impl Default for MarkdownPreview {
             resizing: None,
             decorations: winc_richtext::DecorationSet::new(),
             decorations_revision: None,
+            search_deco_key: None,
+            diag_deco_key: None,
         }
     }
 }
@@ -390,36 +396,123 @@ impl MarkdownPreview {
         self.contents = None;
         self.decorations.clear();
         self.decorations_revision = None;
+        self.search_deco_key = None;
+        self.diag_deco_key = None;
     }
 }
 
+/// 搜索高亮与断链诊断层使用的保留 ID 段，避免与用户批注 / AI 挂件标识冲突。
+const SEARCH_DECO_BASE: u64 = 0x4000_0000_0000_0000;
+const DIAG_DECO_BASE: u64 = 0x8000_0000_0000_0000;
+
 impl App {
-    /// 按当前活动文档的最新编辑记录同步装饰层锚点，使批注与 AI 预览在持续编辑中不漂移。
+    /// 按当前活动文档的最新编辑记录同步装饰层锚点，并刷新查找高亮与断链诊断层。
     pub(crate) fn sync_markdown_decorations(&mut self) {
         let Some(doc) = self.editor.active() else {
             return;
         };
-        let md = &mut self.preview.markdown;
-        if md.doc != Some(doc.id) {
+        let (doc_id, doc_rev) = (doc.id, doc.revision);
+        if self.preview.markdown.doc != Some(doc_id) {
             return;
         }
-        if md.decorations.is_empty() {
-            md.decorations_revision = Some(doc.revision);
-            return;
-        }
-        let Some(prev_rev) = md.decorations_revision else {
-            md.decorations_revision = Some(doc.revision);
-            return;
-        };
-        if prev_rev == doc.revision {
-            return;
-        }
-        if let Some((old_range, new_range)) = doc.byte_edit_since(prev_rev) {
+        // 1. 先按增量字节变更推进已有的持久装饰（批注、AI 原位预览、块级挂件等）。
+        if let Some(prev_rev) = self.preview.markdown.decorations_revision
+            && prev_rev != doc_rev
+            && !self.preview.markdown.decorations.is_empty()
+            && let Some((old_range, new_range)) = doc.byte_edit_since(prev_rev)
+        {
             let change =
                 winc_richtext::ChangeMap::single(old_range.start, old_range.len(), new_range.len());
-            md.decorations.map(&change);
+            self.preview.markdown.decorations.map(&change);
         }
-        md.decorations_revision = Some(doc.revision);
+        self.preview.markdown.decorations_revision = Some(doc_rev);
+
+        // 2. 同步实时编辑预览的查找匹配高亮层（`DecorationLayer::Search`）。
+        let search_active = self.markdown_live()
+            && self.layout.search.h > 0.0
+            && self.bars.search.document() == Some(doc_id);
+        if search_active {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let matches = self.bars.search.matches();
+            let current = self.bars.search.current_match();
+            let mut h = DefaultHasher::new();
+            matches.len().hash(&mut h);
+            matches.first().hash(&mut h);
+            matches.last().hash(&mut h);
+            current.hash(&mut h);
+            self.palette.search_match.r.to_bits().hash(&mut h);
+            self.palette.search_current.r.to_bits().hash(&mut h);
+            let key = Some((doc_id, doc_rev, h.finish()));
+            if self.preview.markdown.search_deco_key != key {
+                let mut built = Vec::with_capacity(matches.len());
+                if let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) {
+                    let len = rope.len_chars();
+                    let match_color = self.palette.search_match;
+                    let current_color = self.palette.search_current;
+                    for (idx, &(a, b)) in matches.iter().enumerate() {
+                        let start = rope.char_to_byte(a.min(len));
+                        let end = rope.char_to_byte(b.min(len));
+                        if start < end {
+                            let color = if current == Some((a, b)) {
+                                current_color
+                            } else {
+                                match_color
+                            };
+                            built.push(winc_richtext::Decoration::mark(
+                                winc_richtext::DecorationId(SEARCH_DECO_BASE + idx as u64),
+                                winc_richtext::DecorationLayer::Search,
+                                start..end,
+                                winc_richtext::MarkStyle::Background(color),
+                            ));
+                        }
+                    }
+                }
+                self.preview
+                    .markdown
+                    .decorations
+                    .replace_layer(winc_richtext::DecorationLayer::Search, built);
+                self.preview.markdown.search_deco_key = key;
+            }
+        } else if self.preview.markdown.search_deco_key.take().is_some() {
+            self.preview
+                .markdown
+                .decorations
+                .clear_layer(winc_richtext::DecorationLayer::Search);
+        }
+
+        // 3. 同步断链诊断层（`DecorationLayer::Diagnostic`）：仅在解析结果追上当前版本时重算，
+        // 异步重解析期间保留上一步 `ChangeMap` 映射后的锚点。
+        if self.preview.markdown.checked == Some(doc_rev)
+            && let Some(parsed) = self.preview.markdown.parsed.clone()
+        {
+            let diag_key = Some((
+                doc_id,
+                Arc::as_ptr(&parsed) as usize,
+                self.preview.markdown.links.generation,
+                self.palette.error.r.to_bits(),
+            ));
+            if self.preview.markdown.diag_deco_key != diag_key {
+                let color = self.palette.error.alpha(0.7);
+                let mut built = Vec::new();
+                for (idx, (range, url)) in parsed.links_with_ranges().into_iter().enumerate() {
+                    if url.starts_with('\u{1}') || self.check_markdown_link(url).is_none() {
+                        continue;
+                    }
+                    built.push(winc_richtext::Decoration::mark(
+                        winc_richtext::DecorationId(DIAG_DECO_BASE + idx as u64),
+                        winc_richtext::DecorationLayer::Diagnostic,
+                        range,
+                        winc_richtext::MarkStyle::DashedUnderline(color),
+                    ));
+                }
+                self.preview
+                    .markdown
+                    .decorations
+                    .replace_layer(winc_richtext::DecorationLayer::Diagnostic, built);
+                self.preview.markdown.diag_deco_key = diag_key;
+            }
+        }
     }
 
     /// 返回当前标签显示 Markdown 预览的区域（分栏的右半边或整个编辑区）；不显示时返回 `None`。

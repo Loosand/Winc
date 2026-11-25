@@ -12,7 +12,35 @@ use std::sync::Arc;
 use winc_render::{Color, Frame, Rect};
 use winc_typeset::{Colors, Cx, Env, ImageSlot, Item, LaidBlock, Raw, Span, margins};
 
+use crate::decorations::{
+    Decoration, DecorationId, DecorationKind, DecorationLayer, DecorationSet,
+};
+
 pub use winc_typeset::{DETAILS, Memo};
+
+/// 块级虚拟挂件卡片与相邻正文块之间的纵向留白（逻辑像素）。
+pub const WIDGET_GAP: f32 = 8.0;
+
+/// 在排版流中预留好纵向空间的块级虚拟挂件槽位（内容坐标系，逻辑像素）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaidWidget {
+    /// 对应的装饰标识。
+    pub id: DecorationId,
+    /// 所属语义层。
+    pub layer: DecorationLayer,
+    /// 宿主侧渲染与交互用的稳定键。
+    pub key: Arc<str>,
+    /// 可选默认卡片标题/摘要文字。
+    pub label: Arc<str>,
+    /// 锚定到的原文 UTF-8 字节偏移。
+    pub source: usize,
+    /// 锚定到的顶层块序号（空文档时为 `None`）。
+    pub block: Option<usize>,
+    /// `true` 表示排在锚定块下方，`false` 表示排在上方。
+    pub after: bool,
+    /// 相对内容左上角的矩形 `(0.0, top, width, height)`。
+    pub rect: Rect,
+}
 
 /// 正文字号与编辑器字号之比：编辑器字号 13 逻辑像素时，正文为 16 逻辑像素。
 pub const BASE_RATIO: f32 = 16.0 / 13.0;
@@ -72,6 +100,10 @@ pub struct Laid {
     stale: Vec<bool>,
     /// 排版时保留了排版结果的范围（见 [`Near`]）；文档不长、全部保留时为 `None`。
     near: Option<Near>,
+    /// 本次排版在块间预留出的块级虚拟挂件槽位（按纵坐标递增排列）。
+    widgets: Vec<LaidWidget>,
+    /// 排版依据的块级虚拟挂件布局指纹（无挂件时为 `0`），用于帧缓存命中判断。
+    widgets_hash: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -319,6 +351,8 @@ pub struct LayoutInput<'a> {
     pub checked: bool,
     /// 顶部文档属性面板块（若存在）。
     pub properties: Option<winc_preview::markdown::Block>,
+    /// 非侵入式装饰层（若包含 `BlockWidget`，排版流会自动为其预留纵向槽位）。
+    pub decorations: Option<&'a DecorationSet>,
 }
 
 /// 返回基线在 `baseline`、字号 `size` 的一行字在选中、查找时铺底色的范围：上边缘和高度
@@ -415,6 +449,68 @@ impl Laid {
         let mut blocks: Vec<(u64, Arc<LaidBlock>)> = Vec::with_capacity(parsed.blocks.len());
         let mut tops = Vec::with_capacity(parsed.blocks.len());
         let mut starts = Vec::with_capacity(parsed.blocks.len());
+        // 预先算出当前文档下各顶层块的字节范围，便于在排版流中准确锚定块级虚拟挂件。
+        let empty = if parsed.blocks.is_empty() && editable {
+            input
+                .rope
+                .filter(|rope| rope.chars().all(char::is_whitespace))
+                .map(|rope| 0..rope.len_bytes())
+        } else {
+            None
+        };
+        let ranges = {
+            // 解析之后打的字都在光标所在的块里：这一块换成现在的范围，原文在它后面的块按文字
+            // 长度的变化挪。
+            let mut ranges = empty
+                .as_ref()
+                .map_or_else(|| parsed.ranges.clone(), |range| vec![range.clone()]);
+            if let Some(live) = live
+                && let Some(start) = ranges.get(live.block).map(|r| r.start)
+            {
+                let len = input.rope.map(|r| r.len_bytes());
+                let delta = len.map_or(0, |len| len as i64 - parsed.len as i64);
+                let shift = |at: usize| usize::try_from(at as i64 + delta).unwrap_or(0);
+                for range in ranges.iter_mut().filter(|r| r.start > start) {
+                    *range = shift(range.start)..shift(range.end);
+                }
+                ranges[live.block] = live.range.clone();
+            }
+            ranges
+        };
+        let widgets_hash = input
+            .decorations
+            .map_or(0, DecorationSet::block_widget_fingerprint);
+        let mut before_widgets: HashMap<usize, Vec<&Decoration>> = HashMap::new();
+        let mut after_widgets: HashMap<usize, Vec<&Decoration>> = HashMap::new();
+        let mut orphan_widgets: Vec<&Decoration> = Vec::new();
+        if widgets_hash != 0
+            && let Some(decorations) = input.decorations
+        {
+            for dec in decorations.block_widgets() {
+                if let DecorationKind::BlockWidget { after, .. } = &dec.kind {
+                    if parsed.blocks.is_empty() {
+                        orphan_widgets.push(dec);
+                    } else {
+                        let source = dec.range.start;
+                        let block_idx = ranges
+                            .iter()
+                            .rposition(|r| r.contains(&source))
+                            .or_else(|| ranges.iter().rposition(|r| r.end == source))
+                            .or_else(|| {
+                                ranges.partition_point(|r| r.start <= source).checked_sub(1)
+                            })
+                            .unwrap_or(0)
+                            .min(parsed.blocks.len() - 1);
+                        if *after {
+                            after_widgets.entry(block_idx).or_default().push(dec);
+                        } else {
+                            before_widgets.entry(block_idx).or_default().push(dec);
+                        }
+                    }
+                }
+            }
+        }
+        let mut widgets: Vec<LaidWidget> = Vec::new();
         let (mut y, mut below, mut chars) = (0.0, None, 0);
         let blank_row = winc_typeset::blank_row_height(key.base);
         let mut gaps = Vec::new();
@@ -515,7 +611,31 @@ impl Laid {
                     false,
                 ));
             }
-            let top = y + space;
+            let mut top = y + space;
+            if let Some(list) = before_widgets.get(&i) {
+                for dec in list {
+                    if let DecorationKind::BlockWidget {
+                        key: wkey,
+                        label,
+                        height,
+                        after,
+                    } = &dec.kind
+                    {
+                        let h = height.max(0.0);
+                        widgets.push(LaidWidget {
+                            id: dec.id,
+                            layer: dec.layer,
+                            key: Arc::clone(wkey),
+                            label: Arc::clone(label),
+                            source: dec.range.start,
+                            block: Some(i),
+                            after: *after,
+                            rect: Rect::new(0.0, top, key.width, h),
+                        });
+                        top += h + WIDGET_GAP;
+                    }
+                }
+            }
             let wanted = |laid: &LaidBlock| {
                 let needed = near
                     .as_ref()
@@ -545,6 +665,31 @@ impl Laid {
             chars += laid.chars;
             tops.push(top);
             y = top + laid.height;
+            if let Some(list) = after_widgets.get(&i) {
+                for dec in list {
+                    if let DecorationKind::BlockWidget {
+                        key: wkey,
+                        label,
+                        height,
+                        after,
+                    } = &dec.kind
+                    {
+                        let h = height.max(0.0);
+                        let wy = y + WIDGET_GAP;
+                        widgets.push(LaidWidget {
+                            id: dec.id,
+                            layer: dec.layer,
+                            key: Arc::clone(wkey),
+                            label: Arc::clone(label),
+                            source: dec.range.start,
+                            block: Some(i),
+                            after: *after,
+                            rect: Rect::new(0.0, wy, key.width, h),
+                        });
+                        y = wy + h;
+                    }
+                }
+            }
             below = Some(margin_bottom);
             blocks.push((hash, laid));
         }
@@ -568,14 +713,6 @@ impl Laid {
         }
         // A note with only blank lines has no Markdown blocks, but those rows still
         // need real source positions in the editable view.
-        let empty = if blocks.is_empty() && editable {
-            input
-                .rope
-                .filter(|rope| rope.chars().all(char::is_whitespace))
-                .map(|rope| 0..rope.len_bytes())
-        } else {
-            None
-        };
         if let (Some(range), Some(rope)) = (&empty, input.rope) {
             let raw = Raw::new(
                 rope.to_string().into(),
@@ -591,6 +728,29 @@ impl Laid {
             y = laid.height;
             blocks.push((0, Arc::new(laid)));
         }
+        for dec in orphan_widgets {
+            if let DecorationKind::BlockWidget {
+                key: wkey,
+                label,
+                height,
+                after,
+            } = &dec.kind
+            {
+                let h = height.max(0.0);
+                let wy = if y > 0.0 { y + WIDGET_GAP } else { 0.0 };
+                widgets.push(LaidWidget {
+                    id: dec.id,
+                    layer: dec.layer,
+                    key: Arc::clone(wkey),
+                    label: Arc::clone(label),
+                    source: dec.range.start,
+                    block: None,
+                    after: *after,
+                    rect: Rect::new(0.0, wy, key.width, h),
+                });
+                y = wy + h;
+            }
+        }
         cx.memo.sweep(blocks.iter().map(|(_, b)| &*b.memo));
         let wanted = std::mem::take(&mut cx.wanted);
         let laid = Laid {
@@ -605,23 +765,7 @@ impl Laid {
             } else {
                 parsed.lines.clone()
             },
-            ranges: {
-                // 解析之后打的字都在光标所在的块里：这一块换成现在的范围，原文在它后面的块按文字
-                // 长度的变化挪。
-                let mut ranges = empty.map_or_else(|| parsed.ranges.clone(), |range| vec![range]);
-                if let Some(live) = live
-                    && let Some(start) = ranges.get(live.block).map(|r| r.start)
-                {
-                    let len = input.rope.map(|r| r.len_bytes());
-                    let delta = len.map_or(0, |len| len as i64 - parsed.len as i64);
-                    let shift = |at: usize| usize::try_from(at as i64 + delta).unwrap_or(0);
-                    for range in ranges.iter_mut().filter(|r| r.start > start) {
-                        *range = shift(range.start)..shift(range.end);
-                    }
-                    ranges[live.block] = live.range.clone();
-                }
-                ranges
-            },
+            ranges,
             gaps,
             blank_offsets: Arc::clone(blank.offsets()),
             space_width,
@@ -635,6 +779,8 @@ impl Laid {
             followed: None,
             stale,
             near,
+            widgets,
+            widgets_hash,
         };
         (laid, wanted)
     }
@@ -666,18 +812,20 @@ impl Laid {
         self.near.as_ref()
     }
 
-    /// 当前帧条件、源码、光标状态与保留范围是否全部命中缓存。
+    /// 当前帧条件、源码、光标状态、块级挂件指纹与保留范围是否全部命中缓存。
     pub fn matches_frame(
         &self,
         key: Key,
         source: usize,
         live: Option<&LiveKey>,
+        widgets_hash: u64,
         near: &Near,
         view_h: f32,
     ) -> bool {
         self.key == key
             && self.source == source
             && self.live.as_ref() == live
+            && self.widgets_hash == widgets_hash
             && !self.pending()
             && self
                 .near
@@ -685,9 +833,39 @@ impl Laid {
                 .is_none_or(|kept| kept.covers(near, view_h))
     }
 
-    /// 是否只是续排上一帧未完的块或更新保留范围（条件、源码、光标均未变）。
-    pub fn can_resume(&self, key: Key, source: usize, live: Option<&LiveKey>) -> bool {
-        self.key == key && self.source == source && self.live.as_ref() == live
+    /// 是否只是续排上一帧未完的块或更新保留范围（条件、源码、光标、挂件均未变）。
+    pub fn can_resume(
+        &self,
+        key: Key,
+        source: usize,
+        live: Option<&LiveKey>,
+        widgets_hash: u64,
+    ) -> bool {
+        self.key == key
+            && self.source == source
+            && self.live.as_ref() == live
+            && self.widgets_hash == widgets_hash
+    }
+
+    /// 本次排版在块间预留出的全部块级虚拟挂件槽位。
+    pub fn widgets(&self) -> &[LaidWidget] {
+        &self.widgets
+    }
+
+    /// 返回窗口坐标 `(x, y)` 命中的块级虚拟挂件槽位（若存在）。
+    pub fn widget_at(&self, area_y: f32, scroll: f32, x: f32, y: f32) -> Option<&LaidWidget> {
+        let cx = x - self.left;
+        let cy = y - (area_y + self.pad - scroll);
+        self.widgets.iter().find(|w| w.rect.contains(cx, cy))
+    }
+
+    /// 若第 `block` 块下方存在 `after` 块级虚拟挂件，返回首个挂件的上边缘（相对内容顶部）。
+    pub fn widget_top_after(&self, block: usize) -> Option<f32> {
+        self.widgets
+            .iter()
+            .filter(|w| w.block == Some(block) && w.after)
+            .map(|w| w.rect.y)
+            .min_by(f32::total_cmp)
     }
 
     /// 写入本帧的排版位置与折行归属；留白或归属变化时清除缓存的光标坐标。

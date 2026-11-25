@@ -1272,3 +1272,210 @@ fn invariant_13_decoration_layer_anchors_and_tracks_edits() {
 
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// 不变量 14：可编辑预览的查找匹配高亮与断链诊断统一走非侵入式装饰层，
+/// 查找关闭或断链修复后自动清理，不污染批注或 AI 预览等其他装饰层。
+#[test]
+fn invariant_14_search_and_broken_links_route_through_decorations() {
+    use winc_richtext::{Decoration, DecorationId, DecorationLayer, MarkStyle};
+
+    let doc = "# 标题\n\n第一段含[好链接](short.rs)与[坏链接](missing.md)，再次提到链接。\n";
+    let (mut app, dir) = live_doc("inv-14-search-diag", doc);
+    // 放一条用户批注，验证 Search / Diagnostic 刷新不会误删其他层。
+    let note_start = doc.find("第一段").unwrap();
+    app.preview.markdown.decorations.upsert(Decoration::mark(
+        DecorationId(1),
+        DecorationLayer::Annotation,
+        note_start..note_start + "第一段".len(),
+        MarkStyle::Background(winc_render::Color::hex(0xfff2a8).alpha(0.5)),
+    ));
+    paint(&mut app);
+
+    // 14a. 断链 `[坏链接](missing.md)` 自动进入 Diagnostic 层，`short.rs` 有效不进入。
+    assert_eq!(
+        app.preview
+            .markdown
+            .decorations
+            .layer_len(DecorationLayer::Diagnostic),
+        1,
+        "预期恰好 1 条断链诊断装饰"
+    );
+    let diag = app
+        .preview
+        .markdown
+        .decorations
+        .all()
+        .iter()
+        .find(|d| d.layer == DecorationLayer::Diagnostic)
+        .unwrap();
+    let expected_bad = doc.find("坏链接").unwrap();
+    assert_eq!(
+        diag.range,
+        expected_bad..expected_bad + "坏链接".len(),
+        "断链诊断装饰锚点应精确覆盖链接文字"
+    );
+
+    // 14b. 打开查找条搜索「链接」：所有匹配自动同步到 Search 层。
+    app.open_search(false);
+    app.bars.find.input.set_text("链接");
+    app.bars.search.set_query("链接");
+    app.search_changed();
+    paint(&mut app);
+    assert_eq!(
+        app.preview
+            .markdown
+            .decorations
+            .layer_len(DecorationLayer::Search),
+        3,
+        "搜索「链接」应在 Search 装饰层产出 3 条匹配"
+    );
+    assert_eq!(
+        app.preview
+            .markdown
+            .decorations
+            .layer_len(DecorationLayer::Annotation),
+        1,
+        "刷新 Search 层不得清除 Annotation 层"
+    );
+
+    // 关闭查找条后 Search 层自动清空，Annotation 与 Diagnostic 不受影响。
+    app.close_search();
+    paint(&mut app);
+    assert_eq!(
+        app.preview
+            .markdown
+            .decorations
+            .layer_len(DecorationLayer::Search),
+        0,
+        "关闭查找条后 Search 装饰层应清空"
+    );
+
+    // 14c. 目标文件创建并清空链接校验缓存后，Diagnostic 层自动清零。
+    std::fs::write(dir.join("missing.md"), "").unwrap();
+    app.preview.markdown.links.clear();
+    paint(&mut app);
+    assert_eq!(
+        app.preview
+            .markdown
+            .decorations
+            .layer_len(DecorationLayer::Diagnostic),
+        0,
+        "断链修复后 Diagnostic 装饰层应自动清除"
+    );
+    assert_eq!(
+        app.preview
+            .markdown
+            .decorations
+            .layer_len(DecorationLayer::Annotation),
+        1,
+        "刷新 Diagnostic 层不得清除 Annotation 层"
+    );
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// 不变量 15：块级虚拟挂件（`BlockWidget`）在排版流中准确预留纵向空间并支持命中查询，
+/// 不修改 Markdown 原文或撤销栈；上下段落的光标、点击定位与移除后的几何还原全部严格一致。
+#[test]
+fn invariant_15_block_widget_reserves_layout_slot_and_preserves_geometry() {
+    use winc_richtext::{Decoration, DecorationId, DecorationLayer, WIDGET_GAP};
+
+    let doc = "第一段正文内容。\n\n第二段正文内容。\n\n第三段正文内容。\n";
+    let (mut app, dir) = live_doc("inv-15-block-widget", doc);
+    paint(&mut app);
+
+    let baseline_height = app.preview.markdown.layout.as_ref().unwrap().height;
+    let baseline_top1 = app.preview.markdown.layout.as_ref().unwrap().top(1);
+    let baseline_top2 = app.preview.markdown.layout.as_ref().unwrap().top(2);
+
+    // 在第二段下方挂载一个高 64px 的 AI 修订建议虚拟卡片。
+    let p2_at = doc.find("第二段").unwrap();
+    let card_h = 64.0;
+    app.preview.markdown.decorations.upsert(
+        Decoration::block_widget(
+            DecorationId(101),
+            DecorationLayer::AiPreview,
+            p2_at,
+            "ai-suggest-1",
+            card_h,
+            true,
+        )
+        .with_label("AI 建议：精简第二段表述"),
+    );
+    paint(&mut app);
+
+    // 原文与撤销栈完全未被触碰。
+    assert_eq!(doc_text(&app), doc, "挂载块级虚拟挂件不得改写原文");
+
+    let laid = app.preview.markdown.layout.as_ref().unwrap();
+    assert_eq!(laid.widgets().len(), 1);
+    let w = &laid.widgets()[0];
+    assert_eq!(w.block, Some(1));
+    assert!((w.rect.h - card_h).abs() < 0.01);
+    let expected_shift = card_h + WIDGET_GAP;
+    assert!(
+        (laid.top(1) - baseline_top1).abs() < 0.5,
+        "挂载在第二段下方的卡片不应移动第二段自身"
+    );
+    assert!(
+        (laid.top(2) - (baseline_top2 + expected_shift)).abs() < 1.0,
+        "第三段未准确下移: got={}, expected={}",
+        laid.top(2),
+        baseline_top2 + expected_shift
+    );
+    assert!(
+        (laid.height - (baseline_height + expected_shift)).abs() < 1.0,
+        "文档总高度未计入块级虚拟挂件: got={}, expected={}",
+        laid.height,
+        baseline_height + expected_shift
+    );
+
+    // 命中测试：卡片内部命中 `widget_at`，卡片下方的第三段仍能准确点击定位到原文。
+    let area = app.preview.markdown.area;
+    let scroll = app.preview.markdown.scroll();
+    let (left, _) = laid.column_bounds();
+    let origin_y = laid.origin_y(area.y, scroll);
+    let card_center = (left + w.rect.w * 0.5, origin_y + w.rect.y + w.rect.h * 0.5);
+    assert_eq!(
+        laid.widget_at(area.y, scroll, card_center.0, card_center.1)
+            .map(|hit| hit.id),
+        Some(DecorationId(101)),
+        "点击虚拟挂件卡片应命中该挂件"
+    );
+    let p3_start = doc.find("第三段").unwrap();
+    let (p3_x, p3_y, p3_h) = laid.caret_point(p3_start).unwrap();
+    let hit_p3 = laid.source_at(
+        area.y,
+        scroll,
+        left + p3_x + 2.0,
+        area.y - scroll + p3_y + p3_h * 0.5,
+    );
+    assert!(
+        hit_p3.is_some_and(|b| (p3_start..p3_start + "第三段正文内容。".len()).contains(&b)),
+        "点击虚拟卡片下方段落应精确命中第三段原文: hit={hit_p3:?}"
+    );
+
+    // 在第一段上方插入新文本后，卡片锚点自动平移，仍稳定挂在第二段下方。
+    put_caret(&mut app, "第一段", false);
+    app.run(winc_editor::Command::Insert("新增前缀 ".into()));
+    paint(&mut app);
+    let now = doc_text(&app);
+    let laid = app.preview.markdown.layout.as_ref().unwrap();
+    assert_eq!(laid.widgets().len(), 1);
+    assert_eq!(laid.widgets()[0].source, now.find("第二段").unwrap());
+    assert_eq!(laid.widgets()[0].block, Some(1));
+
+    // 移除卡片并撤销编辑后，整篇排版几何完全恢复到初始基线。
+    app.preview
+        .markdown
+        .decorations
+        .clear_layer(DecorationLayer::AiPreview);
+    app.run(winc_editor::Command::Undo);
+    paint(&mut app);
+    let laid = app.preview.markdown.layout.as_ref().unwrap();
+    assert!(laid.widgets().is_empty());
+    assert!((laid.height - baseline_height).abs() < 0.5);
+    assert!((laid.top(2) - baseline_top2).abs() < 0.5);
+
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -72,6 +72,8 @@ pub enum DecorationKind {
     BlockWidget {
         /// 宿主侧渲染/交互用的稳定键。
         key: Arc<str>,
+        /// 可选默认卡片标题/摘要文字（宿主无自定义渲染器时作为可读卡片文案显示）。
+        label: Arc<str>,
         /// 预留逻辑像素高度。
         height: f32,
         /// `true` 表示排在锚点所在块下方，`false` 表示排在上方。
@@ -146,6 +148,7 @@ impl Decoration {
             range: at..at,
             kind: DecorationKind::BlockWidget {
                 key: key.into(),
+                label: Arc::from(""),
                 height,
                 after,
             },
@@ -153,8 +156,20 @@ impl Decoration {
         }
     }
 
+    /// 为块级虚拟区块设置展示摘要/标题文字。
+    pub fn with_label(mut self, text: impl Into<Arc<str>>) -> Self {
+        if let DecorationKind::BlockWidget { label, .. } = &mut self.kind {
+            *label = text.into();
+        }
+        self
+    }
+
     fn is_point(&self) -> bool {
         !matches!(self.kind, DecorationKind::Mark { .. })
+    }
+
+    fn is_block_widget(&self) -> bool {
+        matches!(self.kind, DecorationKind::BlockWidget { .. })
     }
 }
 
@@ -164,6 +179,8 @@ pub struct DecorationSet {
     items: Vec<Decoration>,
     /// 所有装饰中最长的范围跨度（字节），用于二分检索起点前移，避免漏查跨块长装饰。
     max_span: usize,
+    /// 当前集合中块级虚拟挂件的数量，用于零开销判断排版是否受装饰影响。
+    block_widget_count: usize,
 }
 
 impl DecorationSet {
@@ -177,9 +194,52 @@ impl DecorationSet {
         self.items.len()
     }
 
+    /// 指定语义层的装饰条目数量。
+    pub fn layer_len(&self, layer: DecorationLayer) -> usize {
+        self.items.iter().filter(|d| d.layer == layer).count()
+    }
+
     /// 是否没有任何装饰。
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+
+    /// 是否包含任意需要参与排版的块级虚拟挂件。
+    pub fn has_block_widgets(&self) -> bool {
+        self.block_widget_count > 0
+    }
+
+    /// 枚举全部块级虚拟挂件（已按锚点原文位置排序）。
+    pub fn block_widgets(&self) -> impl Iterator<Item = &Decoration> {
+        self.items.iter().filter(|d| d.is_block_widget())
+    }
+
+    /// 计算块级虚拟挂件集合的布局指纹：无块级挂件时恒为 `0`，用于 `Laid` 帧缓存命中判断。
+    pub fn block_widget_fingerprint(&self) -> u64 {
+        if self.block_widget_count == 0 {
+            return 0;
+        }
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        for d in self.items.iter().filter(|d| d.is_block_widget()) {
+            if let DecorationKind::BlockWidget {
+                key,
+                label,
+                height,
+                after,
+            } = &d.kind
+            {
+                d.id.hash(&mut h);
+                d.layer.hash(&mut h);
+                d.range.start.hash(&mut h);
+                key.hash(&mut h);
+                label.hash(&mut h);
+                height.to_bits().hash(&mut h);
+                after.hash(&mut h);
+            }
+        }
+        h.finish().max(1)
     }
 
     /// 返回按起点排好序的全部装饰。
@@ -190,7 +250,13 @@ impl DecorationSet {
     /// 插入或替换同 [`DecorationId`] 的装饰。
     pub fn upsert(&mut self, decoration: Decoration) {
         if let Some(pos) = self.items.iter().position(|d| d.id == decoration.id) {
-            self.items.remove(pos);
+            let removed = self.items.remove(pos);
+            if removed.is_block_widget() {
+                self.block_widget_count = self.block_widget_count.saturating_sub(1);
+            }
+        }
+        if decoration.is_block_widget() {
+            self.block_widget_count += 1;
         }
         let span = decoration.range.len();
         self.max_span = self.max_span.max(span);
@@ -219,7 +285,7 @@ impl DecorationSet {
         let before = self.items.len();
         self.items.retain(|d| d.id != id);
         if self.items.len() != before {
-            self.recompute_max_span();
+            self.recompute_meta();
             true
         } else {
             false
@@ -231,7 +297,7 @@ impl DecorationSet {
         let before = self.items.len();
         self.items.retain(|d| d.layer != layer);
         if self.items.len() != before {
-            self.recompute_max_span();
+            self.recompute_meta();
         }
     }
 
@@ -239,6 +305,7 @@ impl DecorationSet {
     pub fn clear(&mut self) {
         self.items.clear();
         self.max_span = 0;
+        self.block_widget_count = 0;
     }
 
     /// 文档发生一次编辑后，把全部装饰的原文范围映射到新文档坐标系。
@@ -291,11 +358,12 @@ impl DecorationSet {
     fn rebuild_index(&mut self) {
         self.items
             .sort_by_key(|d| (d.range.start, d.range.end, d.id));
-        self.recompute_max_span();
+        self.recompute_meta();
     }
 
-    fn recompute_max_span(&mut self) {
+    fn recompute_meta(&mut self) {
         self.max_span = self.items.iter().map(|d| d.range.len()).max().unwrap_or(0);
+        self.block_widget_count = self.items.iter().filter(|d| d.is_block_widget()).count();
     }
 }
 
@@ -306,6 +374,7 @@ mod tests {
     #[test]
     fn decorations_remap_across_edits_and_drop_deleted_marks() {
         let mut set = DecorationSet::new();
+        assert_eq!(set.block_widget_fingerprint(), 0);
         let bg = MarkStyle::Background(Color::hex(0xffee88));
         let ghost = WidgetStyle {
             color: Color::hex(0x888888),
@@ -325,20 +394,27 @@ mod tests {
             " suggested text",
             ghost,
         ));
-        set.upsert(Decoration::block_widget(
-            DecorationId(3),
-            DecorationLayer::AiPreview,
-            30,
-            "ai-card-1",
-            48.0,
-            true,
-        ));
+        assert_eq!(set.block_widget_fingerprint(), 0);
+        set.upsert(
+            Decoration::block_widget(
+                DecorationId(3),
+                DecorationLayer::AiPreview,
+                30,
+                "ai-card-1",
+                48.0,
+                true,
+            )
+            .with_label("AI 修订建议"),
+        );
+        let fp_initial = set.block_widget_fingerprint();
+        assert_ne!(fp_initial, 0);
 
         // 在装饰之前插入 5 字节：全部向右平移 5 字节。
         set.map(&ChangeMap::single(0, 0, 5));
         assert_eq!(set.all()[0].range, 15..25);
         assert_eq!(set.all()[1].range, 30..30);
         assert_eq!(set.all()[2].range, 35..35);
+        assert_ne!(set.block_widget_fingerprint(), fp_initial);
 
         // 在第一条批注内部插入 3 字节：批注区间自动扩张。
         set.map(&ChangeMap::single(18, 0, 3));
@@ -367,5 +443,6 @@ mod tests {
         set.clear_layer(DecorationLayer::AiPreview);
         assert_eq!(set.len(), 1);
         assert_eq!(set.all()[0].id, DecorationId(4));
+        assert_eq!(set.block_widget_fingerprint(), 0);
     }
 }

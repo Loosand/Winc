@@ -120,7 +120,13 @@ pub(super) fn draw(
             } else if to > range.end
                 && let Some(next) = laid.tops().get(block + 1)
             {
-                let limit = laid.gap_top_after(block).unwrap_or(*next);
+                let mut limit = *next;
+                if let Some(gap_top) = laid.gap_top_after(block) {
+                    limit = limit.min(gap_top);
+                }
+                if let Some(widget_top) = laid.widget_top_after(block) {
+                    limit = limit.min(widget_top);
+                }
                 bottom = bottom.max(body.y + limit - laid.top(block));
             }
         }

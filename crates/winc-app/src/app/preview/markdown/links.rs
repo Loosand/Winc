@@ -34,6 +34,8 @@ impl Broken {
 pub(crate) struct LinkChecks {
     of: Option<(DocumentId, u64, Option<u64>)>,
     results: HashMap<String, Option<Broken>>,
+    /// 每次主动清空缓存时递增，用于通知装饰层刷新断链诊断。
+    pub(crate) generation: u64,
 }
 
 impl LinkChecks {
@@ -45,6 +47,7 @@ impl LinkChecks {
     /// 清空结果，磁盘上的文件变化后调用。
     pub(crate) fn clear(&mut self) {
         self.results.clear();
+        self.generation = self.generation.wrapping_add(1);
     }
 }
 
@@ -54,9 +57,11 @@ impl App {
         let doc = self.editor.active()?;
         let of = Some((doc.id, doc.revision, self.preview.markdown.checked));
         if self.preview.markdown.links.of != of {
+            let generation = self.preview.markdown.links.generation;
             self.preview.markdown.links = LinkChecks {
                 of,
                 results: HashMap::new(),
+                generation,
             };
         }
         if let Some(&known) = self.preview.markdown.links.results.get(url) {

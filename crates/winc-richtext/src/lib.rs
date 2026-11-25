@@ -19,9 +19,9 @@ pub use decorations::{
     WidgetStyle,
 };
 pub use layout::{
-    BASE_RATIO, Before, COPY, DETAILS, EXPAND, Fading, Key, LAYOUT_BUDGET, Laid, Later,
+    BASE_RATIO, Before, COPY, DETAILS, EXPAND, Fading, Key, LAYOUT_BUDGET, Laid, LaidWidget, Later,
     LayoutInput, Leaving, LiveKey, LiveLeaf, MAX_WIDTH, Memo, Moves, NEAR_BLOCKS, Near, PAD,
-    PAD_NARROW, Point, SHED_BLOCKS, TABLE, TASK, WIDE_WIDTH, interpolate, line_box,
+    PAD_NARROW, Point, SHED_BLOCKS, TABLE, TASK, WIDE_WIDTH, WIDGET_GAP, interpolate, line_box,
 };
 pub use mapping::{
     Assoc, ChangeMap, ChangeSeq, Fenced, SourceBridge, fenced_lines, in_fence, is_image_url,
