@@ -13,7 +13,7 @@ use crate::app::{
 };
 use crate::icons::Direction;
 use crate::layout::{PickerParts, SearchButton};
-use crate::ui::{self, CardFrame, TextBasis};
+use crate::ui;
 
 /// 绘制查找条（⌘F、⌥⌘F）：浮在编辑区右上角，内含查找输入框，展开后含替换输入框。
 pub(super) fn draw_search(app: &mut App, frame: &mut Frame<'_>) {
@@ -139,7 +139,7 @@ fn draw_search_bar(
             hovered(SearchButton::Regex),
         ),
     ];
-    draw_search_options(app, frame, toggles, bar);
+    fields::draw_search_options(app, frame, toggles, bar);
 
     frame.rect(parts.divider, p.popup_border);
 
@@ -289,11 +289,7 @@ pub(super) fn draw_goto(app: &mut App, frame: &mut Frame<'_>) {
             .items_center()
             .bg(p.popup_bg)
             .rounded(RADIUS_BAR)
-            .card_frame(CardFrame {
-                shadow: p.shadow,
-                border_base: p.popup_bg,
-                border: p.popup_border,
-            })
+            .card_frame(p.card_frame())
             .child(
                 ui::text(title)
                     .text_size(app.fonts.ui)
@@ -309,11 +305,7 @@ pub(super) fn draw_goto(app: &mut App, frame: &mut Frame<'_>) {
                     .flex_shrink(0.0),
             );
         }
-        let basis = TextBasis {
-            ui_size: app.fonts.ui,
-            x_height: app.metrics.ui.x_height,
-            cap_height: app.metrics.ui.cap_height,
-        };
+        let basis = ui::text_basis(app.fonts.ui, app.metrics.ui);
         ui::render(frame, basis, bar, row);
         caret
     };
@@ -1106,11 +1098,7 @@ pub(super) fn draw_conflict(
     let top = app.overlay_top() + NOTICE_MARGIN;
     let card = Rect::new(area.right() - NOTICE_MARGIN - width, top, width, 36.0);
     let icon_cy = text_icon_center_y(app, card, font, &message);
-    let basis = TextBasis {
-        ui_size: app.fonts.ui,
-        x_height: app.metrics.ui.x_height,
-        cap_height: app.metrics.ui.cap_height,
-    };
+    let basis = ui::text_basis(app.fonts.ui, app.metrics.ui);
 
     let button_nodes = ConflictAction::ALL.iter().map(|&action| {
         let hovered = app.pointer.hover == Hover::ConflictButton(action);
@@ -1139,11 +1127,7 @@ pub(super) fn draw_conflict(
         .items_center()
         .bg(p.popup_bg)
         .rounded(RADIUS_BAR)
-        .card_frame(CardFrame {
-            shadow: p.shadow,
-            border_base: p.popup_bg,
-            border: p.popup_border,
-        })
+        .card_frame(p.card_frame())
         .child(ui::custom(
             (NOTICE_TEXT_X, card.h),
             move |frame, slot, clip| {
@@ -1222,11 +1206,7 @@ fn draw_notice(
     // 浮层统一用白底卡片，只用图标的颜色区分提示的种类，不整块铺底色。
     let size = app.fonts.ui;
     let icon_cy = text_icon_center_y(app, rect, size, &message);
-    let basis = TextBasis {
-        ui_size: app.fonts.ui,
-        x_height: app.metrics.ui.x_height,
-        cap_height: app.metrics.ui.cap_height,
-    };
+    let basis = ui::text_basis(app.fonts.ui, app.metrics.ui);
     let icon_slot = ui::custom((NOTICE_TEXT_X, rect.h), move |frame, slot, clip| {
         let icon = (slot.x + NOTICE_ICON_X, icon_cy);
         match mark {
@@ -1243,11 +1223,7 @@ fn draw_notice(
         .items_center()
         .bg(p.popup_bg)
         .rounded(RADIUS_BAR)
-        .card_frame(CardFrame {
-            shadow: p.shadow,
-            border_base: p.popup_bg,
-            border: p.popup_border,
-        })
+        .card_frame(p.card_frame())
         .child(icon_slot)
         .child(
             ui::text(message.into_owned())

@@ -7,7 +7,7 @@
 use super::*;
 use crate::app::{AlertPart, InAppAlert};
 use crate::ui::widgets::{self, ButtonKind};
-use crate::ui::{self, CardFrame, Node, TextBasis};
+use crate::ui::{self, Node};
 
 /// 卡片的内边距（逻辑像素）。
 const PAD: f32 = SETTINGS_PAD;
@@ -35,11 +35,7 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let window = app.layout.window;
     let max_w = DIALOG_W.min(window.w - 32.0).max(160.0);
     let min_w = MIN_W.min(max_w);
-    let basis = TextBasis {
-        ui_size: app.fonts.ui,
-        x_height: app.metrics.ui.x_height,
-        cap_height: app.metrics.ui.cap_height,
-    };
+    let basis = ui::text_basis(app.fonts.ui, app.metrics.ui);
 
     let tree = build_card(app, alert, min_w, max_w);
     let laid = ui::layout(frame, basis, (None, None), tree);
@@ -135,11 +131,7 @@ fn build_card(app: &App, alert: &InAppAlert, min_w: f32, max_w: f32) -> Node<'st
         .gap(PAD)
         .bg(p.editor_bg)
         .rounded(RADIUS_CARD)
-        .card_frame(CardFrame {
-            shadow: p.shadow,
-            border_base: p.popup_bg,
-            border: p.popup_border,
-        })
+        .card_frame(p.card_frame())
         .child(text_block)
         .child(footer)
 }

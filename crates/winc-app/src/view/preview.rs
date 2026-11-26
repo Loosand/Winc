@@ -11,3 +11,22 @@ pub(in crate::view) mod json;
 pub(crate) mod markdown;
 pub(in crate::view) mod pdf;
 pub(crate) mod table;
+
+use crate::theme::{Palette, RADIUS_POPUP};
+use winc_render::{Frame, Rect};
+
+/// 绘制浮在预览内容上的工具栏或卡片 `rect`（含细边框）：阴影、细边框和底色，裁剪到 `clip`；
+/// 细边框画在卡片底色上，不透出下方的内容。
+pub(in crate::view::preview) fn draw_floating_bar(
+    frame: &mut Frame<'_>,
+    p: &Palette,
+    rect: Rect,
+    clip: Rect,
+) {
+    let covered = frame.covered(rect, RADIUS_POPUP);
+    frame.shadow(rect, RADIUS_POPUP, 12.0, 4.0, p.shadow, Some(covered));
+    frame.rect_clipped(rect, p.popup_bg, RADIUS_POPUP, clip);
+    frame.rect_clipped(rect, p.popup_border, RADIUS_POPUP, clip);
+    let inner = rect.inset(1.0, 1.0);
+    frame.rect_clipped(inner, p.popup_bg, RADIUS_POPUP - 1.0, clip);
+}

@@ -487,3 +487,35 @@ pub(super) fn draw_bar_field(
 
     focused.then(|| caret_rect(x))
 }
+
+/// 绘制查找选项的三个开关：区分大小写 `Aa`、全字匹配 `ab`、正则 `.*`。
+///
+/// 查找条、终端查找条和搜索面板共用这一控件。`toggles` 的每一项依次为：位置、是否开启、鼠标是否悬停。
+pub(in crate::view) fn draw_search_options(
+    app: &App,
+    frame: &mut Frame<'_>,
+    toggles: [(Rect, bool, bool); 3],
+    clip: Rect,
+) {
+    let p = app.palette;
+
+    for (i, (rect, on, hovered)) in toggles.into_iter().enumerate() {
+        draw_toggle(frame, p, rect, clip, hovered, on);
+        let color = if on { p.accent } else { p.text_muted };
+        let (cx, cy) = center(rect);
+
+        match i {
+            0 => {
+                let w = frame.measure(FontKind::Ui, app.fonts.ui_small, "Aa");
+                ui_text_small(frame, app, cx - w / 2.0, rect, "Aa", color, clip);
+            }
+            1 => {
+                let w = frame.measure(FontKind::Ui, app.fonts.ui_small, "ab");
+                let raised = Rect::new(rect.x, rect.y - 2.0, rect.w, rect.h);
+                ui_text_small(frame, app, cx - w / 2.0, raised, "ab", color, clip);
+                icons::word_bracket(frame, (cx, cy + 6.0), 13.0, color, clip);
+            }
+            _ => icons::regex(frame, (cx, cy), color, clip),
+        }
+    }
+}

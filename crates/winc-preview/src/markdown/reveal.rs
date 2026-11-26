@@ -342,7 +342,6 @@ impl Lines {
             ..Out::default()
         };
         let caret = caret.map(|c| self.to_plain(c));
-        let anchors = &inline.map.0;
         // 已写入的文字和已处理的原文（相对 `plain`）的末尾位置。
         let (mut t, mut s) = (0, slice.start);
         let emit = |out: &mut Out, gap: Range<usize>, made: Range<usize>| {
@@ -360,8 +359,8 @@ impl Lines {
                 out.copy(inline, made, None, &elements, caret);
             }
         };
-        for a in anchors {
-            let (at, src, len) = (a.text as usize, base + a.source as usize, a.len as usize);
+        for (at, raw_src, len) in inline.map.iter_spans() {
+            let src = base + raw_src;
             emit(&mut out, s..src.max(s), t..at.max(t));
             t = t.max(at);
             if len > 0 {

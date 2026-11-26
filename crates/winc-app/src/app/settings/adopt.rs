@@ -128,4 +128,85 @@ impl App {
         self.relayout();
         self.request_redraw();
     }
+
+    /// 设置界面语言（`language`）。
+    ///
+    /// 界面语言对整个进程生效，各窗口在下一帧使用新语言的文案；菜单栏在下次启动时更新。
+    pub(in crate::app) fn set_locale_choice(&mut self, choice: winc_i18n::LocaleChoice) {
+        self.config.language = Some(choice);
+        if crate::set_locale(choice.resolve()) {
+            // 汉字改按新的语言选字形，字体要重新加载；新字体总能加载，失败时留着原来的字体。
+            let _ = self.apply_fonts();
+        }
+        self.save_config();
+        self.request_redraw();
+    }
+
+    /// 设置 `git` 程序的路径；`None` 表示在 `PATH` 里查找。随后重新查找 `git` 并刷新。
+    pub(in crate::app) fn set_git_path(&mut self, path: Option<String>) {
+        if self.config.git_path == path {
+            return;
+        }
+        self.config.git_path = path;
+        self.save_config();
+        self.git_program_changed();
+        self.request_redraw();
+    }
+
+    /// 设置点击工作树时在哪个窗口打开它。
+    pub(in crate::app) fn set_open_worktree(&mut self, choice: winc_config::WorktreeOpen) {
+        self.config.git_open_worktree = Some(choice);
+        self.save_config();
+        self.request_redraw();
+    }
+
+    /// 设置 Vim 模式下无名寄存器与系统剪贴板的同步方式。
+    pub(in crate::app) fn set_vim_clipboard(&mut self, choice: winc_config::VimClipboard) {
+        self.config.vim_clipboard = Some(choice);
+        self.vim_apply_config();
+        self.save_config();
+        self.request_redraw();
+    }
+
+    /// 设置何时显示空格和制表符。
+    pub(in crate::app) fn set_render_whitespace(&mut self, choice: winc_config::RenderWhitespace) {
+        self.vim_forget_option(Setting::RenderWhitespace);
+        self.config.render_whitespace = Some(choice);
+        self.save_config();
+        self.request_redraw();
+    }
+
+    /// 设置新建终端时运行的命令（`terminal.shell`）；`None` 表示系统默认。已打开的终端不受影响。
+    pub(in crate::app) fn set_terminal_shell(&mut self, command: Option<String>) {
+        self.settings.selected = Setting::TerminalShell;
+        self.config.terminal_shell = command;
+        self.save_config();
+        self.request_redraw();
+    }
+
+    /// 设置终端面板的位置：`right` 为编辑区右侧，否则为下方。
+    pub(in crate::app) fn set_terminal_position(&mut self, right: bool) {
+        if right != self.terminal_right() {
+            self.toggle_terminal_position();
+        }
+    }
+
+    /// 设置终端标签的位置：`right` 为右侧，否则为顶部。
+    pub(in crate::app) fn set_terminal_tab_position(&mut self, right: bool) {
+        self.settings.selected = Setting::TerminalTabPosition;
+        if right == (self.config.terminal_vertical_tabs == Some(true)) {
+            return;
+        }
+        self.config.terminal_vertical_tabs = Some(right);
+        self.relayout();
+        self.save_config();
+        self.request_redraw();
+    }
+
+    /// 设置终端中用作 Meta 键的 ⌥。
+    pub(in crate::app) fn set_option_as_meta(&mut self, choice: winc_config::OptionAsMeta) {
+        self.config.option_as_meta = Some(choice);
+        self.save_config();
+        self.request_redraw();
+    }
 }

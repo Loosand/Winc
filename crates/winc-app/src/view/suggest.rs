@@ -9,7 +9,18 @@ use super::*;
 use crate::app::preview::markdown::suggest::Hit;
 use crate::app::preview::markdown::suggest::SUGGEST_VISIBLE;
 use crate::app::{MenuIcon, POPUP_PAD, ScrollArea};
-use crate::ui::{self, CardFrame, Node, PopoverOptions, ScrollMetrics, TextBasis};
+use crate::ui::{self, Node, PopoverOptions, ScrollMetrics, TextBasis};
+
+/// 构造补全卡片所需的不可变视图参数。
+struct SuggestCardArgs {
+    palette: &'static Palette,
+    fonts: (f32, f32),
+    basis: TextBasis,
+    selected: usize,
+    hovered: Option<usize>,
+    card: Rect,
+    commands: bool,
+}
 
 /// 列表的最小、最大宽度（逻辑像素）。
 const WIDTH: (f32, f32) = (240.0, 420.0);
@@ -133,24 +144,22 @@ pub(super) fn draw_suggest(app: &mut App, frame: &mut Frame<'_>) {
         })
         .collect();
 
-    let basis = TextBasis {
-        ui_size: app.fonts.ui,
-        x_height: app.metrics.ui.x_height,
-        cap_height: app.metrics.ui.cap_height,
-    };
+    let basis = ui::text_basis(app.fonts.ui, app.metrics.ui);
     let hovered = match app.pointer.hover {
         Hover::Suggest(i) => Some(i),
         _ => None,
     };
     let tree = build_card(
-        app.palette,
-        (size, small),
-        basis,
-        app.preview.markdown.suggest.selected,
-        hovered,
-        card,
+        SuggestCardArgs {
+            palette: app.palette,
+            fonts: (size, small),
+            basis,
+            selected: app.preview.markdown.suggest.selected,
+            hovered,
+            card,
+            commands,
+        },
         visible_rows,
-        commands,
     );
     let hits = ui::render(frame, basis, card, tree);
 
@@ -174,17 +183,16 @@ pub(super) fn draw_suggest(app: &mut App, frame: &mut Frame<'_>) {
 }
 
 /// 用 [`crate::ui`] 声明式节点构建补全列表卡片及其可见行。
-#[allow(clippy::too_many_arguments)]
-fn build_card(
-    p: &'static Palette,
-    (size, small): (f32, f32),
-    basis: TextBasis,
-    selected: usize,
-    hovered: Option<usize>,
-    card: Rect,
-    rows: Vec<SuggestRow>,
-    commands: bool,
-) -> Node<'static, usize> {
+fn build_card(args: SuggestCardArgs, rows: Vec<SuggestRow>) -> Node<'static, usize> {
+    let SuggestCardArgs {
+        palette: p,
+        fonts: (size, small),
+        basis,
+        selected,
+        hovered,
+        card,
+        commands,
+    } = args;
     let band_h = LIST_ROW - 2.0 * BAND_INSET;
     let optical = (basis.x_height + basis.cap_height) / 4.0;
 
@@ -297,11 +305,7 @@ fn build_card(
         .py(POPUP_PAD)
         .bg(p.popup_bg)
         .rounded(RADIUS_POPUP)
-        .card_frame(CardFrame {
-            shadow: p.shadow,
-            border_base: p.popup_bg,
-            border: p.popup_border,
-        })
+        .card_frame(p.card_frame())
         .child(
             ui::vstack()
                 .w_full()

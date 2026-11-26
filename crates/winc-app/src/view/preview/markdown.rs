@@ -147,21 +147,34 @@ fn draw_decoration_gaps(
     }
 }
 
-/// 绘制行内虚拟挂件（幽灵补全）与由 `winc-cpui` 声明式卡片承接的块级虚拟区块（批注、AI 修订建议等）。
-#[allow(clippy::too_many_arguments)]
-fn draw_decoration_widgets(
-    frame: &mut Frame<'_>,
-    laid: &Laid,
-    decorations: &winc_richtext::DecorationSet,
-    p: &Palette,
+/// 绘制装饰层虚拟挂件所需的几何与排版上下文。
+struct WidgetDrawCtx<'a> {
+    palette: &'a Palette,
     basis: crate::ui::TextBasis,
+    base: f32,
     small: f32,
     left: f32,
     origin_y: f32,
     clip: Rect,
-    base: f32,
+}
+
+/// 绘制行内虚拟挂件（幽灵补全）与由 `winc-cpui` 声明式卡片承接的块级虚拟区块（批注、AI 修订建议等）。
+fn draw_decoration_widgets(
+    frame: &mut Frame<'_>,
+    laid: &Laid,
+    decorations: &winc_richtext::DecorationSet,
+    ctx: &WidgetDrawCtx<'_>,
     widget_actions: &mut Vec<(Rect, (winc_richtext::DecorationId, std::sync::Arc<str>))>,
 ) {
+    let WidgetDrawCtx {
+        palette: p,
+        basis,
+        base,
+        small,
+        left,
+        origin_y,
+        clip,
+    } = *ctx;
     for (at, text, style) in decorations.inline_widgets() {
         if let Some((x, y, h)) = laid.inline_widget_point(at) {
             let sy = origin_y + laid.content_y(y);
@@ -1195,22 +1208,20 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     if (!md.decorations.is_empty() || laid.has_widgets())
         && motion.as_ref().is_none_or(|m| !m.moving())
     {
-        let basis = crate::ui::TextBasis {
-            ui_size: app.fonts.ui,
-            x_height: app.metrics.ui.x_height,
-            cap_height: app.metrics.ui.cap_height,
+        let ctx = WidgetDrawCtx {
+            palette: p,
+            basis: crate::ui::text_basis(app.fonts.ui, app.metrics.ui),
+            base: key.base,
+            small: app.fonts.ui_small,
+            left,
+            origin_y,
+            clip: area,
         };
         draw_decoration_widgets(
             frame,
             &laid,
             &md.decorations,
-            p,
-            basis,
-            app.fonts.ui_small,
-            left,
-            origin_y,
-            area,
-            key.base,
+            &ctx,
             &mut app.hits.markdown_widget_actions,
         );
     }

@@ -311,7 +311,7 @@ fn draw_panel_inputs(
         (parts.word_toggle, g.whole_word, hovered(PanelButton::Word)),
         (parts.regex_toggle, g.regex, hovered(PanelButton::Regex)),
     ];
-    draw_search_options(app, frame, toggles, panel);
+    fields::draw_search_options(app, frame, toggles, panel);
 
     // 输入框最右端是「过滤」：展开了包含、排除，或者包含、排除不为空时用强调色。
     let button = parts.details;

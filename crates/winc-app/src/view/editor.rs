@@ -21,6 +21,7 @@ pub(super) use caret::*;
 pub(super) use glyphs::*;
 pub(crate) use minimap::MinimapRows;
 pub(in crate::view) use picture::*;
+pub(in crate::view) use placeholder::draw_keycap;
 use placeholder::*;
 pub(crate) use ruler::*;
 use sticky::*;

@@ -14,7 +14,7 @@ pub(super) fn shrink(blocks: &mut Vec<Block>) {
             Block::Code { lang, text, map } => {
                 lang.shrink_to_fit();
                 text.shrink_to_fit();
-                map.0.shrink_to_fit();
+                map.shrink_to_fit();
             }
             Block::Quote(_, blocks) | Block::Footnote(_, blocks) => shrink(blocks),
             Block::List(_, items) => {
@@ -49,5 +49,5 @@ fn shrink_inline(inline: &mut Inline) {
     inline.runs.shrink_to_fit();
     inline.links.shrink_to_fit();
     inline.images.shrink_to_fit();
-    inline.map.0.shrink_to_fit();
+    inline.map.shrink_to_fit();
 }

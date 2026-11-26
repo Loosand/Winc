@@ -71,7 +71,7 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
 
     let p = app.palette;
     draw_card(frame, p, rect, 8.0, p.popup_bg);
-    let basis = text_basis(app);
+    let basis = ui::text_basis(app.fonts.ui, app.metrics.ui);
     let parts = app
         .overlays
         .picker
@@ -93,14 +93,6 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     }
 
     render_choices_card(app, frame, basis, rect, parts, placeholder);
-}
-
-fn text_basis(app: &App) -> TextBasis {
-    TextBasis {
-        ui_size: app.fonts.ui,
-        x_height: app.metrics.ui.x_height,
-        cap_height: app.metrics.ui.cap_height,
-    }
 }
 
 fn hover_tint(p: &Palette) -> Color {

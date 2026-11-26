@@ -8,7 +8,7 @@
 
 use std::ops::Range;
 
-use super::{BlankRows, Block, LeafRange, Markdown, parse};
+use super::{Block, LeafRange, Markdown, parse};
 
 /// 检查一段切片是否包含可能跨越局部窗口边界或影响全局结构的语法。
 fn has_global_or_fence_syntax(text: &str) -> bool {
@@ -107,7 +107,7 @@ fn plan_local(
     if doc.len as isize + byte_delta != new_len as isize {
         return None;
     }
-    let main = doc.blank_rows.before.len();
+    let main = doc.blank_rows.before_len();
     if main == 0 {
         return None;
     }
@@ -131,7 +131,7 @@ fn plan_local(
     while b0 > 0 {
         let gap = doc.blank_rows.before(b0);
         if !gap.is_empty() {
-            let gap_start = doc.blank_rows.offsets[gap.start];
+            let gap_start = doc.blank_rows.offsets()[gap.start];
             if gap_start < old_edit.start && gap_start >= prop_end {
                 break;
             }
@@ -144,7 +144,7 @@ fn plan_local(
     let old_start = if b0 == 0 {
         0
     } else {
-        doc.blank_rows.offsets[doc.blank_rows.before(b0).start]
+        doc.blank_rows.offsets()[doc.blank_rows.before(b0).start]
     };
 
     // 向后找到与后一块之间存在空行隔离的安全终点。
@@ -153,7 +153,7 @@ fn plan_local(
         .max(b0);
     while b1 < main {
         let gap = doc.blank_rows.before(b1);
-        if !gap.is_empty() && doc.blank_rows.offsets[gap.start] > old_edit.end {
+        if !gap.is_empty() && doc.blank_rows.offsets()[gap.start] > old_edit.end {
             break;
         }
         b1 += 1;
@@ -205,7 +205,7 @@ fn plan_local(
         || local.properties.is_some()
         || local.has_link_defs
         || local.has_toc
-        || local.blank_rows.before.len() != local.blocks.len()
+        || local.blank_rows.before_len() != local.blocks.len()
         || local.blocks.iter().any(block_may_affect_boundary)
     {
         return None;
@@ -286,7 +286,6 @@ pub fn reparse_local_in_place(
         local,
     } = plan;
     let local_len = local.blocks.len();
-    let new_main = main - (b1 - b0) + local_len;
 
     // 1. 就地替换 blocks 与 hashes（未改动的块零拷贝）。
     if local_len == b1 - b0 {
@@ -363,104 +362,15 @@ pub fn reparse_local_in_place(
     }
 
     // 5. 更新 blank_rows：块数和局部空行段长度不变时直接就地平移 offsets，否则重建紧凑表。
-    let can_patch_blanks = local_len == b1 - b0 && b1 < main && {
-        let old_span_start = doc.blank_rows.before(b0).start;
-        let old_span_end = doc.blank_rows.before(b1).end;
-        let mut new_local_count = 0usize;
-        for i in 0..local_len {
-            new_local_count += local.blank_rows.before(i).len();
-        }
-        let after_slice = &local.blank_rows.offsets[local.blank_rows.after.clone()];
-        if after_slice.len() >= 3 {
-            new_local_count += after_slice.len() - 1;
-        }
-        old_span_end - old_span_start == new_local_count
-    };
-    if can_patch_blanks {
-        let old_span_start = doc.blank_rows.before(b0).start;
-        let old_span_end = doc.blank_rows.before(b1).end;
-        let mut offsets = doc.blank_rows.offsets.to_vec();
-        let mut cursor = old_span_start;
-        for i in 0..local_len {
-            let r = local.blank_rows.before(i);
-            let s = cursor;
-            for &o in &local.blank_rows.offsets[r] {
-                offsets[cursor] = o + old_start;
-                cursor += 1;
-            }
-            doc.blank_rows.before[b0 + i] = s..cursor;
-        }
-        let s = cursor;
-        let after_slice = &local.blank_rows.offsets[local.blank_rows.after.clone()];
-        if after_slice.len() >= 3 {
-            for &o in &after_slice[..after_slice.len() - 1] {
-                offsets[cursor] = o + old_start;
-                cursor += 1;
-            }
-        }
-        doc.blank_rows.before[b1] = s..cursor;
-        if byte_delta != 0 {
-            for o in &mut offsets[old_span_end..] {
-                *o = shift_byte(*o, byte_delta);
-            }
-        }
-        doc.blank_rows.offsets = offsets.into();
-    } else {
-        let mut offsets =
-            Vec::with_capacity(doc.blank_rows.offsets.len() + local.blank_rows.offsets.len());
-        let mut before = Vec::with_capacity(new_main);
-        for i in 0..b0 {
-            let r = doc.blank_rows.before(i);
-            let s = offsets.len();
-            offsets.extend_from_slice(&doc.blank_rows.offsets[r]);
-            before.push(s..offsets.len());
-        }
-        for i in 0..local_len {
-            let r = local.blank_rows.before(i);
-            let s = offsets.len();
-            offsets.extend(local.blank_rows.offsets[r].iter().map(|&o| o + old_start));
-            before.push(s..offsets.len());
-        }
-        if b1 < main {
-            let s = offsets.len();
-            let after_slice = &local.blank_rows.offsets[local.blank_rows.after.clone()];
-            if after_slice.len() >= 2 {
-                let useful = &after_slice[..after_slice.len() - 1];
-                if useful.len() >= 2 {
-                    offsets.extend(useful.iter().map(|&o| o + old_start));
-                }
-            }
-            before.push(s..offsets.len());
-            for i in (b1 + 1)..main {
-                let r = doc.blank_rows.before(i);
-                let s = offsets.len();
-                offsets.extend(
-                    doc.blank_rows.offsets[r]
-                        .iter()
-                        .map(|&o| shift_byte(o, byte_delta)),
-                );
-                before.push(s..offsets.len());
-            }
-        }
-        let after_start = offsets.len();
-        if b1 < main {
-            let r = doc.blank_rows.after();
-            offsets.extend(
-                doc.blank_rows.offsets[r]
-                    .iter()
-                    .map(|&o| shift_byte(o, byte_delta)),
-            );
-        } else {
-            let r = local.blank_rows.after();
-            offsets.extend(local.blank_rows.offsets[r].iter().map(|&o| o + old_start));
-        }
-        let after = after_start..offsets.len();
-        doc.blank_rows = BlankRows {
-            offsets: offsets.into(),
-            before,
-            after,
-        };
-    }
+    doc.blank_rows.splice_local(
+        &local.blank_rows,
+        b0,
+        b1,
+        main,
+        local_len,
+        old_start,
+        byte_delta,
+    );
 
     doc.len = new_len;
     true

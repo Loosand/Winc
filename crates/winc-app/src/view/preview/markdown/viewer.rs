@@ -269,7 +269,7 @@ fn draw_toolbar(app: &App, frame: &mut Frame<'_>, p: &Palette, view: &mut Diagra
         inner + PAD * 2.0,
         BUTTON + PAD * 2.0,
     );
-    crate::view::draw_floating_bar(frame, p, bar, area);
+    crate::view::preview::draw_floating_bar(frame, p, bar, area);
 
     view.buttons.clear();
     let mut x = bar.x + PAD;

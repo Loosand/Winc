@@ -8,6 +8,15 @@ pub(crate) use winc_cpui::{
     place_submenu, render, render_dirty, spacer, text, vdivider, virtual_list, vstack,
 };
 
+/// 由界面字号与字体度量构造 [`TextBasis`]。
+pub(crate) fn text_basis(ui_size: f32, metrics: winc_render::Metrics) -> TextBasis {
+    TextBasis {
+        ui_size,
+        x_height: metrics.x_height,
+        cap_height: metrics.cap_height,
+    }
+}
+
 /// 将应用主题 [`crate::theme::Palette`] 注入到 `winc-cpui` 通用组件的薄适配封装。
 pub(crate) mod widgets {
     use std::borrow::Cow;

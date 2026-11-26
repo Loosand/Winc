@@ -921,7 +921,7 @@ fn draw_find(app: &mut App, frame: &mut Frame<'_>) {
     ];
     let show_options = bar.w >= FIND_OPTIONS_MIN;
     if show_options {
-        draw_search_options(
+        fields::draw_search_options(
             app,
             frame,
             options.map(|(rect, on, part)| (rect, on, hovered(part))),

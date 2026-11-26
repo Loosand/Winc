@@ -137,13 +137,10 @@ pub(super) fn apply(inline: &mut Inline, source: &str) {
         at - cut
     };
     let mut map = SourceMap::default();
-    for anchor in &inline.map.0 {
-        let (from, to) = (
-            anchor.text as usize,
-            anchor.text as usize + anchor.len as usize,
-        );
+    for (from, source, len) in inline.map.iter_spans() {
+        let to = from + len;
         if from == to {
-            map.push(shift(from), anchor.source as usize, 0);
+            map.push(shift(from), source, 0);
             continue;
         }
         for piece in &keep {
@@ -151,11 +148,7 @@ pub(super) fn apply(inline: &mut Inline, source: &str) {
             if start >= end {
                 continue;
             }
-            map.push(
-                shift(start),
-                anchor.source as usize + (start - from),
-                end - start,
-            );
+            map.push(shift(start), source + (start - from), end - start);
         }
     }
 

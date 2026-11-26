@@ -395,7 +395,7 @@ fn draw_cell_card(
     app.preview.table_layout.card = card;
     app.preview.table_layout.card_max = max_scroll;
 
-    crate::view::draw_floating_bar(frame, p, card, body);
+    super::draw_floating_bar(frame, p, card, body);
     let clip = card.inset(1.0, CARD_PAD - 4.0).intersect(body);
     for (i, line) in lines.iter().enumerate() {
         let top = card.y + CARD_PAD + i as f32 * line_h - drawn_scroll(scroll);

@@ -101,7 +101,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         action_icon(app, frame, action, row);
         ui_text(frame, app, row.x + 36.0, row, label, p.text, editor);
         if let Some(key) = keymap::shortcut(key) {
-            draw_keycap(app, frame, row.inset(6.0, 0.0), &key, editor);
+            crate::view::editor::draw_keycap(app, frame, row.inset(6.0, 0.0), &key, editor);
         }
         app.hits.start.push((row, action));
         y += ROW;

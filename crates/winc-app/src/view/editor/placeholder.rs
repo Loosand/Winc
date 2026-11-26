@@ -223,3 +223,33 @@ pub(super) fn draw_welcome(app: &App, frame: &mut Frame<'_>) {
         }
     }
 }
+
+/// 在 `row` 的右端垂直居中绘制快捷键的圆角键帽。
+pub(in crate::view) fn draw_keycap(
+    app: &App,
+    frame: &mut Frame<'_>,
+    row: Rect,
+    key: &str,
+    clip: Rect,
+) {
+    let p = app.palette;
+    let key_w = frame.measure(FontKind::Ui, app.fonts.ui_small, key);
+    let h = 20.0;
+    let chip = Rect::new(
+        row.right() - key_w - 14.0,
+        (row.y + (row.h - h) / 2.0).round(),
+        key_w + 14.0,
+        h,
+    );
+    frame.rect_clipped(chip, p.selected_inactive, RADIUS_ROW, clip);
+    let size = app.fonts.ui_small;
+    caps_label(
+        frame,
+        app,
+        size,
+        (chip.x + 7.0, chip),
+        key,
+        p.text_muted,
+        clip,
+    );
+}

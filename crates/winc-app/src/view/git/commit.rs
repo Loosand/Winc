@@ -710,6 +710,17 @@ fn draw_list_fade(app: &App, frame: &mut Frame<'_>, list: Rect, rest: f32) {
     });
 }
 
+/// 绘制纵向渐隐：从 `rect` 下端的 `color` 渐变到上端的透明。
+fn fade_up(frame: &mut Frame<'_>, rect: Rect, color: Color) {
+    let steps = rect.h.round().max(1.0) as usize;
+
+    for i in 0..steps {
+        let t = (i as f32 + 0.5) / steps as f32;
+        let strip = Rect::new(rect.x, rect.y + i as f32, rect.w, 1.0);
+        frame.rect(strip, color.alpha(color.a * t * t));
+    }
+}
+
 /// 在行底色 `row` 右端用淡色写数字 `count`，右边和行右端的悬停按钮对齐。
 pub(in crate::view) fn draw_count_pill(
     app: &App,

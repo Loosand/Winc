@@ -273,7 +273,7 @@ fn paint_toolbar(
     let p = app.palette;
     let size = app.fonts.ui_small;
     let gap = TOOL_PAD * 2.0 + 1.0;
-    crate::view::draw_floating_bar(frame, p, bar, body);
+    super::draw_floating_bar(frame, p, bar, body);
 
     let mut x = bar.x + TOOL_PAD;
     let separator = |frame: &mut Frame<'_>, x: f32| {

@@ -5,7 +5,7 @@
 use super::*;
 use crate::app::{CHECK_COLUMN, ICON_COLUMN, MenuIcon, POPUP_PAD, PopupLevel, PopupRow};
 use crate::icons::Direction;
-use crate::ui::{self, CardFrame, Node, TextBasis};
+use crate::ui::{self, Node};
 
 /// 一行的高度（逻辑像素）。
 pub(super) const ROW: f32 = 24.0;
@@ -202,11 +202,7 @@ fn draw_level(
     let clip = card.inset(0.0, POPUP_PAD);
     let icons = icon_column(&level.rows);
     let (size, small) = (app.fonts.ui, app.fonts.ui_small);
-    let basis = TextBasis {
-        ui_size: size,
-        x_height: app.metrics.ui.x_height,
-        cap_height: app.metrics.ui.cap_height,
-    };
+    let basis = ui::text_basis(size, app.metrics.ui);
 
     let list = ui::VisibleWindow::from_rects(&level.row_rects, clip)
         .build(|i| {
@@ -490,11 +486,7 @@ fn draw_level(
         .py(POPUP_PAD)
         .bg(p.popup_bg)
         .rounded(RADIUS_POPUP)
-        .card_frame(CardFrame {
-            shadow: p.shadow,
-            border_base: p.popup_bg,
-            border: p.popup_border,
-        })
+        .card_frame(p.card_frame())
         .child(list);
     ui::render(frame, basis, card, tree);
 }

@@ -522,6 +522,15 @@ impl Palette {
             panel_pad: SETTINGS_PAD,
         }
     }
+
+    /// 返回用于声明式浮动卡片的阴影与 1 像素细边配置。
+    pub(crate) fn card_frame(&self) -> winc_cpui::CardFrame {
+        winc_cpui::CardFrame {
+            shadow: self.shadow,
+            border_base: self.popup_bg,
+            border: self.popup_border,
+        }
+    }
 }
 
 /// 徽章文字最多占用的显示列数（显示列）。

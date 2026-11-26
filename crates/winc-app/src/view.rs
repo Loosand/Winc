@@ -1152,23 +1152,6 @@ fn draw_action_button(
 
 /// 在 `row` 中绘制一行勾选项，返回名称右端的 x 坐标。
 ///
-/// 勾选框的左边与 `row` 的左边对齐，名称跟在勾选框之后。
-fn draw_check_option(app: &App, frame: &mut Frame<'_>, row: Rect, text: &str, on: bool) -> f32 {
-    let p = app.palette;
-    let at = (row.x + 6.0, row.y + row.h / 2.0);
-    let state = on.then_some(true);
-    icons::checkbox(
-        frame,
-        at,
-        state,
-        p.accent,
-        p.text_dim,
-        p.text_on_accent,
-        row,
-    );
-    ui_text(frame, app, row.x + 20.0, row, text, p.text, row)
-}
-
 /// 绘制按钮底色：按下（`on`）时用中性的选中色，悬停时再叠加一层浅色；超出 `clip` 的部分不绘制。
 fn draw_button(
     frame: &mut Frame<'_>,
@@ -1201,38 +1184,6 @@ fn draw_toggle(
     draw_button(frame, p, rect, clip, hovered, false);
 }
 
-/// 绘制查找选项的三个开关：区分大小写 `Aa`、全字匹配 `ab`、正则 `.*`。
-///
-/// 查找条和搜索面板共用这一控件。`toggles` 的每一项依次为：位置、是否开启、鼠标是否悬停。
-fn draw_search_options(
-    app: &App,
-    frame: &mut Frame<'_>,
-    toggles: [(Rect, bool, bool); 3],
-    clip: Rect,
-) {
-    let p = app.palette;
-
-    for (i, (rect, on, hovered)) in toggles.into_iter().enumerate() {
-        draw_toggle(frame, p, rect, clip, hovered, on);
-        let color = if on { p.accent } else { p.text_muted };
-        let (cx, cy) = center(rect);
-
-        match i {
-            0 => {
-                let w = frame.measure(FontKind::Ui, app.fonts.ui_small, "Aa");
-                ui_text_small(frame, app, cx - w / 2.0, rect, "Aa", color, clip);
-            }
-            1 => {
-                let w = frame.measure(FontKind::Ui, app.fonts.ui_small, "ab");
-                let raised = Rect::new(rect.x, rect.y - 2.0, rect.w, rect.h);
-                ui_text_small(frame, app, cx - w / 2.0, raised, "ab", color, clip);
-                icons::word_bracket(frame, (cx, cy + 6.0), 13.0, color, clip);
-            }
-            _ => icons::regex(frame, (cx, cy), color, clip),
-        }
-    }
-}
-
 /// 绘制浮动卡片：柔和阴影、细边框和圆角底色。
 ///
 /// `background` 必须不透明：卡片覆盖的区域不绘制阴影和边框，二者只显示在卡片外侧。
@@ -1254,17 +1205,6 @@ fn draw_card_frame(frame: &mut Frame<'_>, p: &Palette, rect: Rect, radius: f32) 
     let edge = rect.inset(-1.0, -1.0);
     frame.rect_except(edge, p.popup_bg, radius + 1.0, covered);
     frame.rect_except(edge, p.popup_border, radius + 1.0, covered);
-}
-
-/// 绘制浮在预览内容上的工具栏或卡片 `rect`（含细边框）：阴影、细边框和底色，裁剪到 `clip`；
-/// 细边框画在卡片底色上，不透出下方的内容。
-fn draw_floating_bar(frame: &mut Frame<'_>, p: &Palette, rect: Rect, clip: Rect) {
-    let covered = frame.covered(rect, RADIUS_POPUP);
-    frame.shadow(rect, RADIUS_POPUP, 12.0, 4.0, p.shadow, Some(covered));
-    frame.rect_clipped(rect, p.popup_bg, RADIUS_POPUP, clip);
-    frame.rect_clipped(rect, p.popup_border, RADIUS_POPUP, clip);
-    let inner = rect.inset(1.0, 1.0);
-    frame.rect_clipped(inner, p.popup_bg, RADIUS_POPUP - 1.0, clip);
 }
 
 /// 卡片阴影超出卡片矩形的范围（逻辑像素）。
@@ -1469,41 +1409,6 @@ fn fade(frame: &mut Frame<'_>, rect: Rect, color: Color, opaque_left: bool) {
         let strip = Rect::new(rect.x + i as f32, rect.y, 1.0, rect.h);
         frame.rect(strip, color.alpha(color.a * a * a));
     }
-}
-
-/// 绘制纵向渐隐：从 `rect` 下端的 `color` 渐变到上端的透明，曲线与 [`fade`] 相同。
-fn fade_up(frame: &mut Frame<'_>, rect: Rect, color: Color) {
-    let steps = rect.h.round().max(1.0) as usize;
-
-    for i in 0..steps {
-        let t = (i as f32 + 0.5) / steps as f32;
-        let strip = Rect::new(rect.x, rect.y + i as f32, rect.w, 1.0);
-        frame.rect(strip, color.alpha(color.a * t * t));
-    }
-}
-
-/// 在 `row` 的右端垂直居中绘制快捷键的圆角键帽。
-fn draw_keycap(app: &App, frame: &mut Frame<'_>, row: Rect, key: &str, clip: Rect) {
-    let p = app.palette;
-    let key_w = frame.measure(FontKind::Ui, app.fonts.ui_small, key);
-    let h = 20.0;
-    let chip = Rect::new(
-        row.right() - key_w - 14.0,
-        (row.y + (row.h - h) / 2.0).round(),
-        key_w + 14.0,
-        h,
-    );
-    frame.rect_clipped(chip, p.selected_inactive, RADIUS_ROW, clip);
-    let size = app.fonts.ui_small;
-    caps_label(
-        frame,
-        app,
-        size,
-        (chip.x + 7.0, chip),
-        key,
-        p.text_muted,
-        clip,
-    );
 }
 
 /// 固定高亮的调色板：琥珀、蓝、紫、青、粉、绿，按色相错开。

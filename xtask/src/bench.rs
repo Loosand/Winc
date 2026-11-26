@@ -187,124 +187,86 @@ pub fn bench(options: BenchOptions) -> Result<bool, String> {
         push_metric(key, times[2], "ms", Some(BUDGET_STARTUP_MS));
     }
 
-    let stats = scroll_once(&exe, &large, "scroll")?;
-    println!("{:<34} {:>8.2}ms", "滚动 p50（large.rs）", stats.p50);
-    ok &= report(
-        "滚动 p95（large.rs）",
-        stats.p95,
-        BUDGET_SCROLL_P95_MS,
-        "ms",
-    );
-    stats.print_phases();
-    push_metric(
-        "scroll_large_rs_p95_ms",
-        stats.p95,
-        "ms",
-        Some(BUDGET_SCROLL_P95_MS),
-    );
-
-    for (name, key) in [
-        ("huge.txt", "scroll_huge_txt_p95_ms"),
-        ("huge.rs", "scroll_huge_rs_p95_ms"),
-    ] {
-        let stats = scroll_once(&exe, &dir.join(name), "scroll")?;
-        ok &= report(
-            &format!("滚动 p95（{name}）"),
-            stats.p95,
+    // 各类滚动、按键与实时编辑出帧预算校验（按表统一测量、打印阶段分解并记录历史）。
+    let readme = root().join("README.md");
+    let long_md = dir.join("long.md");
+    let huge_txt = dir.join("huge.txt");
+    let huge_rs = dir.join("huge.rs");
+    let frame_cases = [
+        (
+            large.as_path(),
+            "scroll",
+            Some("滚动 p50（large.rs）"),
+            "滚动 p95（large.rs）",
+            "scroll_large_rs_p95_ms",
             BUDGET_SCROLL_P95_MS,
-            "ms",
-        );
+        ),
+        (
+            huge_txt.as_path(),
+            "scroll",
+            None,
+            "滚动 p95（huge.txt）",
+            "scroll_huge_txt_p95_ms",
+            BUDGET_SCROLL_P95_MS,
+        ),
+        (
+            huge_rs.as_path(),
+            "scroll",
+            None,
+            "滚动 p95（huge.rs）",
+            "scroll_huge_rs_p95_ms",
+            BUDGET_SCROLL_P95_MS,
+        ),
+        (
+            large.as_path(),
+            "vim",
+            Some("Vim 按键到出帧 p50（large.rs）"),
+            "Vim 按键到出帧 p95（large.rs）",
+            "vim_large_rs_p95_ms",
+            BUDGET_KEY_P95_MS,
+        ),
+        (
+            large.as_path(),
+            "typing",
+            Some("键入到出帧 p50（large.rs）"),
+            "键入到出帧 p95（large.rs）",
+            "typing_large_rs_p95_ms",
+            BUDGET_KEY_P95_MS,
+        ),
+        (
+            long_md.as_path(),
+            "live-typing",
+            Some("预览中键入到出帧 p50（long.md）"),
+            "预览中键入到出帧 p95（long.md）",
+            "live_typing_long_md_p95_ms",
+            BUDGET_LIVE_TYPING_P95_MS,
+        ),
+        (
+            readme.as_path(),
+            "live-moves",
+            Some("预览中移动光标出帧 p50（README.md）"),
+            "预览中移动光标出帧 p95（README.md）",
+            "live_moves_readme_p95_ms",
+            BUDGET_LIVE_MOVES_P95_MS,
+        ),
+        (
+            readme.as_path(),
+            "preview",
+            None,
+            "预览滚动 p95（README.md）",
+            "preview_readme_p95_ms",
+            BUDGET_PREVIEW_P95_MS,
+        ),
+    ];
+    for (file, mode, p50_label, p95_label, key, budget) in frame_cases {
+        let stats = scroll_once(&exe, file, mode)?;
+        if let Some(label) = p50_label {
+            println!("{label:<34} {:>8.2}ms", stats.p50);
+        }
+        ok &= report(p95_label, stats.p95, budget, "ms");
         stats.print_phases();
-        push_metric(key, stats.p95, "ms", Some(BUDGET_SCROLL_P95_MS));
+        push_metric(key, stats.p95, "ms", Some(budget));
     }
-
-    // Vim 模式：按键处理加随后一帧的耗时；键入的耗时用于核对关闭 Vim 模式时没有额外开销。
-    let stats = scroll_once(&exe, &large, "vim")?;
-    println!(
-        "{:<34} {:>8.2}ms",
-        "Vim 按键到出帧 p50（large.rs）", stats.p50
-    );
-    ok &= report(
-        "Vim 按键到出帧 p95（large.rs）",
-        stats.p95,
-        BUDGET_KEY_P95_MS,
-        "ms",
-    );
-    stats.print_phases();
-    push_metric(
-        "vim_large_rs_p95_ms",
-        stats.p95,
-        "ms",
-        Some(BUDGET_KEY_P95_MS),
-    );
-    let stats = scroll_once(&exe, &large, "typing")?;
-    println!("{:<34} {:>8.2}ms", "键入到出帧 p50（large.rs）", stats.p50);
-    ok &= report(
-        "键入到出帧 p95（large.rs）",
-        stats.p95,
-        BUDGET_KEY_P95_MS,
-        "ms",
-    );
-    stats.print_phases();
-    push_metric(
-        "typing_large_rs_p95_ms",
-        stats.p95,
-        "ms",
-        Some(BUDGET_KEY_P95_MS),
-    );
-
-    let stats = scroll_once(&exe, &dir.join("long.md"), "live-typing")?;
-    println!(
-        "{:<34} {:>8.2}ms",
-        "预览中键入到出帧 p50（long.md）", stats.p50
-    );
-    ok &= report(
-        "预览中键入到出帧 p95（long.md）",
-        stats.p95,
-        BUDGET_LIVE_TYPING_P95_MS,
-        "ms",
-    );
-    stats.print_phases();
-    push_metric(
-        "live_typing_long_md_p95_ms",
-        stats.p95,
-        "ms",
-        Some(BUDGET_LIVE_TYPING_P95_MS),
-    );
-
-    let stats = scroll_once(&exe, &root().join("README.md"), "live-moves")?;
-    println!(
-        "{:<34} {:>8.2}ms",
-        "预览中移动光标出帧 p50（README.md）", stats.p50
-    );
-    ok &= report(
-        "预览中移动光标出帧 p95（README.md）",
-        stats.p95,
-        BUDGET_LIVE_MOVES_P95_MS,
-        "ms",
-    );
-    stats.print_phases();
-    push_metric(
-        "live_moves_readme_p95_ms",
-        stats.p95,
-        "ms",
-        Some(BUDGET_LIVE_MOVES_P95_MS),
-    );
-
-    let stats = scroll_once(&exe, &root().join("README.md"), "preview")?;
-    ok &= report(
-        "预览滚动 p95（README.md）",
-        stats.p95,
-        BUDGET_PREVIEW_P95_MS,
-        "ms",
-    );
-    stats.print_phases();
-    push_metric(
-        "preview_readme_p95_ms",
-        stats.p95,
-        "ms",
-        Some(BUDGET_PREVIEW_P95_MS),
-    );
 
     // 极端边界样本预览滚动（参考指标，跟踪宽大表格、深嵌套与密集公式的演进趋势）。
     let extreme = dir.join("extreme.md");
@@ -321,57 +283,36 @@ pub fn bench(options: BenchOptions) -> Result<bool, String> {
     // 全格式实战样稿（仅在工作区存在该文件时测量，只读运行，不修改原文件）。
     let showcase = root().join("testdata/markdown/epidemic-modeling/index.md");
     if showcase.is_file() {
-        let stats = scroll_once(&exe, &showcase, "preview")?;
-        println!("{:<34} {:>8.2}ms", "预览滚动 p50（全格式样稿）", stats.p50);
-        ok &= report(
-            "预览滚动 p95（全格式样稿）",
-            stats.p95,
-            BUDGET_SHOWCASE_PREVIEW_P95_MS,
-            "ms",
-        );
-        stats.print_phases();
-        push_metric(
-            "preview_showcase_p95_ms",
-            stats.p95,
-            "ms",
-            Some(BUDGET_SHOWCASE_PREVIEW_P95_MS),
-        );
-        let stats = scroll_once(&exe, &showcase, "live-typing")?;
-        println!(
-            "{:<34} {:>8.2}ms",
-            "预览中键入到出帧 p50（全格式样稿）", stats.p50
-        );
-        ok &= report(
-            "预览中键入到出帧 p95（全格式样稿）",
-            stats.p95,
-            BUDGET_LIVE_TYPING_P95_MS,
-            "ms",
-        );
-        stats.print_phases();
-        push_metric(
-            "live_typing_showcase_p95_ms",
-            stats.p95,
-            "ms",
-            Some(BUDGET_LIVE_TYPING_P95_MS),
-        );
-        let stats = scroll_once(&exe, &showcase, "live-moves")?;
-        println!(
-            "{:<34} {:>8.2}ms",
-            "预览中移动光标出帧 p50（全格式样稿）", stats.p50
-        );
-        ok &= report(
-            "预览中移动光标出帧 p95（全格式样稿）",
-            stats.p95,
-            BUDGET_LIVE_MOVES_P95_MS,
-            "ms",
-        );
-        stats.print_phases();
-        push_metric(
-            "live_moves_showcase_p95_ms",
-            stats.p95,
-            "ms",
-            Some(BUDGET_LIVE_MOVES_P95_MS),
-        );
+        let showcase_cases = [
+            (
+                "preview",
+                "预览滚动 p50（全格式样稿）",
+                "预览滚动 p95（全格式样稿）",
+                "preview_showcase_p95_ms",
+                BUDGET_SHOWCASE_PREVIEW_P95_MS,
+            ),
+            (
+                "live-typing",
+                "预览中键入到出帧 p50（全格式样稿）",
+                "预览中键入到出帧 p95（全格式样稿）",
+                "live_typing_showcase_p95_ms",
+                BUDGET_LIVE_TYPING_P95_MS,
+            ),
+            (
+                "live-moves",
+                "预览中移动光标出帧 p50（全格式样稿）",
+                "预览中移动光标出帧 p95（全格式样稿）",
+                "live_moves_showcase_p95_ms",
+                BUDGET_LIVE_MOVES_P95_MS,
+            ),
+        ];
+        for (mode, p50_label, p95_label, key, budget) in showcase_cases {
+            let stats = scroll_once(&exe, &showcase, mode)?;
+            println!("{p50_label:<34} {:>8.2}ms", stats.p50);
+            ok &= report(p95_label, stats.p95, budget, "ms");
+            stats.print_phases();
+            push_metric(key, stats.p95, "ms", Some(budget));
+        }
     }
 
     // 快速转动鼠标滚轮：帧间隔、画面落后于滚轮的格数、最后一格之后画面停止的耗时。只列出，

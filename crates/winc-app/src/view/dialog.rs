@@ -15,7 +15,7 @@ use super::*;
 use crate::app::git::form::{FormKind, FormPlan};
 use crate::layout::{DialogLayout, DialogPart, QUESTION_LINE_H, REBASE_PILL_W, REBASE_ROW_H};
 use crate::ui::widgets::{self, ButtonKind, ButtonSpec};
-use crate::ui::{self, TextAlign, TextBasis};
+use crate::ui::{self, TextAlign};
 
 /// 绘制对话框：遮罩，再绘制卡片（淡入途中按 [`draw_moving_card`] 整张叠上去）。
 pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
@@ -199,7 +199,12 @@ fn draw_card(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
                         .color(p.text_dim),
                 )
             });
-        let _ = ui::render(frame, text_basis(app), layout.message, list);
+        let _ = ui::render(
+            frame,
+            ui::text_basis(app.fonts.ui, app.metrics.ui),
+            layout.message,
+            list,
+        );
     }
 
     let (confirm, enabled) = match running {
@@ -267,7 +272,12 @@ fn draw_question(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
                 .color(p.text_muted)
                 .wrap(),
         );
-        let _ = ui::render(frame, text_basis(app), area, msg);
+        let _ = ui::render(
+            frame,
+            ui::text_basis(app.fonts.ui, app.metrics.ui),
+            area,
+            msg,
+        );
     }
 
     let labels = (view.values.iter().map(|v| v.label)).chain(view.inputs.iter().map(|i| i.label));
@@ -292,7 +302,12 @@ fn draw_question(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
     }
     for &(_, row) in &layout.options {
         let check = widgets::checkbox(p, app.fonts.ui, t!("git-question-remember"), remember, ());
-        let _ = ui::render(frame, text_basis(app), row, check);
+        let _ = ui::render(
+            frame,
+            ui::text_basis(app.fonts.ui, app.metrics.ui),
+            row,
+            check,
+        );
     }
     // 密钥文件右端选文件的按钮，样子同「位置」右端的目录按钮。
     if let Some(choose) = layout.choose {
@@ -592,12 +607,21 @@ fn focus_outline(frame: &mut Frame<'_>, rect: Rect, r: f32, color: Color, clip: 
     frame.stroke(&edges, 1.5, color, clip);
 }
 
-fn text_basis(app: &App) -> TextBasis {
-    TextBasis {
-        ui_size: app.fonts.ui,
-        x_height: app.metrics.ui.x_height,
-        cap_height: app.metrics.ui.cap_height,
-    }
+/// 勾选框的左边与 `row` 的左边对齐，名称跟在勾选框之后。
+fn draw_check_option(app: &App, frame: &mut Frame<'_>, row: Rect, text: &str, on: bool) -> f32 {
+    let p = app.palette;
+    let at = (row.x + 6.0, row.y + row.h / 2.0);
+    let state = on.then_some(true);
+    icons::checkbox(
+        frame,
+        at,
+        state,
+        p.accent,
+        p.text_dim,
+        p.text_on_accent,
+        row,
+    );
+    ui_text(frame, app, row.x + 20.0, row, text, p.text, row)
 }
 
 /// 用声明式 [`widgets::dialog_header`] 绘制对话框标题栏与右上角关闭按钮。
@@ -615,7 +639,12 @@ fn render_dialog_header(
         hover == Some(DialogPart::Close),
         DialogPart::Close,
     );
-    let _ = ui::render(frame, text_basis(app), header, node);
+    let _ = ui::render(
+        frame,
+        ui::text_basis(app.fonts.ui, app.metrics.ui),
+        header,
+        node,
+    );
 }
 
 /// 用声明式右对齐文本绘制表单名称列。
@@ -626,7 +655,7 @@ fn render_right_labels<'a>(
     labels: impl IntoIterator<Item = &'a str>,
 ) {
     let p = app.palette;
-    let basis = text_basis(app);
+    let basis = ui::text_basis(app.fonts.ui, app.metrics.ui);
     for (&rect, label) in rects.iter().zip(labels) {
         let node = ui::text::<()>(label)
             .w_full()
@@ -675,7 +704,12 @@ fn render_dialog_footer(
             action: DialogPart::Confirm,
         },
     );
-    let _ = ui::render(frame, text_basis(app), footer_rect, node);
+    let _ = ui::render(
+        frame,
+        ui::text_basis(app.fonts.ui, app.metrics.ui),
+        footer_rect,
+        node,
+    );
 }
 
 /// 仅绘制右下角「取消 / 确认」按钮组（用于左侧已有自定义控件的变基对话框）。
@@ -718,7 +752,12 @@ fn render_dialog_buttons(
             Some(layout.confirm.w),
             DialogPart::Confirm,
         ));
-    let _ = ui::render(frame, text_basis(app), rect, node);
+    let _ = ui::render(
+        frame,
+        ui::text_basis(app.fonts.ui, app.metrics.ui),
+        rect,
+        node,
+    );
 }
 
 /// 绘制 `part` 对应的输入框：有焦点时与设置中正在编辑的输入框相同，编辑区底色、外圈强调色。
