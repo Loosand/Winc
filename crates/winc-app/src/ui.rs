@@ -3,9 +3,9 @@
 #[allow(unused_imports)]
 pub(crate) use winc_cpui::{
     CardFrame, HitMap, LaidOut, Node, PointPlacement, PopoverOptions, ScrollMetrics, ScrollbarSpec,
-    SubmenuPlacement, SurfaceCache, TextAlign, TextBasis, box_, clamp_rect, custom,
+    SubmenuPlacement, SurfaceCache, TextAlign, TextBasis, VisibleWindow, box_, clamp_rect, custom,
     custom_measured, divider, hstack, hstack_rev, layout, place_at_point, place_below_or_above,
-    place_submenu, render, spacer, text, vdivider, vstack,
+    place_submenu, render, render_dirty, spacer, text, vdivider, virtual_list, vstack,
 };
 
 /// 将应用主题 [`crate::theme::Palette`] 注入到 `winc-cpui` 通用组件的薄适配封装。

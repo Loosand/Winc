@@ -53,6 +53,14 @@ pub struct LaidOut<'a, A> {
     basis: TextBasis,
 }
 
+/// 卡片外框阴影与 1px 描边向矩形外扩展的安全边距（逻辑像素），用于裁剪与脏区相交判断。
+const CARD_SHADOW_PAD: f32 = 20.0;
+
+/// 矩形是否具有正面积。
+fn non_empty(rect: Rect) -> bool {
+    rect.w > 0.0 && rect.h > 0.0
+}
+
 impl<'a, A> LaidOut<'a, A> {
     /// 返回根节点布局后的 `(宽, 高)`（逻辑像素）。
     pub fn root_size(&self) -> (f32, f32) {
@@ -62,9 +70,27 @@ impl<'a, A> LaidOut<'a, A> {
     }
 
     /// 以 `origin` 为左上角把整棵树绘制到 `frame`，超出 `clip` 的部分裁剪，并返回收集到的 [`HitMap`]。
+    ///
+    /// 完全落在 `clip` 之外的叶节点会跳过文本排版与自定义绘制回调；带裁剪的不可见容器会直接剪枝整棵子树。
     pub fn paint_at(mut self, frame: &mut Frame<'_>, origin: (f32, f32), clip: Rect) -> HitMap<A> {
         let mut hits = HitMap::new();
-        self.paint_node(self.root, origin, clip, frame, &mut hits);
+        self.paint_node(self.root, origin, clip, clip, frame, &mut hits);
+        hits
+    }
+
+    /// 以 `origin` 为左上角仅重绘与局部脏区 `dirty` 相交的节点，并仍返回 `clip` 范围内的完整 [`HitMap`]。
+    ///
+    /// 适合先恢复 [`crate::SurfaceCache`] 静态快照，再仅局部重绘悬停或状态变化的控件区域。
+    pub fn paint_dirty(
+        mut self,
+        frame: &mut Frame<'_>,
+        origin: (f32, f32),
+        clip: Rect,
+        dirty: Rect,
+    ) -> HitMap<A> {
+        let mut hits = HitMap::new();
+        let paint_clip = clip.intersect(dirty);
+        self.paint_node(self.root, origin, clip, paint_clip, frame, &mut hits);
         hits
     }
 
@@ -73,6 +99,7 @@ impl<'a, A> LaidOut<'a, A> {
         index: usize,
         parent_origin: (f32, f32),
         clip: Rect,
+        paint_clip: Rect,
         frame: &mut Frame<'_>,
         hits: &mut HitMap<A>,
     ) {
@@ -88,55 +115,79 @@ impl<'a, A> LaidOut<'a, A> {
         );
         let style = self.entries[index].paint;
         let visible = rect.intersect(clip);
+        let is_visible = non_empty(visible);
+        let paint_visible = rect.intersect(paint_clip);
+        let card_touches = style.card.is_some()
+            && non_empty(
+                rect.inset(-CARD_SHADOW_PAD, -CARD_SHADOW_PAD)
+                    .intersect(paint_clip),
+            );
+        let should_paint = non_empty(paint_visible) || card_touches;
 
-        // 1. 卡片外框阴影与 1px 细边（需在底色之前绘制，覆盖区域跳过内部阴影）。
-        if let Some(CardFrame {
-            shadow,
-            border_base,
-            border,
-        }) = style.card
-        {
-            let covered = frame.covered(rect, style.radius);
-            frame.shadow(rect, style.radius, 16.0, 4.0, shadow, Some(covered));
-            let edge = rect.inset(-1.0, -1.0);
-            frame.rect_except(edge, border_base, style.radius + 1.0, covered);
-            frame.rect_except(edge, border, style.radius + 1.0, covered);
+        // 不可见的裁剪容器既不可能命中、也不可能露出子节点，整棵子树直接剪枝。
+        if style.clip && !is_visible && !card_touches {
+            return;
         }
 
-        // 2. 背景底色。
-        if let Some(bg) = style.bg {
-            if style.radius > 0.0 {
-                frame.rect_clipped(rect, bg, style.radius, clip);
+        if should_paint {
+            // 1. 卡片外框阴影与 1px 细边（需在底色之前绘制，覆盖区域跳过内部阴影）。
+            if let Some(CardFrame {
+                shadow,
+                border_base,
+                border,
+            }) = style.card
+            {
+                let covered = frame.covered(rect, style.radius);
+                frame.shadow(rect, style.radius, 16.0, 4.0, shadow, Some(covered));
+                let edge = rect.inset(-1.0, -1.0);
+                frame.rect_except(edge, border_base, style.radius + 1.0, covered);
+                frame.rect_except(edge, border, style.radius + 1.0, covered);
+            }
+
+            // 2. 背景底色。
+            if let Some(bg) = style.bg
+                && non_empty(paint_visible)
+            {
+                if style.radius > 0.0 {
+                    frame.rect_clipped(rect, bg, style.radius, paint_clip);
+                } else {
+                    frame.rect(paint_visible, bg);
+                }
+            }
+
+            // 3. 普通内侧描边边框。
+            if let Some((width, color)) = style.border
+                && width > 0.0
+                && non_empty(paint_visible)
+            {
+                let inset = rect.inset(width / 2.0, width / 2.0);
+                let shapes =
+                    winc_render::rounded_outline(inset.x, inset.y, inset.w, inset.h, style.radius);
+                frame.stroke(&shapes, width, color, paint_clip);
+            }
+
+            // 4. 叶节点自身内容绘制。
+            let leaf_clip = if style.clip {
+                paint_visible
             } else {
-                frame.rect(visible, bg);
-            }
-        }
-
-        // 3. 普通内侧描边边框。
-        if let Some((width, color)) = style.border
-            && width > 0.0
-        {
-            let inset = rect.inset(width / 2.0, width / 2.0);
-            let shapes =
-                winc_render::rounded_outline(inset.x, inset.y, inset.w, inset.h, style.radius);
-            frame.stroke(&shapes, width, color, clip);
-        }
-
-        // 4. 叶节点自身内容绘制。
-        let child_clip = if style.clip { visible } else { clip };
-        let basis = self.basis;
-        match &mut self.entries[index].kind {
-            NodeKind::Container => {}
-            NodeKind::Text(spec) => {
-                paint_text(frame, basis, spec, rect, child_clip);
-            }
-            NodeKind::Custom { paint, .. } => {
-                paint(frame, rect, child_clip);
+                paint_clip
+            };
+            if non_empty(leaf_clip) {
+                let basis = self.basis;
+                match &mut self.entries[index].kind {
+                    NodeKind::Container => {}
+                    NodeKind::Text(spec) => {
+                        paint_text(frame, basis, spec, rect, leaf_clip);
+                    }
+                    NodeKind::Custom { paint, .. } => {
+                        paint(frame, rect, leaf_clip);
+                    }
+                }
             }
         }
 
         // 5. 注册本节点的命中区域（在子节点之前入表，因此子节点若也带 hit 会在逆序查找中优先命中）。
-        if let Some(action) = self.entries[index].hit.take() {
+        if is_visible && let Some(action) = self.entries[index].hit.take() {
             hits.push(visible, action);
         }
 
@@ -145,16 +196,36 @@ impl<'a, A> LaidOut<'a, A> {
         if children.is_empty() {
             return;
         }
+        let child_clip = if style.clip { visible } else { clip };
+        let child_paint_clip = if style.clip {
+            paint_visible
+        } else {
+            paint_clip
+        };
         let child_origin = (rect.x, rect.y - style.scroll_y);
-        if style.clip {
-            frame.within(child_clip, |frame| {
+        if style.clip && non_empty(child_paint_clip) {
+            frame.within(child_paint_clip, |frame| {
                 for child in children {
-                    self.paint_node(child, child_origin, child_clip, frame, hits);
+                    self.paint_node(
+                        child,
+                        child_origin,
+                        child_clip,
+                        child_paint_clip,
+                        frame,
+                        hits,
+                    );
                 }
             });
         } else {
             for child in children {
-                self.paint_node(child, child_origin, child_clip, frame, hits);
+                self.paint_node(
+                    child,
+                    child_origin,
+                    child_clip,
+                    child_paint_clip,
+                    frame,
+                    hits,
+                );
             }
         }
     }
@@ -260,6 +331,18 @@ pub fn render<'a, A>(
 ) -> HitMap<A> {
     let laid = layout(frame, basis, (Some(bounds.w), Some(bounds.h)), root);
     laid.paint_at(frame, (bounds.x, bounds.y), bounds)
+}
+
+/// 在固定矩形 `bounds` 内完成布局，但仅重绘与脏区 `dirty` 相交的节点，返回完整 [`HitMap`]。
+pub fn render_dirty<'a, A>(
+    frame: &mut Frame<'_>,
+    basis: TextBasis,
+    bounds: Rect,
+    dirty: Rect,
+    root: Node<'a, A>,
+) -> HitMap<A> {
+    let laid = layout(frame, basis, (Some(bounds.w), Some(bounds.h)), root);
+    laid.paint_dirty(frame, (bounds.x, bounds.y), bounds, dirty)
 }
 
 fn build_tree<'a, A>(

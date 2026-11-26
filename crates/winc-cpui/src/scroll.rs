@@ -3,7 +3,11 @@
 //! CPUI 不托管滚动偏移状态：应用以普通数值持有当前偏移，通过 [`ScrollMetrics`] 计算边界、
 //! 滚轮步进与条目可见性，并通过 [`ScrollbarSpec`] 换算滑块矩形与拖动偏移。
 
+use std::ops::Range;
+
 use winc_render::Rect;
+
+use crate::node::{Node, vstack};
 
 /// 一维滚动区域的无状态度量快照（逻辑像素）。
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -122,4 +126,134 @@ impl ScrollbarSpec {
         let (start, room) = self.room(start, len);
         ((pointer - grab - start) / (room - thumb).max(1.0)).clamp(0.0, 1.0) * max
     }
+}
+
+/// 虚拟滚动列表的可视区间计算结果。
+///
+/// 只描述落入当前视口的条目范围与首项的纵向裁剪偏移，配合 [`VisibleWindow::build`] 或
+/// [`virtual_list`] 即可把长列表的布局与绘制复杂度限制在 $O(\text{visible})$。
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisibleWindow {
+    range: Range<usize>,
+    scroll_offset: f32,
+    total_height: f32,
+}
+
+impl VisibleWindow {
+    /// 为等高长列表在 $O(1)$ 时间内计算可视窗口。
+    pub fn fixed(total: usize, row_height: f32, viewport_height: f32, scroll: f32) -> Self {
+        if total == 0 || row_height <= 0.0 || viewport_height <= 0.0 {
+            return Self {
+                range: 0..0,
+                scroll_offset: 0.0,
+                total_height: total as f32 * row_height.max(0.0),
+            };
+        }
+        let total_height = total as f32 * row_height;
+        let scroll = scroll.max(0.0);
+        let start = ((scroll / row_height).floor() as usize).min(total);
+        let end = (((scroll + viewport_height) / row_height).ceil() as usize)
+            .min(total)
+            .max(start);
+        let scroll_offset = if start < end {
+            scroll - start as f32 * row_height
+        } else {
+            0.0
+        };
+        Self {
+            range: start..end,
+            scroll_offset,
+            total_height,
+        }
+    }
+
+    /// 根据递增的条目顶部偏移切片 `tops` 与总高 `total_height`，在 $O(\log N)$ 内计算变高列表的可视窗口。
+    ///
+    /// 第 `i` 项占据区间 `[tops[i], next_top)`，其中最后一项的底边为 `total_height`。
+    pub fn from_offsets(
+        tops: &[f32],
+        total_height: f32,
+        viewport_height: f32,
+        scroll: f32,
+    ) -> Self {
+        let total = tops.len();
+        let total_height = total_height.max(0.0);
+        if total == 0 || viewport_height <= 0.0 {
+            return Self {
+                range: 0..0,
+                scroll_offset: 0.0,
+                total_height,
+            };
+        }
+        let top = scroll.max(0.0);
+        let bottom = top + viewport_height;
+        // 找到第一个底边 > top 的条目（若第 i 项底边为 next_top，等价于 next_top <= top 时跳过）。
+        let (mut lo, mut hi) = (0usize, total);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let item_bottom = tops.get(mid + 1).copied().unwrap_or(total_height);
+            if item_bottom <= top {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let start = lo;
+        let end = tops
+            .partition_point(|&item_top| item_top < bottom)
+            .max(start);
+        let scroll_offset = if start < end { top - tops[start] } else { 0.0 };
+        Self {
+            range: start..end,
+            scroll_offset,
+            total_height,
+        }
+    }
+
+    /// 根据已按纵向升序排好位置的条目矩形切片 `rects` 与裁剪视口 `clip`，在 $O(\log N)$ 内计算可视窗口。
+    pub fn from_rects(rects: &[Rect], clip: Rect) -> Self {
+        if rects.is_empty() || clip.h <= 0.0 {
+            return Self {
+                range: 0..0,
+                scroll_offset: 0.0,
+                total_height: 0.0,
+            };
+        }
+        let start = rects.partition_point(|r| r.bottom() < clip.y);
+        let end = rects.partition_point(|r| r.y <= clip.bottom()).max(start);
+        let scroll_offset = if start < end {
+            clip.y - rects[start].y
+        } else {
+            0.0
+        };
+        let total_height = (rects[rects.len() - 1].bottom() - rects[0].y).max(0.0);
+        Self {
+            range: start..end,
+            scroll_offset,
+            total_height,
+        }
+    }
+
+    /// 返回可视窗口的 `(可见索引区间, 首项纵向偏移, 全部条目总高度)`。
+    pub fn bounds(&self) -> (Range<usize>, f32, f32) {
+        (self.range.clone(), self.scroll_offset, self.total_height)
+    }
+
+    /// 仅对落入可视区间的条目调用 `build_row` 生成节点，并包入带裁剪与首项偏移的纵向容器。
+    pub fn build<'a, A>(&self, mut build_row: impl FnMut(usize) -> Node<'a, A>) -> Node<'a, A> {
+        vstack()
+            .w_full()
+            .scroll_y(self.scroll_offset)
+            .children(self.range.clone().map(&mut build_row))
+    }
+}
+
+/// 构造虚拟滚动列表容器：仅对 `window` 可视区间内的条目调用 `build_row` 生成节点。
+///
+/// 返回的容器宽度占满父容器并已启用裁剪与首行偏移，调用方按需链式追加 `.h(...)` 或 `.flex_1()`。
+pub fn virtual_list<'a, A>(
+    window: VisibleWindow,
+    build_row: impl FnMut(usize) -> Node<'a, A>,
+) -> Node<'a, A> {
+    window.build(build_row)
 }

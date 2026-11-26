@@ -19,7 +19,7 @@ mod wrap;
 
 pub use cache::SurfaceCache;
 pub use hit::HitMap;
-pub use layout::{LaidOut, TextBasis, layout, render};
+pub use layout::{LaidOut, TextBasis, layout, render, render_dirty};
 pub use node::{
     CardFrame, MeasureFn, Node, PaintFn, TextAlign, box_, custom, custom_measured, divider, hstack,
     hstack_rev, spacer, text, vdivider, vstack,
@@ -28,6 +28,6 @@ pub use popover::{
     PointPlacement, PopoverOptions, SubmenuPlacement, clamp_rect, place_at_point,
     place_below_or_above, place_submenu,
 };
-pub use scroll::{ScrollMetrics, ScrollbarSpec};
+pub use scroll::{ScrollMetrics, ScrollbarSpec, VisibleWindow, virtual_list};
 pub use widgets::Theme;
 pub use wrap::wrap_text;

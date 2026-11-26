@@ -412,3 +412,115 @@ fn scroll_metrics_and_scrollbar_spec_round_trip() {
     let dragged = spec.offset_for_thumb(track.y, track.h, mid.h, mid.y + 10.0, 10.0, 200.0);
     assert!((dragged - 100.0).abs() < 0.01);
 }
+
+#[test]
+fn virtual_list_instantiates_only_visible_rows_for_large_datasets() {
+    let mut renderer = offscreen_renderer();
+    let basis = basis_for(&renderer);
+    let mut built = Vec::new();
+    let mut hits = HitMap::new();
+
+    // 10,000 行等高列表，滚动到第 500 行中间（12,010px），视口高 100px，仅实例化 5 行。
+    let window = VisibleWindow::fixed(10_000, 24.0, 100.0, 12_010.0);
+    let (range, scroll_offset, total_height) = window.bounds();
+    assert_eq!(range, 500..505);
+    assert!((scroll_offset - 10.0).abs() < 0.01);
+    assert_eq!(total_height, 240_000.0);
+
+    renderer.draw(|frame| {
+        let list = virtual_list(window.clone(), |i| {
+            built.push(i);
+            box_().w_full().h(24.0).flex_shrink(0.0).hit(i)
+        })
+        .h(100.0);
+        hits = render(frame, basis, Rect::new(0.0, 20.0, 200.0, 100.0), list);
+    });
+
+    assert_eq!(built, vec![500, 501, 502, 503, 504]);
+    // 第 500 行顶部被裁去 10px，仅余 14px 可见；第 501 行从 y = 20 + 14 = 34 开始。
+    assert_eq!(hits.at(10.0, 25.0), Some(&500));
+    assert_eq!(hits.at(10.0, 35.0), Some(&501));
+    let r501 = hits.rect_of(&501).unwrap();
+    assert!((r501.y - 34.0).abs() < 0.01);
+    assert!((r501.h - 24.0).abs() < 0.01);
+}
+
+#[test]
+fn visible_window_handles_variable_heights_and_rects() {
+    let tops = [0.0, 20.0, 60.0, 84.0, 140.0];
+    let (range, scroll_offset, _) = VisibleWindow::from_offsets(&tops, 180.0, 50.0, 25.0).bounds();
+    assert_eq!(range, 1..3);
+    assert!((scroll_offset - 5.0).abs() < 0.01);
+
+    let rects = [
+        Rect::new(0.0, 10.0, 100.0, 20.0),
+        Rect::new(0.0, 30.0, 100.0, 40.0),
+        Rect::new(0.0, 70.0, 100.0, 24.0),
+        Rect::new(0.0, 94.0, 100.0, 30.0),
+    ];
+    let (range2, scroll_offset2, total_height2) =
+        VisibleWindow::from_rects(&rects, Rect::new(0.0, 45.0, 100.0, 40.0)).bounds();
+    assert_eq!(range2, 1..3);
+    assert!((scroll_offset2 - 15.0).abs() < 0.01);
+    assert_eq!(total_height2, 114.0);
+}
+
+#[test]
+fn paint_culls_offscreen_leaves_and_dirty_rect_skips_clean_siblings() {
+    let mut renderer = offscreen_renderer();
+    let basis = basis_for(&renderer);
+
+    // 1. 视口剔除：滚动到 y = 60 后，item0（0..30）和 item1（30..60）的自定义绘制回调不应被触发。
+    let painted = std::cell::RefCell::new(Vec::<usize>::new());
+    renderer.draw(|frame| {
+        let tree = vstack()
+            .w(120.0)
+            .h(40.0)
+            .scroll_y(60.0)
+            .children((0..5usize).map(|i| {
+                let p = &painted;
+                custom((120.0, 30.0), move |_, _, _| {
+                    p.borrow_mut().push(i);
+                })
+                .hit(i)
+            }));
+        let hits = render(frame, basis, Rect::new(0.0, 0.0, 120.0, 40.0), tree);
+        assert_eq!(hits.rect_of(&0), None);
+        assert_eq!(hits.rect_of(&1), None);
+        assert!(hits.rect_of(&2).is_some());
+    });
+    assert_eq!(*painted.borrow(), vec![2, 3]);
+
+    // 2. 局部脏区重绘：仅重绘与 dirty 相交的右侧面板，但 HitMap 仍保留全部可见区域。
+    let dirty_painted = std::cell::RefCell::new(Vec::<&str>::new());
+    let mut hits = HitMap::new();
+    renderer.draw(|frame| {
+        let p_left = &dirty_painted;
+        let p_right = &dirty_painted;
+        let tree = hstack()
+            .w(200.0)
+            .h(50.0)
+            .child(
+                custom((100.0, 50.0), move |_, _, _| {
+                    p_left.borrow_mut().push("left");
+                })
+                .hit("left"),
+            )
+            .child(
+                custom((100.0, 50.0), move |_, _, _| {
+                    p_right.borrow_mut().push("right");
+                })
+                .hit("right"),
+            );
+        hits = render_dirty(
+            frame,
+            basis,
+            Rect::new(0.0, 0.0, 200.0, 50.0),
+            Rect::new(110.0, 0.0, 80.0, 50.0),
+            tree,
+        );
+    });
+    assert_eq!(*dirty_painted.borrow(), vec!["right"]);
+    assert!(hits.rect_of(&"left").is_some());
+    assert!(hits.rect_of(&"right").is_some());
+}

@@ -221,12 +221,11 @@ fn build_choices_list<'a>(
             );
     }
 
-    let visible = parts.visible(scroll, rows.len());
-    let first_offset = visible.start as f32 * CHOICE_ROW - scroll;
+    let window = ui::VisibleWindow::fixed(rows.len(), CHOICE_ROW, list_h, scroll);
     let highlight_bg = hover_tint(p);
     let chip_h = (CHOICE_ROW - 8.0).max(0.0);
 
-    let row_nodes = visible.map(|i| {
+    ui::virtual_list(window, |i| {
         let active = i == selected || hover == Hover::PickerRow(i);
         let inner = match rows[i] {
             ChoiceRow::Option(index) => {
@@ -296,13 +295,8 @@ fn build_choices_list<'a>(
             .py(1.0)
             .flex_shrink(0.0)
             .child(inner)
-    });
-
-    ui::vstack()
-        .w_full()
-        .h(list_h)
-        .scroll_y(-first_offset)
-        .children(row_nodes)
+    })
+    .h(list_h)
 }
 
 /// 用声明式 7 列 Flexbox 网格绘制日期选择器，并返回自动收集的按钮命中列表。
