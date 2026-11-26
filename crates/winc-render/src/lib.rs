@@ -759,6 +759,24 @@ impl Renderer {
     /// 呈现缓冲都被合成器占用、无法取得空闲缓冲时不绘制（不调用 `paint`），返回 `false`：调用方
     /// 在下一次屏幕刷新时重试。绘制完成时返回 `true`。
     pub fn draw(&mut self, paint: impl FnOnce(&mut Frame<'_>)) -> bool {
+        self.draw_inner(false, paint).is_some()
+    }
+
+    /// 与 [`Self::draw`] 相同，但同时测量并返回呈现阶段（获取、锁/解锁与提交呈现缓冲，不含
+    /// `paint` 本身）的耗时；跳过本帧时返回 `None`，离屏渲染时返回零时长。
+    pub fn draw_timed(
+        &mut self,
+        paint: impl FnOnce(&mut Frame<'_>),
+    ) -> Option<std::time::Duration> {
+        self.draw_inner(true, paint)
+    }
+
+    /// [`Self::draw`] 与 [`Self::draw_timed`] 的共同实现；`timed` 为假时不触发时钟读取。
+    fn draw_inner(
+        &mut self,
+        timed: bool,
+        paint: impl FnOnce(&mut Frame<'_>),
+    ) -> Option<std::time::Duration> {
         let (w, h) = self.logical_size();
         let bounds = Rect::new(0.0, 0.0, w, h);
         let mut glyphs = self.glyphs.borrow_mut();
@@ -838,8 +856,8 @@ impl Renderer {
             });
         };
 
-        let drawn = match &mut self.target {
-            Target::Window(window, presenter) => presenter.frame(|canvas| {
+        let present = match &mut self.target {
+            Target::Window(window, presenter) => presenter.frame(timed, |canvas| {
                 paint(canvas);
                 window.pre_present_notify();
             }),
@@ -850,11 +868,11 @@ impl Renderer {
                     height: image.height as usize,
                     stride: image.width as usize,
                 });
-                true
+                Some(std::time::Duration::ZERO)
             }
         };
         self.base.clear();
-        drawn
+        present
     }
 
     /// 在透明底上离屏绘制一张 `width`×`height`（逻辑像素）的小图，按当前缩放系数绘制，

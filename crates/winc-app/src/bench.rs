@@ -9,6 +9,8 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::frame_log::FramePhases;
+
 /// 滚动测量采集的帧数（帧）。
 ///
 /// 无外部出处与硬性约束，取自调参：按 60 Hz 刷新率计，该帧数对应约 5 秒的滚动时长，
@@ -106,8 +108,8 @@ pub enum Next {
 /// 测量钩子的状态。
 pub struct Bench {
     mode: Mode,
-    /// 滚动测量中已采集的每帧耗时；只在 [`Mode::Scroll`] 下使用。
-    frame_times: Vec<Duration>,
+    /// 滚动、按键与预览测量中已采集的每帧分阶段耗时。
+    frame_times: Vec<FramePhases>,
     /// 按键测量中最近一次按键的处理耗时，计入随后一帧。
     key_time: Duration,
     /// 查找、高亮测量开始的时刻，当时进程已用的 CPU 时间，以及此后绘制的帧数。
@@ -203,8 +205,8 @@ impl Bench {
     /// 每次呈现之后调用。
     ///
     /// `presented` 是包括当前帧在内的累计呈现次数，从 1 起；第 1 帧绘制在尚未显示的窗口上，
-    /// 因此以第 2 帧作为首次呈现，滚动测量也从第 3 帧起采样。`elapsed` 是当前帧的绘制与呈现耗时。
-    pub fn on_present(&mut self, presented: usize, elapsed: Duration) -> Next {
+    /// 因此以第 2 帧作为首次呈现，滚动测量也从第 3 帧起采样。`phases` 是当前帧的分阶段耗时。
+    pub fn on_present(&mut self, presented: usize, mut phases: FramePhases) -> Next {
         if self.mode == Mode::Off {
             return Next::Continue;
         }
@@ -259,8 +261,8 @@ impl Bench {
             2
         };
         if presented > first {
-            self.frame_times
-                .push(elapsed + std::mem::take(&mut self.key_time));
+            phases.total += std::mem::take(&mut self.key_time);
+            self.frame_times.push(phases);
         }
 
         if self.frame_times.len() < SCROLL_FRAMES {
@@ -280,17 +282,22 @@ impl Bench {
             };
         }
 
-        self.frame_times.sort_unstable();
-        let pick = |q: f64| {
-            self.frame_times[((self.frame_times.len() - 1) as f64 * q) as usize].as_secs_f64()
-                * 1000.0
+        let pick = |extract: fn(&FramePhases) -> Duration, q: f64| {
+            let mut values: Vec<Duration> = self.frame_times.iter().map(extract).collect();
+            values.sort_unstable();
+            values[((values.len() - 1) as f64 * q) as usize].as_secs_f64() * 1000.0
         };
         println!(
-            "WINC scroll_frames={} p50_ms={:.2} p95_ms={:.2} max_ms={:.2}",
+            "WINC scroll_frames={} p50_ms={:.2} p95_ms={:.2} max_ms={:.2} \
+             parse_p95_ms={:.2} layout_p95_ms={:.2} draw_p95_ms={:.2} present_p95_ms={:.2}",
             self.frame_times.len(),
-            pick(0.5),
-            pick(0.95),
-            pick(1.0)
+            pick(|p| p.total, 0.5),
+            pick(|p| p.total, 0.95),
+            pick(|p| p.total, 1.0),
+            pick(|p| p.parse, 0.95),
+            pick(|p| p.layout, 0.95),
+            pick(|p| p.draw, 0.95),
+            pick(|p| p.present, 0.95),
         );
         Next::Exit
     }

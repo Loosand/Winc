@@ -84,35 +84,44 @@ impl Presenter {
     /// 把 `paint` 画进 `softbuffer` 的窗口缓冲并呈现；表面已释放时先重建，取不到缓冲时跳过
     /// 本帧。
     ///
-    /// 总是返回 `true`：这里不等待缓冲，取不到时在下一次屏幕刷新时重试也取不到。`paint` 直接
+    /// 总是返回 `Some`：这里不等待缓冲，取不到时在下一次屏幕刷新时重试也取不到。`paint` 直接
     /// 画进窗口缓冲（行距等于画面宽度），不另备一块同样大的像素缓冲再整块拷贝。
-    pub(crate) fn frame(&mut self, paint: impl FnOnce(Canvas<'_>)) -> bool {
+    /// `timed` 为真时返回本次获取与呈现缓冲所用的时长（不含 `paint`），为假时不计时并返回零。
+    pub(crate) fn frame(
+        &mut self,
+        timed: bool,
+        paint: impl FnOnce(Canvas<'_>),
+    ) -> Option<Duration> {
         let (width, height) = (self.width as usize, self.height as usize);
+        let acquire_start = timed.then(Instant::now);
         if self.surface.is_none() {
             let Ok(mut surface) = softbuffer::Surface::new(&self.context, self.window.clone())
             else {
-                return true;
+                return Some(Duration::ZERO);
             };
             let _ = surface.resize(nonzero(self.width), nonzero(self.height));
             self.surface = Some(surface);
         }
         let Some(Ok(mut buffer)) = self.surface.as_mut().map(|s| s.buffer_mut()) else {
-            return true;
+            return Some(Duration::ZERO);
         };
         // 调整尺寸失败时缓冲还是原来的大小，装不下这一帧，跳过。
         if buffer.len() < width * height {
-            return true;
+            return Some(Duration::ZERO);
         }
+        let pre_present = acquire_start.map_or(Duration::ZERO, |t| t.elapsed());
         paint(Canvas {
             px: &mut buffer[..],
             width,
             height,
             stride: width,
         });
+        let commit_start = timed.then(Instant::now);
         let _ = buffer.present();
         flush_copies();
+        let present = pre_present + commit_start.map_or(Duration::ZERO, |t| t.elapsed());
         self.presented = Some(Instant::now());
-        true
+        Some(present)
     }
 
     /// 返回应当释放空闲的窗口缓冲的时刻：最近一次呈现之后 [`RELEASE_IDLE`]；表面已释放、

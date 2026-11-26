@@ -33,6 +33,63 @@ const BUDGET_KEY_P95_MS: f64 = 4.0;
 /// 本仓库的 `README.md` 实测 p95 为 1.6–1.9 ms（M4 Pro）。
 const BUDGET_PREVIEW_P95_MS: f64 = 3.0;
 
+/// 全格式真实样稿（含 Mermaid 图表、公式、宽表与本地 SVG/PNG 图片）预览滚动 p95 预算（毫秒）。
+///
+/// 本机实测 p95 约 3.2 ms，留出约 40% 抖动余量并控制在 120 Hz 帧间隔（8.3 ms）的约一半附近。
+const BUDGET_SHOWCASE_PREVIEW_P95_MS: f64 = 4.5;
+
+/// 可编辑 Markdown 预览中键入到出帧的 p95 预算（毫秒）。
+///
+/// 取 120 Hz 帧间隔（8.3 ms）的一半，与 [`BUDGET_KEY_P95_MS`] 一致；本机实测 `long.md` 约 2.1 ms、
+/// 全格式样稿约 2.2 ms，兼顾长期稳定性与退化敏感度。
+const BUDGET_LIVE_TYPING_P95_MS: f64 = 4.0;
+
+/// 可编辑 Markdown 预览中移动光标（含语法标记显隐切换）出帧的 p95 预算（毫秒）。
+///
+/// 取 120 Hz 帧间隔（8.3 ms）的一半；本机实测 `README.md` 约 2.1 ms、全格式样稿约 2.4 ms。
+const BUDGET_LIVE_MOVES_P95_MS: f64 = 4.0;
+
+/// 单次滚动/键入/预览测量的帧耗时统计与四阶段 p95 分解（毫秒）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FrameStats {
+    p50: f64,
+    p95: f64,
+    parse_p95: Option<f64>,
+    layout_p95: Option<f64>,
+    draw_p95: Option<f64>,
+    present_p95: Option<f64>,
+}
+
+impl FrameStats {
+    /// 从 `winc` 的标准输出解析帧耗时与分阶段 p95 字段。
+    fn parse(output: &str) -> Result<Self, String> {
+        let p50 = field(output, "p50_ms").ok_or("winc 没有输出滚动耗时")?;
+        let p95 = field(output, "p95_ms").ok_or("winc 没有输出滚动耗时")?;
+        Ok(Self {
+            p50,
+            p95,
+            parse_p95: field(output, "parse_p95_ms"),
+            layout_p95: field(output, "layout_p95_ms"),
+            draw_p95: field(output, "draw_p95_ms"),
+            present_p95: field(output, "present_p95_ms"),
+        })
+    }
+
+    /// 如果包含分阶段 p95 数据，输出一行紧凑的阶段分解说明。
+    fn print_phases(&self) {
+        if let (Some(parse), Some(layout), Some(draw), Some(present)) = (
+            self.parse_p95,
+            self.layout_p95,
+            self.draw_p95,
+            self.present_p95,
+        ) {
+            println!(
+                "  阶段 p95: parse={parse:.2}ms layout={layout:.2}ms draw={draw:.2}ms present={present:.2}ms"
+            );
+        }
+    }
+}
+
 /// 跑一遍全部基准，返回所有指标是否都在预算内。
 ///
 /// # Errors
@@ -82,85 +139,121 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         );
     }
 
-    let (p50, p95) = scroll_once(&exe, &large, "scroll")?;
-    println!("{:<34} {:>8.2}ms", "滚动 p50（large.rs）", p50);
-    ok &= report("滚动 p95（large.rs）", p95, BUDGET_SCROLL_P95_MS, "ms");
+    let stats = scroll_once(&exe, &large, "scroll")?;
+    println!("{:<34} {:>8.2}ms", "滚动 p50（large.rs）", stats.p50);
+    ok &= report(
+        "滚动 p95（large.rs）",
+        stats.p95,
+        BUDGET_SCROLL_P95_MS,
+        "ms",
+    );
+    stats.print_phases();
 
     for name in ["huge.txt", "huge.rs"] {
-        let (_, p95) = scroll_once(&exe, &dir.join(name), "scroll")?;
+        let stats = scroll_once(&exe, &dir.join(name), "scroll")?;
         ok &= report(
             &format!("滚动 p95（{name}）"),
-            p95,
+            stats.p95,
             BUDGET_SCROLL_P95_MS,
             "ms",
         );
+        stats.print_phases();
     }
 
     // Vim 模式：按键处理加随后一帧的耗时；键入的耗时用于核对关闭 Vim 模式时没有额外开销。
-    let (p50, p95) = scroll_once(&exe, &large, "vim")?;
-    println!("{:<34} {:>8.2}ms", "Vim 按键到出帧 p50（large.rs）", p50);
+    let stats = scroll_once(&exe, &large, "vim")?;
+    println!(
+        "{:<34} {:>8.2}ms",
+        "Vim 按键到出帧 p50（large.rs）", stats.p50
+    );
     ok &= report(
         "Vim 按键到出帧 p95（large.rs）",
-        p95,
+        stats.p95,
         BUDGET_KEY_P95_MS,
         "ms",
     );
-    let (p50, p95) = scroll_once(&exe, &large, "typing")?;
-    println!("{:<34} {:>8.2}ms", "键入到出帧 p50（large.rs）", p50);
-    ok &= report("键入到出帧 p95（large.rs）", p95, BUDGET_KEY_P95_MS, "ms");
+    stats.print_phases();
+    let stats = scroll_once(&exe, &large, "typing")?;
+    println!("{:<34} {:>8.2}ms", "键入到出帧 p50（large.rs）", stats.p50);
+    ok &= report(
+        "键入到出帧 p95（large.rs）",
+        stats.p95,
+        BUDGET_KEY_P95_MS,
+        "ms",
+    );
+    stats.print_phases();
 
-    let (p50, p95) = scroll_once(&exe, &dir.join("long.md"), "live-typing")?;
-    println!("{:<34} {:>8.2}ms", "预览中键入到出帧 p50（long.md）", p50);
+    let stats = scroll_once(&exe, &dir.join("long.md"), "live-typing")?;
     println!(
         "{:<34} {:>8.2}ms",
-        "预览中键入到出帧 p95（long.md，仅供参考）", p95
+        "预览中键入到出帧 p50（long.md）", stats.p50
     );
+    ok &= report(
+        "预览中键入到出帧 p95（long.md）",
+        stats.p95,
+        BUDGET_LIVE_TYPING_P95_MS,
+        "ms",
+    );
+    stats.print_phases();
 
-    let (p50, p95) = scroll_once(&exe, &root().join("README.md"), "live-moves")?;
+    let stats = scroll_once(&exe, &root().join("README.md"), "live-moves")?;
     println!(
         "{:<34} {:>8.2}ms",
-        "预览中移动光标出帧 p50（README.md）", p50
+        "预览中移动光标出帧 p50（README.md）", stats.p50
     );
-    println!(
-        "{:<34} {:>8.2}ms",
-        "预览中移动光标出帧 p95（README.md，仅供参考）", p95
+    ok &= report(
+        "预览中移动光标出帧 p95（README.md）",
+        stats.p95,
+        BUDGET_LIVE_MOVES_P95_MS,
+        "ms",
     );
+    stats.print_phases();
 
-    let (_, p95) = scroll_once(&exe, &root().join("README.md"), "preview")?;
+    let stats = scroll_once(&exe, &root().join("README.md"), "preview")?;
     ok &= report(
         "预览滚动 p95（README.md）",
-        p95,
+        stats.p95,
         BUDGET_PREVIEW_P95_MS,
         "ms",
     );
+    stats.print_phases();
 
     // 全格式实战样稿（仅在工作区存在该文件时测量，只读运行，不修改原文件）。
     let showcase = root().join("testdata/markdown/epidemic-modeling/index.md");
     if showcase.is_file() {
-        let (p50, p95) = scroll_once(&exe, &showcase, "preview")?;
-        println!("{:<34} {:>8.2}ms", "预览滚动 p50（全格式样稿）", p50);
+        let stats = scroll_once(&exe, &showcase, "preview")?;
+        println!("{:<34} {:>8.2}ms", "预览滚动 p50（全格式样稿）", stats.p50);
+        ok &= report(
+            "预览滚动 p95（全格式样稿）",
+            stats.p95,
+            BUDGET_SHOWCASE_PREVIEW_P95_MS,
+            "ms",
+        );
+        stats.print_phases();
+        let stats = scroll_once(&exe, &showcase, "live-typing")?;
         println!(
             "{:<34} {:>8.2}ms",
-            "预览滚动 p95（全格式样稿，仅供参考）", p95
+            "预览中键入到出帧 p50（全格式样稿）", stats.p50
         );
-        let (p50, p95) = scroll_once(&exe, &showcase, "live-typing")?;
+        ok &= report(
+            "预览中键入到出帧 p95（全格式样稿）",
+            stats.p95,
+            BUDGET_LIVE_TYPING_P95_MS,
+            "ms",
+        );
+        stats.print_phases();
+        let stats = scroll_once(&exe, &showcase, "live-moves")?;
         println!(
             "{:<34} {:>8.2}ms",
-            "预览中键入到出帧 p50（全格式样稿）", p50
+            "预览中移动光标出帧 p50（全格式样稿）", stats.p50
         );
-        println!(
-            "{:<34} {:>8.2}ms",
-            "预览中键入到出帧 p95（全格式样稿，仅供参考）", p95
+        ok &= report(
+            "预览中移动光标出帧 p95（全格式样稿）",
+            stats.p95,
+            BUDGET_LIVE_MOVES_P95_MS,
+            "ms",
         );
-        let (p50, p95) = scroll_once(&exe, &showcase, "live-moves")?;
-        println!(
-            "{:<34} {:>8.2}ms",
-            "预览中移动光标出帧 p50（全格式样稿）", p50
-        );
-        println!(
-            "{:<34} {:>8.2}ms",
-            "预览中移动光标出帧 p95（全格式样稿，仅供参考）", p95
-        );
+        stats.print_phases();
     }
 
     // 快速转动鼠标滚轮：帧间隔、画面落后于滚轮的格数、最后一格之后画面停止的耗时。只列出，
@@ -284,14 +377,15 @@ fn startup_once(exe: &Path, file: &Path) -> Result<f64, String> {
     Ok(present - started)
 }
 
-/// 启动后连续滚动，返回（单帧耗时的 p50，毫秒；p95，毫秒）。
+/// 启动后连续滚动或执行键入/光标移动，返回单帧耗时的 p50/p95 与四阶段 p95 分解。
 ///
-/// `mode` 是测量模式：`scroll` 滚动文本，`preview` 先切换到只显示预览再滚动。
+/// `mode` 是测量模式：`scroll` 滚动文本，`preview` 先切换到只显示预览再滚动，`live-typing` /
+/// `live-moves` 在可编辑预览中键入或移动光标。
 ///
 /// # Errors
 ///
 /// 进程启动失败，或输出里缺少滚动耗时与帧率时返回错误描述。
-fn scroll_once(exe: &Path, file: &Path, mode: &str) -> Result<(f64, f64), String> {
+fn scroll_once(exe: &Path, file: &Path, mode: &str) -> Result<FrameStats, String> {
     let output = Command::new(exe)
         .arg(file)
         .env("WINC_BENCH", mode)
@@ -299,9 +393,7 @@ fn scroll_once(exe: &Path, file: &Path, mode: &str) -> Result<(f64, f64), String
         .output()
         .map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let p50 = field(&stdout, "p50_ms").ok_or("winc 没有输出滚动耗时")?;
-    let p95 = field(&stdout, "p95_ms").ok_or("winc 没有输出滚动耗时")?;
-    Ok((p50, p95))
+    FrameStats::parse(&stdout)
 }
 
 /// 以滚轮测量模式打开 `file`，返回 winc 的输出（含 `WINC wheel_frames=…` 一行）。

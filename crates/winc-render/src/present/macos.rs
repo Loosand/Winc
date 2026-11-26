@@ -237,16 +237,19 @@ impl Presenter {
     /// 把 `paint` 画进一块空闲的 surface，并把它设为子层的内容。
     ///
     /// 没有空闲 surface 且未达到 [`MAX_SURFACES`] 时新建一块；已达上限时最多等待
-    /// [`SURFACE_WAIT`]，仍无空闲则不画，不调用 `paint`，返回 `false`，由调用方在下一次屏幕
-    /// 刷新时再画。
+    /// [`SURFACE_WAIT`]，仍无空闲则不画，不调用 `paint`，返回 `None`，由调用方在下一次屏幕
+    /// 刷新时再画。`timed` 为真时返回本次获取、锁/解锁与提交呈现缓冲的耗时（不含 `paint`）。
     ///
     /// # Panics
     ///
     /// `IOSurfaceCreate` 失败，或基址不满足 `u32` 对齐要求时 panic（正常情况不会发生）。
-    pub(crate) fn frame(&mut self, paint: impl FnOnce(Canvas<'_>)) -> bool {
-        let Some(index) = self.acquire() else {
-            return false;
-        };
+    pub(crate) fn frame(
+        &mut self,
+        timed: bool,
+        paint: impl FnOnce(Canvas<'_>),
+    ) -> Option<Duration> {
+        let acquire_start = timed.then(Instant::now);
+        let index = self.acquire()?;
         self.reclaimed += u32::from(self.surfaces[index].set_purgeable(false));
         let surface = &self.surfaces[index];
         // SAFETY: `surface` 是有效的 IOSurface；`seed` 参数允许传 null；上锁后直到本函数下面
@@ -269,7 +272,7 @@ impl Presenter {
             };
             (self.shown, self.spare) = (after(self.shown), after(self.spare));
             self.next = 0;
-            return false;
+            return None;
         }
 
         let len = surface.stride * self.height as usize;
@@ -279,6 +282,7 @@ impl Presenter {
         // 长度取自 IOSurface 报告的每行字节数和画面高度，不超出映射范围。`paint` 对任意生命周期
         // 的画布都要能用，存不下这个切片，切片在 `paint` 返回后、解锁之前就不再被使用。
         let px = unsafe { std::slice::from_raw_parts_mut(base, len) };
+        let pre_present = acquire_start.map_or(Duration::ZERO, |t| t.elapsed());
         paint(Canvas {
             px,
             width: self.width as usize,
@@ -286,6 +290,7 @@ impl Presenter {
             stride: surface.stride,
         });
 
+        let commit_start = timed.then(Instant::now);
         let surface = &surface.surface;
         // SAFETY: 该 surface 由上面上锁且尚未解锁；`seed` 参数允许传 null。
         unsafe { surface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
@@ -301,10 +306,11 @@ impl Presenter {
             self.layer.setContents(Some(contents));
         }
         CATransaction::commit();
+        let present = pre_present + commit_start.map_or(Duration::ZERO, |t| t.elapsed());
         self.spare = self.shown.filter(|&k| k != index);
         self.shown = Some(index);
         self.idle_since = Some(Instant::now());
-        true
+        Some(present)
     }
 
     /// 返回这一帧要画的 surface 在 `surfaces` 中的下标；需要时新建一块或等待空闲，等到

@@ -773,3 +773,212 @@ fn the_heading_list_stays_put_while_the_preview_scrolls() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 将真实场景样本 `testdata/markdown/epidemic-modeling/` 连同本地图片只读复制到隔离临时目录。
+fn copy_epidemic_modeling(name: &str) -> (PathBuf, PathBuf) {
+    let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/markdown/epidemic-modeling");
+    let dir = sample_folder(name);
+    let img_dir = dir.join("images");
+    std::fs::create_dir_all(&img_dir).unwrap();
+    let index = dir.join("index.md");
+    std::fs::copy(src_dir.join("index.md"), &index).unwrap();
+    for file in [
+        "sir-curves.svg",
+        "herd-immunity-threshold.svg",
+        "attack-rate-heatmap.png",
+    ] {
+        std::fs::copy(src_dir.join("images").join(file), img_dir.join(file)).unwrap();
+    }
+    (dir, index)
+}
+
+/// 打开真实场景样本并等待全部解析与本地图片解码、按屏绘制就绪。
+fn open_epidemic_modeling(path: &Path, dark: bool) -> App {
+    let mut app = app_with(path, dark);
+    paint(&mut app);
+    app.set_preview_mode(PreviewMode::Preview);
+    settle(&mut app);
+    app
+}
+
+/// 采样滚动位置 `y` 处的一帧离屏像素，等待当前视口中按需请求的图片解码绘制后再取帧。
+fn render_viewport(app: &mut App, y: f32) -> (u32, u32, Vec<u32>) {
+    app.scroll_markdown_to(y);
+    settle(app);
+    let image = app.frame.renderer.as_ref().unwrap().image().unwrap();
+    (image.width, image.height, image.pixels.clone())
+}
+
+/// 统计当前帧中与预览背景色不同的像素数量，确认画面并非空白。
+fn painted_pixels(pixels: &[u32], bg: Color) -> usize {
+    let ch = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let bg_argb = 0xff00_0000 | (ch(bg.r) << 16) | (ch(bg.g) << 8) | ch(bg.b);
+    pixels.iter().filter(|&&px| px != bg_argb).count()
+}
+
+/// 逐像素比对两帧离屏缓冲，发现差异时仅报告差异像素数与首个差异坐标（不倾倒整帧像素）。
+fn assert_frames_equal(a: &(u32, u32, Vec<u32>), b: &(u32, u32, Vec<u32>), context: &str) {
+    assert_eq!((a.0, a.1), (b.0, b.1), "{context}: 帧尺寸不一致");
+    if a.2 == b.2 {
+        return;
+    }
+    let w = a.0 as usize;
+    let mut diffs = 0usize;
+    let mut first = None;
+    for (idx, (&pa, &pb)) in a.2.iter().zip(&b.2).enumerate() {
+        if pa != pb {
+            diffs += 1;
+            if first.is_none() {
+                first = Some((idx % w, idx / w, pa, pb));
+            }
+        }
+    }
+    let (x, y, pa, pb) = first.unwrap();
+    panic!(
+        "{context}: 发现 {diffs} 个差异像素，首处位于物理像素 ({x}, {y}) got={pa:#010x} expected={pb:#010x}"
+    );
+}
+
+/// 逐屏扫过整篇文档，触发全部延迟加载的本地图片解码并让总高度与缓存稳定。
+fn warm_all_images(app: &mut App) {
+    let step = (app.preview.markdown.area.h * 0.85).max(300.0);
+    let mut y = 0.0_f32;
+    loop {
+        let max = app.preview.markdown.max_scroll();
+        app.scroll_markdown_to(y.min(max));
+        settle(app);
+        if y >= max {
+            break;
+        }
+        y += step;
+    }
+    app.scroll_markdown_to(0.0);
+    settle(app);
+}
+
+/// 真实场景样本（`testdata/markdown/epidemic-modeling/index.md`）的渲染一致性校验：
+/// 固定尺寸与深浅主题下图片全部就绪、重复渲染逐像素一致、滚动卸载后回滚逐像素一致、编辑后撤销无损还原。
+#[test]
+fn epidemic_modeling_renders_consistently_across_themes_and_cache_cycles() {
+    let (dir, index) = copy_epidemic_modeling("md-epidemic-consistency");
+    let mut theme_top_frames: Vec<Vec<u32>> = Vec::new();
+
+    for dark in [false, true] {
+        let label = if dark { "dark" } else { "light" };
+        let mut app = open_epidemic_modeling(&index, dark);
+        // 先完整扫过全篇让所有本地图片解码并稳定整篇文档高度（避免首次采集前后因图片加载导致滚动条长度变化）。
+        warm_all_images(&mut app);
+        let height = app.preview.markdown.height;
+        let max_scroll = app.preview.markdown.max_scroll();
+        assert!(height > 5000.0, "[{label}] 样稿排版高度过小: {height}");
+
+        // 1. 确认 3 张本地图片全部解码成功（无 Failed / Loading），且尺寸有效。
+        let slots = app.preview.markdown.images.as_typeset_map();
+        for name in [
+            "sir-curves.svg",
+            "herd-immunity-threshold.svg",
+            "attack-rate-heatmap.png",
+        ] {
+            let slot = slots
+                .iter()
+                .find(|(p, _)| p.file_name().and_then(|n| n.to_str()) == Some(name))
+                .map(|(_, s)| s)
+                .unwrap_or_else(|| panic!("[{label}] 未加载本地图片: {name}"));
+            match slot {
+                crate::app::preview::markdown::ImageSlot::Ready { width, height, .. } => {
+                    assert!(
+                        *width > 100 && *height > 100,
+                        "[{label}] 图片 {name} 尺寸异常: {width}x{height}"
+                    );
+                }
+                crate::app::preview::markdown::ImageSlot::Loading => {
+                    panic!("[{label}] 图片 {name} 仍在加载中");
+                }
+                crate::app::preview::markdown::ImageSlot::Failed => {
+                    panic!("[{label}] 图片 {name} 解码失败");
+                }
+            }
+        }
+
+        // 选取 4 个固定视口位置：文首（属性与目录）、上中段（公式与 SVG 曲线）、
+        // 下中段（表格与 PNG 热图）、文末（Mermaid 类图/ER/Git 图与脚注）。
+        let checkpoints = [
+            0.0,
+            (max_scroll * 0.28).round(),
+            (max_scroll * 0.52).round(),
+            max_scroll.round(),
+        ];
+
+        // 2. 采集 4 个检查点的像素基线，同时确认每屏都有真实绘制像素。
+        let bg = app.palette.editor_bg;
+        let mut baseline = Vec::with_capacity(checkpoints.len());
+        for &y in &checkpoints {
+            let frame = render_viewport(&mut app, y);
+            assert!(
+                painted_pixels(&frame.2, bg) > 10_000,
+                "[{label}] 视口 y={y} 绘制像素异常偏少"
+            );
+            baseline.push(frame);
+        }
+        theme_top_frames.push(baseline[0].2.clone());
+
+        // 3. 完整滚动走完缓存卸载周期后回到 4 个检查点，断言逐像素完全一致。
+        let step = (app.preview.markdown.area.h * 0.9).max(300.0);
+        let mut y = 0.0_f32;
+        while y < max_scroll {
+            app.scroll_markdown_to(y);
+            paint(&mut app);
+            y += step;
+        }
+        for (idx, &cp) in checkpoints.iter().enumerate() {
+            let after = render_viewport(&mut app, cp);
+            assert_frames_equal(
+                &after,
+                &baseline[idx],
+                &format!("[{label}] 滚动周期后视口 #{idx} (y={cp})"),
+            );
+        }
+
+        // 4. 全新独立实例在同尺寸与同主题下渲染，断言与首个实例逐像素完全一致。
+        let mut fresh = open_epidemic_modeling(&index, dark);
+        warm_all_images(&mut fresh);
+        for (idx, &cp) in checkpoints.iter().enumerate() {
+            let other = render_viewport(&mut fresh, cp);
+            assert_frames_equal(
+                &other,
+                &baseline[idx],
+                &format!("[{label}] 独立重开渲染视口 #{idx} (y={cp})"),
+            );
+        }
+
+        // 5. 浅色主题下验证实时编辑 + 撤销往返后，文本、排版高度与离屏帧像素完全一致。
+        if !dark {
+            let original = doc_text(&fresh);
+            let before_top = render_viewport(&mut fresh, 0.0);
+            let before_height = fresh.preview.markdown.height;
+            put_caret(&mut fresh, "仓室模型", true);
+            fresh.run(winc_editor::Command::Insert("（测试修改）".into()));
+            settle(&mut fresh);
+            assert_ne!(doc_text(&fresh), original);
+            fresh.run(winc_editor::Command::Undo);
+            settle(&mut fresh);
+            assert_eq!(doc_text(&fresh), original, "撤销后原文应逐字节还原");
+            assert!(
+                (fresh.preview.markdown.height - before_height).abs() < 0.5,
+                "撤销后总高度漂移: before={before_height}, after={}",
+                fresh.preview.markdown.height
+            );
+            // 退出实时编辑光标显示后对比文首像素，确认与编辑前一致。
+            fresh.preview.markdown.live.leave_mode();
+            let after_top = render_viewport(&mut fresh, 0.0);
+            assert_frames_equal(&after_top, &before_top, "编辑并撤销后文首像素");
+        }
+    }
+
+    assert!(
+        theme_top_frames[0] != theme_top_frames[1],
+        "浅色与深色主题的渲染输出不应相同"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

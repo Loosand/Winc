@@ -711,7 +711,9 @@ impl App {
         self.track_words();
         self.track_suggest();
         self.git_follow_active();
-        self.relayout();
+        let timed = self.frame.frame_log.enabled() || self.frame.bench.silent();
+        crate::frame_log::begin_frame(timed);
+        crate::frame_log::time_layout(|| self.relayout());
         self.run_when_loaded();
         self.advance_search();
         self.advance_images();
@@ -722,6 +724,7 @@ impl App {
         self.frame.dirty = false;
 
         let Some(mut renderer) = self.frame.renderer.take() else {
+            crate::frame_log::cancel_frame();
             return;
         };
         let started = Instant::now();
@@ -733,15 +736,23 @@ impl App {
             window.pre_present_notify();
         }
         let scrolled = self.begin_scroll_frame();
-        let drawn = renderer.draw(|frame| view::draw(self, frame));
+        let present = if timed {
+            crate::frame_log::in_draw_phase(|| renderer.draw_timed(|frame| view::draw(self, frame)))
+        } else {
+            renderer
+                .draw(|frame| view::draw(self, frame))
+                .then_some(Duration::ZERO)
+        };
         self.end_scroll_frame(scrolled);
         let elapsed = started.elapsed();
         self.frame.renderer = Some(renderer);
-        if !drawn {
+        let Some(present) = present else {
+            crate::frame_log::cancel_frame();
             self.frame.frame_log.frame_skipped();
             self.retry_frame(started);
             return;
-        }
+        };
+        let phases = crate::frame_log::finish_frame(elapsed, present);
         if self.frame.frame_log.enabled()
             && let Some(window) = &self.window.handle
         {
@@ -749,7 +760,7 @@ impl App {
             let refresh = frame_interval(window);
             let reclaimed = (self.frame.renderer.as_mut()).map_or(0, Renderer::take_reclaimed);
             let size = (size.width, size.height);
-            (self.frame.frame_log).record(elapsed, refresh, size, reclaimed);
+            (self.frame.frame_log).record(phases, refresh, size, reclaimed);
         }
         self.refresh_hover();
         // 命中测试区域随本帧的布局更新；两帧之间的落指与抬手由 `on_touch` 另行同步。
@@ -772,7 +783,7 @@ impl App {
         self.after_terminal_frame();
         self.frame.presented += 1;
 
-        match self.frame.bench.on_present(self.frame.presented, elapsed) {
+        match self.frame.bench.on_present(self.frame.presented, phases) {
             Next::Continue => {}
             // 应用层看到以后结束事件循环（测量时只有一个窗口）。
             Next::Exit => self.closing.quit_requested = true,

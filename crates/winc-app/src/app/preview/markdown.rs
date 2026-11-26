@@ -649,16 +649,22 @@ impl App {
         };
         // 优先尝试就地块级局部增量重解析：直接复用未改动的全部顶层块（零深拷贝），
         // 即便整篇文档很长（全文解析耗时超过 `INLINE_PARSE`），常规输入仍可在微秒级同步完成。
-        if let (Some(prev_arc), Some(prev_rev)) = (md.parsed.as_mut(), md.checked)
-            && let Some((old_edit, new_edit)) = doc.byte_edit_since(prev_rev)
-            && Arc::make_mut(prev_arc).reparse_local_in_place(
-                old_edit,
-                new_edit,
-                rope.len_bytes(),
-                |b| rope.byte_to_line(b.min(rope.len_bytes())),
-                |r| rope.byte_slice(r).to_string(),
-            )
-        {
+        let incremental_ok = crate::frame_log::time_parse(|| {
+            if let (Some(prev_arc), Some(prev_rev)) = (md.parsed.as_mut(), md.checked)
+                && let Some((old_edit, new_edit)) = doc.byte_edit_since(prev_rev)
+            {
+                Arc::make_mut(prev_arc).reparse_local_in_place(
+                    old_edit,
+                    new_edit,
+                    rope.len_bytes(),
+                    |b| rope.byte_to_line(b.min(rope.len_bytes())),
+                    |r| rope.byte_slice(r).to_string(),
+                )
+            } else {
+                false
+            }
+        });
+        if incremental_ok {
             md.parse_serial = md.parse_serial.wrapping_add(1);
             md.pending = None;
             md.checked = Some(revision);
@@ -668,7 +674,7 @@ impl App {
             return false;
         }
         let started = std::time::Instant::now();
-        let parsed = markdown::parse(&rope.to_string());
+        let parsed = crate::frame_log::time_parse(|| markdown::parse(&rope.to_string()));
         md.cost = Some(started.elapsed());
         md.pending = None;
         md.checked = Some(revision);

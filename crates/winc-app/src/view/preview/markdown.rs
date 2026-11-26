@@ -372,7 +372,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         }
     };
     let widgets_hash = app.preview.markdown.decorations.block_widget_fingerprint();
-    let mut laid = match app.preview.markdown.layout.take() {
+    let mut laid = crate::frame_log::time_layout(|| match app.preview.markdown.layout.take() {
         Some(laid)
             if laid.matches_frame(key, source, live_key.as_ref(), widgets_hash, &near, area.h)
                 && loaded.is_empty()
@@ -652,8 +652,8 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                 laid
             }
         }
-    };
-    laid.place(left, pad, app.live_upstream());
+    });
+    crate::frame_log::time_layout(|| laid.place(left, pad, app.live_upstream()));
     app.note_links.footer_hits.clear();
     let footer = note_footer::height(app);
     app.preview.markdown.height = laid.height + pad * 2.0 + footer;
