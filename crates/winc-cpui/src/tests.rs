@@ -304,3 +304,111 @@ fn themed_widgets_render_and_collect_hits_without_host_dependencies() {
     assert!(confirm.x > cancel.right());
     assert!((confirm.w - theme.dialog_button_width).abs() < 0.5);
 }
+
+#[test]
+fn popover_places_below_and_flips_above_at_viewport_edges() {
+    let viewport = Rect::new(0.0, 0.0, 400.0, 300.0);
+    let opts = PopoverOptions {
+        margin: 8.0,
+        gap: 4.0,
+        offset_x: -20.0,
+        prefer_larger_side: false,
+        min_height: None,
+    };
+
+    // 光标在上方且空间充足：紧贴光标下方，并向左按 offset_x 对齐且不越过左边界。
+    let top_anchor = Rect::new(10.0, 20.0, 2.0, 18.0);
+    let placed = place_below_or_above(top_anchor, viewport, (180.0, 120.0), opts);
+    assert_eq!(placed, Rect::new(8.0, 42.0, 180.0, 120.0));
+
+    // 光标接近底边且靠右：自动翻到光标上方，同时夹紧到右边界留白内。
+    let bottom_anchor = Rect::new(350.0, 230.0, 2.0, 18.0);
+    let flipped = place_below_or_above(bottom_anchor, viewport, (180.0, 120.0), opts);
+    assert_eq!(flipped, Rect::new(212.0, 106.0, 180.0, 120.0));
+
+    // prefer_larger_side + min_height：下方空间比上方大时留在下方并按剩余高度裁剪。
+    let mid_anchor = Rect::new(40.0, 60.0, 120.0, 24.0);
+    let cropped = place_below_or_above(
+        mid_anchor,
+        viewport,
+        (240.0, 260.0),
+        PopoverOptions {
+            margin: 8.0,
+            gap: 4.0,
+            offset_x: 0.0,
+            prefer_larger_side: true,
+            min_height: Some(36.0),
+        },
+    );
+    assert_eq!(cropped, Rect::new(40.0, 88.0, 240.0, 204.0));
+}
+
+#[test]
+fn point_menu_and_submenu_respect_alignment_and_flip_left() {
+    let viewport = Rect::new(0.0, 0.0, 400.0, 300.0);
+
+    let level0 = place_at_point(
+        viewport,
+        (160.0, 100.0),
+        PointPlacement {
+            point: (380.0, 80.0),
+            margin: 8.0,
+            right_aligned: true,
+            anchor_y_offset: 30.0,
+        },
+    );
+    assert_eq!(level0, Rect::new(220.0, 50.0, 160.0, 100.0));
+
+    // 父菜单靠右时，子菜单在右侧放不下，应自动翻转到父菜单左侧并保留 2px 重叠。
+    let trigger = Rect::new(level0.x, level0.y + 28.0, level0.w, 24.0);
+    let sub = place_submenu(
+        viewport,
+        (140.0, 90.0),
+        SubmenuPlacement {
+            parent_card: level0,
+            trigger_row: trigger,
+            margin: 8.0,
+            overlap: 2.0,
+            pad_y: 4.0,
+        },
+    );
+    assert_eq!(sub, Rect::new(82.0, 74.0, 140.0, 90.0));
+
+    // 极窄视口时 clamp_rect 保持宽度归零或缩至可用区，贴靠左上留白。
+    let clamped = clamp_rect(
+        Rect::new(50.0, 50.0, 200.0, 100.0),
+        Rect::new(0.0, 0.0, 10.0, 10.0),
+        8.0,
+    );
+    assert_eq!(clamped, Rect::new(8.0, 8.0, 0.0, 0.0));
+}
+
+#[test]
+fn scroll_metrics_and_scrollbar_spec_round_trip() {
+    let m = ScrollMetrics::new(100.0, 350.0, 40.0);
+    assert!(m.can_scroll());
+    assert_eq!(m.max_offset(), 250.0);
+    assert_eq!(m.scroll_by(300.0), 250.0);
+    assert_eq!(m.scroll_by(-80.0), 0.0);
+    assert_eq!(m.ensure_visible(20.0, 24.0), 20.0);
+    assert_eq!(m.ensure_visible(60.0, 24.0), 40.0);
+    assert_eq!(m.ensure_visible(130.0, 24.0), 54.0);
+
+    let spec = ScrollbarSpec {
+        thickness: 6.0,
+        inset: 3.0,
+        end_margin: 4.0,
+        min_thumb: 24.0,
+    };
+    let track = Rect::new(10.0, 20.0, 120.0, 200.0);
+    assert_eq!(spec.vertical_thumb(track, 0.0, 200.0), None);
+    let top = spec.vertical_thumb(track, 0.0, 400.0).unwrap();
+    let mid = spec.vertical_thumb(track, 100.0, 400.0).unwrap();
+    let bottom = spec.vertical_thumb(track, 200.0, 400.0).unwrap();
+    assert_eq!(top.x, track.right() - 9.0);
+    assert_eq!(top.y, track.y + 4.0);
+    assert_eq!(bottom.bottom(), track.bottom() - 4.0);
+
+    let dragged = spec.offset_for_thumb(track.y, track.h, mid.h, mid.y + 10.0, 10.0, 200.0);
+    assert!((dragged - 100.0).abs() < 0.01);
+}

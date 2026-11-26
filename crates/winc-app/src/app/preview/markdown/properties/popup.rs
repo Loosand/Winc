@@ -306,12 +306,11 @@ impl App {
             return;
         }
         let area = self.layout.editor.inset(8.0, 6.0);
-        let w = (if popup.calendar() {
+        let w = if popup.calendar() {
             224.0
         } else {
             anchor.w.clamp(240.0, 430.0)
-        })
-        .min(area.w);
+        };
         let wanted = if popup.calendar() {
             popup.calendar_height()
         } else {
@@ -320,24 +319,19 @@ impl App {
                 + CHOICE_CAPTION
                 + popup.rows.len().clamp(1, 7) as f32 * CHOICE_ROW
         };
-        let below = area.bottom() - anchor.bottom() - 4.0;
-        let above = anchor.y - area.y - 4.0;
-        let up = below < wanted && above > below;
-        let space = if up { above } else { below };
         // Keep the whole calendar together even in a short window, overlapping the anchor if needed.
-        let h = if popup.calendar() {
-            wanted.min(area.h)
-        } else {
-            wanted.min(space.max(MENU_PICKER_BAR)).min(area.h)
-        };
-        let x = anchor.x.clamp(area.x, (area.right() - w).max(area.x));
-        let y = (if up {
-            anchor.y - 4.0 - h
-        } else {
-            anchor.bottom() + 4.0
-        })
-        .clamp(area.y, (area.bottom() - h).max(area.y));
-        self.layout.picker = Rect::new(x, y, w, h);
+        self.layout.picker = crate::ui::place_below_or_above(
+            anchor,
+            area,
+            (w, wanted),
+            crate::ui::PopoverOptions {
+                margin: 0.0,
+                gap: 4.0,
+                offset_x: 0.0,
+                prefer_larger_side: true,
+                min_height: (!popup.calendar()).then_some(MENU_PICKER_BAR),
+            },
+        );
     }
 
     pub(in crate::app) fn accept_property_picker(&mut self) {

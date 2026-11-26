@@ -345,13 +345,19 @@ pub fn editor_content_height(lines: usize, view_height: f32, line_height: f32) -
         + view_height
 }
 
+/// 应用滚动条共享的滑块几何规格（委托给 [`winc_cpui::ScrollbarSpec`]）。
+const APP_SCROLLBAR: winc_cpui::ScrollbarSpec = winc_cpui::ScrollbarSpec {
+    thickness: SCROLLBAR_THUMB,
+    inset: SCROLLBAR_INSET,
+    end_margin: SCROLLBAR_END,
+    min_thumb: 24.0,
+};
+
 /// 返回竖直滚动条的滑块位置；内容不超过可视高度时没有滑块，返回 `None`。
 ///
 /// 滑块的活动范围比 `track` 两端各短 [`SCROLLBAR_END`]。
 pub fn scrollbar_thumb(track: Rect, scroll: f32, content: f32) -> Option<Rect> {
-    let (y, h) = thumb_span(track.y, track.h, scroll, content)?;
-    let x = track.right() - SCROLLBAR_INSET - SCROLLBAR_THUMB;
-    Some(Rect::new(x, y, SCROLLBAR_THUMB, h))
+    APP_SCROLLBAR.vertical_thumb(track, scroll, content)
 }
 
 /// 概览标尺中 Git 改动一列标记的参数（离轨道右边的距离，宽度），逻辑像素。
@@ -534,31 +540,7 @@ pub fn minimap_first_row(total: usize, shown: usize, scroll: f64, max: f64) -> u
 ///
 /// 滑块的活动范围比 `track` 两端各短 [`SCROLLBAR_END`]。
 pub fn hscrollbar_thumb(track: Rect, scroll: f32, content: f32) -> Option<Rect> {
-    let (x, w) = thumb_span(track.x, track.w, scroll, content)?;
-    let y = track.bottom() - SCROLLBAR_INSET - SCROLLBAR_THUMB;
-    Some(Rect::new(x, y, w, SCROLLBAR_THUMB))
-}
-
-/// 返回滑块沿轨道方向的起点和长度（逻辑像素）。
-///
-/// `start`、`len` 是可视区域沿轨道方向的起点和长度。
-///
-/// 长度按「可见 / 内容」的比例计算，至少 24 逻辑像素，使长文档的滑块仍便于点中；活动范围
-/// 不足 24 逻辑像素时取活动范围的长度。
-fn thumb_span(start: f32, len: f32, scroll: f32, content: f32) -> Option<(f32, f32)> {
-    if content <= len || len <= 0.0 {
-        return None;
-    }
-
-    let (start, room) = thumb_room(start, len);
-    let size = (room * len / content).clamp(24.0_f32.min(room), room);
-    let offset = (scroll / (content - len)).clamp(0.0, 1.0) * (room - size);
-    Some((start + offset, size))
-}
-
-/// 返回滑块的活动范围（起点和长度）：轨道两端各让出 [`SCROLLBAR_END`]。
-fn thumb_room(start: f32, len: f32) -> (f32, f32) {
-    (start + SCROLLBAR_END, (len - 2.0 * SCROLLBAR_END).max(0.0))
+    APP_SCROLLBAR.horizontal_thumb(track, scroll, content)
 }
 
 /// 返回拖动滑块时的新滚动位置；拖动过程中按下点在滑块内的偏移 `grab` 保持不变。
@@ -573,6 +555,5 @@ pub fn scroll_for_thumb(
     grab: f32,
     max: f32,
 ) -> f32 {
-    let (start, room) = thumb_room(start, len);
-    ((pointer - grab - start) / (room - thumb).max(1.0)).clamp(0.0, 1.0) * max
+    APP_SCROLLBAR.offset_for_thumb(start, len, thumb, pointer, grab, max)
 }

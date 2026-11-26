@@ -53,55 +53,55 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         } else {
             w
         };
-        // 宽高不超过窗口减去两侧的边距；窗口比两侧边距还小时为 0。
-        let w = w.min(window.w - 2.0 * MARGIN).max(0.0);
-        let h = content.min(window.h - 2.0 * MARGIN).max(0.0);
-        let (x, y) = if l == 0 {
-            let mut y = popup.at.1;
-            // 打勾的那一行对准弹出的位置。
-            if popup.at_checked
-                && let Some(offset) = checked_offset(&popup.levels[0].rows)
-            {
-                y -= offset;
-            }
-            let x = if popup.right_aligned {
-                popup.at.0 - w
+        let rect = if l == 0 {
+            let anchor_y_offset = if popup.at_checked {
+                checked_offset(&popup.levels[0].rows).unwrap_or(0.0)
             } else {
-                popup.at.0
+                0.0
             };
-            (x, y)
+            crate::ui::place_at_point(
+                window,
+                (w, content),
+                crate::ui::PointPlacement {
+                    point: popup.at,
+                    margin: MARGIN,
+                    right_aligned: popup.right_aligned,
+                    anchor_y_offset,
+                },
+            )
         } else {
             // 子菜单贴着展开它的那一行，在上一级的右边；放不下时放到左边。
             let parent = &popup.levels[l - 1];
-            let row = popup.levels[l]
+            let trigger_row = popup.levels[l]
                 .parent
                 .and_then(|r| parent.row_rects.get(r))
                 .copied()
                 .unwrap_or(parent.rect);
-            let right = parent.rect.right() - 2.0;
-            let x = if right + w <= window.right() - MARGIN {
-                right
-            } else {
-                parent.rect.x - w + 2.0
-            };
-            (x, row.y - POPUP_PAD)
+            crate::ui::place_submenu(
+                window,
+                (w, content),
+                crate::ui::SubmenuPlacement {
+                    parent_card: parent.rect,
+                    trigger_row,
+                    margin: MARGIN,
+                    overlap: 2.0,
+                    pad_y: POPUP_PAD,
+                },
+            )
         };
-        // 上界不低于下界：窗口放不下时菜单贴着左上的边距。
-        let (left, top) = (window.x + MARGIN, window.y + MARGIN);
-        let x = x.clamp(left, (window.right() - MARGIN - w).max(left));
-        let y = y.clamp(top, (window.bottom() - MARGIN - h).max(top));
         let level = &mut popup.levels[l];
-        level.rect = Rect::new(x, y, w, h);
+        level.rect = rect;
         level.content = content;
-        level.scroll = level.scroll.clamp(0.0, (content - h).max(0.0));
-        let mut top = y + POPUP_PAD - drawn_scroll(level.scroll);
+        level.scroll =
+            crate::ui::ScrollMetrics::new(rect.h, content, level.scroll).clamp(level.scroll);
+        let mut top = rect.y + POPUP_PAD - drawn_scroll(level.scroll);
         level.row_rects = level
             .rows
             .iter()
             .map(|row| {
-                let rect = Rect::new(x, top, w, row_height(row, row_base));
-                top += rect.h;
-                rect
+                let row_rect = Rect::new(rect.x, top, rect.w, row_height(row, row_base));
+                top += row_rect.h;
+                row_rect
             })
             .collect();
         draw_level(app, frame, level, workspace, popup.app_icon.as_ref());
