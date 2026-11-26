@@ -134,6 +134,35 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         "ms",
     );
 
+    // 全格式实战样稿（仅在工作区存在该文件时测量，只读运行，不修改原文件）。
+    let showcase = root().join("testdata/markdown/epidemic-modeling/index.md");
+    if showcase.is_file() {
+        let (p50, p95) = scroll_once(&exe, &showcase, "preview")?;
+        println!("{:<34} {:>8.2}ms", "预览滚动 p50（全格式样稿）", p50);
+        println!(
+            "{:<34} {:>8.2}ms",
+            "预览滚动 p95（全格式样稿，仅供参考）", p95
+        );
+        let (p50, p95) = scroll_once(&exe, &showcase, "live-typing")?;
+        println!(
+            "{:<34} {:>8.2}ms",
+            "预览中键入到出帧 p50（全格式样稿）", p50
+        );
+        println!(
+            "{:<34} {:>8.2}ms",
+            "预览中键入到出帧 p95（全格式样稿，仅供参考）", p95
+        );
+        let (p50, p95) = scroll_once(&exe, &showcase, "live-moves")?;
+        println!(
+            "{:<34} {:>8.2}ms",
+            "预览中移动光标出帧 p50（全格式样稿）", p50
+        );
+        println!(
+            "{:<34} {:>8.2}ms",
+            "预览中移动光标出帧 p95（全格式样稿，仅供参考）", p95
+        );
+    }
+
     // 快速转动鼠标滚轮：帧间隔、画面落后于滚轮的格数、最后一格之后画面停止的耗时。只列出，
     // 不对照预算。
     let wheel = wheel_once(&exe, &large)?;
