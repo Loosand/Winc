@@ -1,6 +1,6 @@
 # Existing architectural debt suppressed by `deslop-please --allow`.
 # Fixing an entry here never fails CI; new issues not listed here fail.
-module-cycle winc_app::app,winc_app::elevated,winc_app::keymap,winc_app::layout,winc_app::macos,winc_app::shell_command,winc_app::system,winc_app::ui,winc_app::view,winc_app::winc
+module-cycle winc_app::app,winc_app::elevated,winc_app::keymap,winc_app::layout,winc_app::macos,winc_app::shell_command,winc_app::system,winc_app::view,winc_app::winc
 module-cycle winc_app::app::animation,winc_app::app::diff,winc_app::app::editor,winc_app::app::fields,winc_app::app::git,winc_app::app::hits,winc_app::app::input,winc_app::app::lifecycle,winc_app::app::preview,winc_app::app::release_notes,winc_app::app::remote,winc_app::app::scroll,winc_app::app::settings,winc_app::app::status,winc_app::app::terminal,winc_app::app::vim,winc_app::app::workspace
 module-cycle winc_app::app::lifecycle::alert,winc_app::app::lifecycle::appearance,winc_app::app::lifecycle::backup,winc_app::app::lifecycle::closing,winc_app::app::lifecycle::events,winc_app::app::lifecycle::install,winc_app::app::lifecycle::notice,winc_app::app::lifecycle::one_off,winc_app::app::lifecycle::placement,winc_app::app::lifecycle::shell_command,winc_app::app::lifecycle::startup,winc_app::app::lifecycle::title_bar,winc_app::app::lifecycle::wallpaper,winc_app::app::lifecycle::window
 module-cycle winc_app::app::workspace::background_save,winc_app::app::workspace::cloud,winc_app::app::workspace::copying,winc_app::app::workspace::file_drop,winc_app::app::workspace::file_work,winc_app::app::workspace::files,winc_app::app::workspace::folders,winc_app::app::workspace::global,winc_app::app::workspace::history,winc_app::app::workspace::library,winc_app::app::workspace::loading,winc_app::app::workspace::note_links,winc_app::app::workspace::note_search,winc_app::app::workspace::notebook,winc_app::app::workspace::outline,winc_app::app::workspace::panes,winc_app::app::workspace::picker,winc_app::app::workspace::recent,winc_app::app::workspace::session,winc_app::app::workspace::tab_drag,winc_app::app::workspace::tree,winc_app::app::workspace::tree_drag,winc_app::app::workspace::tree_label,winc_app::app::workspace::watch
@@ -409,13 +409,13 @@ shallow-module winc_app::icons
 shallow-module winc_app::keymap::action
 shallow-module winc_app::layout
 shallow-module winc_app::layout::settings
-shallow-module winc_app::ui
 shallow-module winc_backend::fs
 shallow-module winc_backend::remote::wire
 shallow-module winc_core
 shallow-module winc_core::editing
 shallow-module winc_core::editing::edit
 shallow-module winc_core::text
+shallow-module winc_cpui
 shallow-module winc_editor::document::disk
 shallow-module winc_editor::document::editing
 shallow-module winc_editor::document::editing::folding

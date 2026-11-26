@@ -5,23 +5,24 @@ use taffy::prelude::{AvailableSpace, NodeId, Size, Style, TaffyTree};
 use taffy::style::{AlignItems, Dimension, Display, FlexDirection};
 use winc_render::{Faux, Frame, Rect};
 
-use super::hit::HitMap;
-use super::node::{CardFrame, Node, NodeKind, PaintFn, PaintStyle, TextAlign, TextSpec};
+use crate::hit::HitMap;
+use crate::node::{CardFrame, Node, NodeKind, PaintStyle, TextAlign, TextSpec};
+use crate::wrap::wrap_text;
 
-/// 界面字体垂直视觉居中的参考度量（与 `view::ui_baseline` 保持一致）。
+/// 界面字体垂直视觉居中的参考度量。
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct TextBasis {
+pub struct TextBasis {
     /// 界面正文字号（逻辑像素）。
-    pub(crate) ui_size: f32,
+    pub ui_size: f32,
     /// 界面字体小写 `x` 高度（逻辑像素）。
-    pub(crate) x_height: f32,
+    pub x_height: f32,
     /// 界面字体大写字母高度（逻辑像素）。
-    pub(crate) cap_height: f32,
+    pub cap_height: f32,
 }
 
 impl TextBasis {
     /// 返回字号为 `size` 的文本在 `row` 内垂直居中时的基线 y 坐标（逻辑像素，取整）。
-    pub(crate) fn baseline(self, row: Rect, size: f32) -> f32 {
+    pub fn baseline(self, row: Rect, size: f32) -> f32 {
         let k = if self.ui_size > 0.0 {
             size / self.ui_size
         } else {
@@ -45,7 +46,7 @@ struct Entry<'a, A> {
 ///
 /// 允许调用方先读取 [`LaidOut::root_size`]（例如把弹窗卡片居中），再调用 [`LaidOut::paint_at`]
 /// 绘制到指定起点并产出 [`HitMap`]。
-pub(crate) struct LaidOut<'a, A> {
+pub struct LaidOut<'a, A> {
     tree: TaffyTree<usize>,
     entries: Vec<Entry<'a, A>>,
     root: usize,
@@ -54,21 +55,14 @@ pub(crate) struct LaidOut<'a, A> {
 
 impl<'a, A> LaidOut<'a, A> {
     /// 返回根节点布局后的 `(宽, 高)`（逻辑像素）。
-    pub(crate) fn root_size(&self) -> (f32, f32) {
-        let layout = self
-            .tree
+    pub fn root_size(&self) -> (f32, f32) {
+        self.tree
             .layout(self.entries[self.root].taffy_id)
-            .expect("root node exists in taffy tree");
-        (layout.size.width, layout.size.height)
+            .map_or((0.0, 0.0), |layout| (layout.size.width, layout.size.height))
     }
 
     /// 以 `origin` 为左上角把整棵树绘制到 `frame`，超出 `clip` 的部分裁剪，并返回收集到的 [`HitMap`]。
-    pub(crate) fn paint_at(
-        mut self,
-        frame: &mut Frame<'_>,
-        origin: (f32, f32),
-        clip: Rect,
-    ) -> HitMap<A> {
+    pub fn paint_at(mut self, frame: &mut Frame<'_>, origin: (f32, f32), clip: Rect) -> HitMap<A> {
         let mut hits = HitMap::new();
         self.paint_node(self.root, origin, clip, frame, &mut hits);
         hits
@@ -83,10 +77,9 @@ impl<'a, A> LaidOut<'a, A> {
         hits: &mut HitMap<A>,
     ) {
         let taffy_id = self.entries[index].taffy_id;
-        let layout = *self
-            .tree
-            .layout(taffy_id)
-            .expect("node exists in taffy tree");
+        let Ok(&layout) = self.tree.layout(taffy_id) else {
+            return;
+        };
         let rect = Rect::new(
             parent_origin.0 + layout.location.x,
             parent_origin.1 + layout.location.y,
@@ -171,7 +164,7 @@ impl<'a, A> LaidOut<'a, A> {
 ///
 /// 当节点需要按内容自适应宽度（shrink-to-fit）同时受自身 `max_w` 约束并触发内部文本折行时，
 /// 通过一层不拉伸子项的外壳把最大可用宽度以 `Definite` 传入，确保折行文本得到准确高度。
-pub(crate) fn layout<'a, A>(
+pub fn layout<'a, A>(
     frame: &mut Frame<'_>,
     basis: TextBasis,
     available: (Option<f32>, Option<f32>),
@@ -195,24 +188,21 @@ pub(crate) fn layout<'a, A>(
 
     let (compute_root, space) = if let Some(max_w) = wrap_w
         && available.0.is_none()
-    {
+        && let Ok(wrapper) = tree.new_with_children(
+            Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::START,
+                size: Size {
+                    width: Dimension::length(max_w),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[root_taffy],
+        ) {
         // 用 `align-items: start` 的外壳把 `max_w` 作为确定上限传给子树：
         // 短内容按自身宽度收缩，长内容在 `max_w` 处折行并重新计算高度。
-        let wrapper = tree
-            .new_with_children(
-                Style {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::START,
-                    size: Size {
-                        width: Dimension::length(max_w),
-                        height: Dimension::auto(),
-                    },
-                    ..Style::default()
-                },
-                &[root_taffy],
-            )
-            .expect("taffy wrapper creation succeeds");
         (
             wrapper,
             Size {
@@ -236,19 +226,22 @@ pub(crate) fn layout<'a, A>(
         )
     };
 
-    tree.compute_layout_with_measure(compute_root, space, |inputs, _node_id, context, _style| {
-        let Some(&entry_idx) = context.as_deref() else {
-            return LayoutOutput::HIDDEN;
-        };
-        let size = measure_leaf(
-            &mut entries[entry_idx].kind,
-            inputs.known_dimensions,
-            inputs.available_space,
-            frame,
-        );
-        LayoutOutput::from_outer_size(size)
-    })
-    .expect("taffy layout computation succeeds");
+    let _ = tree.compute_layout_with_measure(
+        compute_root,
+        space,
+        |inputs, _node_id, context, _style| {
+            let Some(&entry_idx) = context.as_deref() else {
+                return LayoutOutput::HIDDEN;
+            };
+            let size = measure_leaf(
+                &mut entries[entry_idx].kind,
+                inputs.known_dimensions,
+                inputs.available_space,
+                frame,
+            );
+            LayoutOutput::from_outer_size(size)
+        },
+    );
 
     LaidOut {
         tree,
@@ -259,8 +252,7 @@ pub(crate) fn layout<'a, A>(
 }
 
 /// 在固定矩形 `bounds` 内完成布局并直接绘制整棵声明式树，返回收集到的 [`HitMap`]。
-#[allow(dead_code)]
-pub(crate) fn render<'a, A>(
+pub fn render<'a, A>(
     frame: &mut Frame<'_>,
     basis: TextBasis,
     bounds: Rect,
@@ -286,11 +278,13 @@ fn build_tree<'a, A>(
     let entry_idx = entries.len();
     let taffy_id = if child_taffy_ids.is_empty() {
         tree.new_leaf_with_context(node.style, entry_idx)
-            .expect("taffy leaf creation succeeds")
     } else {
         tree.new_with_children(node.style, &child_taffy_ids)
-            .expect("taffy container creation succeeds")
-    };
+    }
+    .unwrap_or_else(|_| {
+        tree.new_leaf(Style::default())
+            .expect("empty taffy leaf creation succeeds")
+    });
 
     entries.push(Entry {
         taffy_id,
@@ -313,11 +307,6 @@ fn measure_leaf(
         AvailableSpace::MinContent => Some(0.0),
         AvailableSpace::MaxContent => None,
     };
-    let avail_h = match avail.height {
-        AvailableSpace::Definite(h) => Some(h.max(0.0)),
-        AvailableSpace::MinContent => Some(0.0),
-        AvailableSpace::MaxContent => None,
-    };
 
     match kind {
         NodeKind::Container => Size {
@@ -335,7 +324,6 @@ fn measure_leaf(
         }
         NodeKind::Custom { measure, .. } => {
             let (w, h) = measure(known.width, avail_w, frame);
-            let _ = avail_h;
             Size {
                 width: known.width.unwrap_or(w),
                 height: known.height.unwrap_or(h),
@@ -396,7 +384,7 @@ fn wrap_with_spec<'t>(
     width: f32,
 ) -> Vec<&'t str> {
     let (font, faux, size) = (spec.font, spec.faux, spec.size);
-    crate::layout::wrap_text(paragraph, width, |s| {
+    wrap_text(paragraph, width, |s| {
         if faux == Faux::default() {
             frame.measure(font, size, s)
         } else {
@@ -464,7 +452,3 @@ fn measure_line(frame: &mut Frame<'_>, spec: &TextSpec<'_>, line: &str) -> f32 {
         frame.measure_faux(spec.font, spec.faux, spec.size, line)
     }
 }
-
-/// 仅供单测访问 `PaintFn` 类型别名是否可正常构造。
-#[allow(dead_code)]
-fn _assert_paint_fn(_: PaintFn<'_>) {}

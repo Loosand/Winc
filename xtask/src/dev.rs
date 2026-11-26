@@ -34,6 +34,7 @@ const LAYERS: &[(&str, &[&str])] = &[
             "winc-backend",
             "winc-config",
             "winc-core",
+            "winc-cpui",
             "winc-editor",
             "winc-emoji",
             "winc-i18n",
@@ -47,6 +48,7 @@ const LAYERS: &[(&str, &[&str])] = &[
             "winc-vim",
         ],
     ),
+    ("winc-cpui", &["winc-render"]),
     (
         "winc-richtext",
         &[

@@ -1,0 +1,16 @@
+[package]
+name = "winc-cpui"
+description = "Minc 基于 CPU 渲染的声明式桌面界面层（CPUI）：描述节点、Flexbox 布局、命中测试、帧间快照复用与主题无关通用组件。"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+taffy.workspace = true
+winc-render.workspace = true
+
+[lints]
+workspace = true

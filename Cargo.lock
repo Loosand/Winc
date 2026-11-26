@@ -3571,7 +3571,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "taffy",
  "unicode-segmentation",
  "url",
  "wayland-backend",
@@ -3580,6 +3579,7 @@ dependencies = [
  "winc-backend",
  "winc-config",
  "winc-core",
+ "winc-cpui",
  "winc-editor",
  "winc-emoji",
  "winc-i18n",
@@ -3623,6 +3623,14 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "winc-emoji",
+]
+
+[[package]]
+name = "winc-cpui"
+version = "0.0.0"
+dependencies = [
+ "taffy",
+ "winc-render",
 ]
 
 [[package]]

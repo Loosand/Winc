@@ -502,6 +502,26 @@ impl Palette {
             self.search_match
         }
     }
+
+    /// 导出供 `winc-cpui` 通用组件层使用的语义化主题设计变量。
+    pub(crate) fn cpui_theme(&self) -> winc_cpui::Theme {
+        winc_cpui::Theme {
+            text: self.text,
+            text_muted: self.text_muted,
+            text_dim: self.text_dim,
+            accent: self.accent,
+            accent_fill: self.accent_fill,
+            text_on_accent: self.text_on_accent,
+            error: self.error,
+            hover: self.hover,
+            selected_inactive: self.selected_inactive,
+            control_height: SETTINGS_CONTROL_H,
+            icon_button_size: BUTTON,
+            dialog_button_width: DIALOG_BUTTON_W,
+            row_radius: RADIUS_ROW,
+            panel_pad: SETTINGS_PAD,
+        }
+    }
 }
 
 /// 徽章文字最多占用的显示列数（显示列）。

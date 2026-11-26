@@ -1,8 +1,11 @@
-//! 声明式布局与命中表（`crate::ui`）单元测试。
+//! `winc-cpui` 离屏布局、绘制、命中测试与快照缓存单元测试。
+
+use std::borrow::Cow;
 
 use winc_render::{Color, FontKind, Rect, Renderer};
 
-use super::*;
+use crate::widgets::{ButtonKind, ButtonSpec, Theme};
+use crate::*;
 
 fn offscreen_renderer() -> Renderer {
     Renderer::offscreen(600.0, 400.0, 1.0, Color::hex(0x1e1e1e), None, None)
@@ -15,6 +18,25 @@ fn basis_for(renderer: &Renderer) -> TextBasis {
         ui_size: 13.0,
         x_height: m.x_height,
         cap_height: m.cap_height,
+    }
+}
+
+fn sample_theme() -> Theme {
+    Theme {
+        text: Color::hex(0x1e1e1e),
+        text_muted: Color::hex(0x666666),
+        text_dim: Color::hex(0x999999),
+        accent: Color::hex(0x2563eb),
+        accent_fill: Color::hex(0x2563eb),
+        text_on_accent: Color::hex(0xffffff),
+        error: Color::hex(0xdc2626),
+        hover: Color::hex(0xe5e7eb),
+        selected_inactive: Color::hex(0xd1d5db),
+        control_height: 28.0,
+        icon_button_size: 28.0,
+        dialog_button_width: 84.0,
+        row_radius: 6.0,
+        panel_pad: 20.0,
     }
 }
 
@@ -114,11 +136,8 @@ fn overflow_hidden_and_scroll_y_clip_hit_rects() {
         hits = render(frame, basis, Rect::new(0.0, 0.0, 120.0, 50.0), list);
     });
 
-    // item0 完全滚出顶部（y = -30..0），被裁剪掉不应产生命中区域。
     assert_eq!(hits.rect_of(&"item0"), None);
-    // item1 滚到顶部可见区（y = 0..30）。
     assert_eq!(hits.at(10.0, 15.0), Some(&"item1"));
-    // item2 部分可见（y = 30..50），超出容器底部 y = 55 处不能命中。
     assert_eq!(hits.at(10.0, 40.0), Some(&"item2"));
     assert_eq!(hits.at(10.0, 55.0), None);
 }
@@ -187,7 +206,6 @@ fn divider_chip_and_field_slot_compose_cleanly() {
 
     assert_eq!(field_rect, Rect::new(10.0, 20.0, 180.0, 32.0));
     let check = hits.rect_of(&"check").unwrap();
-    // 即使左侧徽章文本很长，右侧 24px 勾选标记仍应稳稳停在卡片右侧内部。
     assert!((check.right() - 184.0).abs() < 1.0, "check={check:?}");
     assert!(
         check.y >= 53.0,
@@ -210,16 +228,13 @@ fn surface_cache_captures_restores_and_invalidates_cleanly() {
     assert!(cache.is_valid());
     assert_eq!(cache.reuses(), 0);
 
-    // 同一区域、同一缩放、同一键：直接复用快照。
     renderer.draw(|frame| {
         assert!(cache.restore(frame, area, &1u32, tint));
-        // 不同键或不同尺寸不能命中。
         assert!(!cache.restore(frame, area, &2u32, tint));
         assert!(!cache.restore(frame, Rect::new(0.0, 0.0, 180.0, 120.0), &1u32, tint));
     });
     assert_eq!(cache.reuses(), 1);
 
-    // invalidate 失效后不再命中；clear 释放缓冲。
     cache.invalidate();
     assert!(!cache.is_valid());
     renderer.draw(|frame| {
@@ -230,58 +245,62 @@ fn surface_cache_captures_restores_and_invalidates_cleanly() {
 }
 
 #[test]
-fn dialog_header_and_footer_align_with_dialog_layout() {
-    use std::borrow::Cow;
-
-    use crate::layout::{DialogLayout, DialogPart};
-    use crate::theme::LIGHT;
-    use crate::ui::widgets::{ButtonKind, ButtonSpec};
-
+fn themed_widgets_render_and_collect_hits_without_host_dependencies() {
     let mut renderer = offscreen_renderer();
     let basis = basis_for(&renderer);
-    let layout = DialogLayout::compute(Rect::new(0.0, 0.0, 600.0, 400.0), false, &[]);
-    let p = &LIGHT;
-    let mut header_hits = HitMap::new();
-    let mut footer_hits = HitMap::new();
+    let theme = sample_theme();
+    let mut hits = HitMap::new();
 
     renderer.draw(|frame| {
-        let header = widgets::dialog_header(p, 13.0, "新建分支", false, DialogPart::Close);
-        header_hits = render(frame, basis, layout.header, header);
-
-        let footer_rect = Rect::new(
-            layout.card.x + crate::theme::SETTINGS_PAD,
-            layout.cancel.y,
-            layout.confirm.right() - (layout.card.x + crate::theme::SETTINGS_PAD),
-            layout.cancel.h,
-        );
-        let footer = widgets::dialog_footer(
-            p,
-            (13.0, 12.0),
-            Some(Cow::Borrowed("分支名已存在")),
-            ButtonSpec {
-                label: Cow::Borrowed("取消"),
-                kind: ButtonKind::Normal,
-                enabled: true,
-                hovered: false,
-                action: DialogPart::Cancel,
-            },
-            ButtonSpec {
-                label: Cow::Borrowed("创建"),
-                kind: ButtonKind::Primary,
-                enabled: true,
-                hovered: false,
-                action: DialogPart::Confirm,
-            },
-        );
-        footer_hits = render(frame, basis, footer_rect, footer);
+        let dialog = vstack()
+            .w_full()
+            .h_full()
+            .child(
+                box_()
+                    .w_full()
+                    .h(44.0)
+                    .child(widgets::dialog_header(&theme, 13.0, "标题", true, "close")),
+            )
+            .child(box_().w_full().px(theme.panel_pad).child(widgets::checkbox(
+                &theme,
+                13.0,
+                "记住选择",
+                true,
+                "remember",
+            )))
+            .child(spacer())
+            .child(
+                box_()
+                    .w_full()
+                    .h(44.0)
+                    .px(theme.panel_pad)
+                    .child(widgets::dialog_footer(
+                        &theme,
+                        (13.0, 12.0),
+                        Some(Cow::Borrowed("校验提示")),
+                        ButtonSpec {
+                            label: Cow::Borrowed("取消"),
+                            kind: ButtonKind::Normal,
+                            enabled: true,
+                            hovered: false,
+                            action: "cancel",
+                        },
+                        ButtonSpec {
+                            label: Cow::Borrowed("确定"),
+                            kind: ButtonKind::Primary,
+                            enabled: true,
+                            hovered: true,
+                            action: "confirm",
+                        },
+                    )),
+            );
+        hits = render(frame, basis, Rect::new(0.0, 0.0, 420.0, 180.0), dialog);
     });
 
-    let close = header_hits.rect_of(&DialogPart::Close).unwrap();
-    let cancel = footer_hits.rect_of(&DialogPart::Cancel).unwrap();
-    let confirm = footer_hits.rect_of(&DialogPart::Confirm).unwrap();
-    assert!((close.x - layout.close.x).abs() < 1.0 && (close.y - layout.close.y).abs() < 1.0);
-    assert!((cancel.x - layout.cancel.x).abs() < 1.0 && (cancel.w - layout.cancel.w).abs() < 1.0);
-    assert!(
-        (confirm.x - layout.confirm.x).abs() < 1.0 && (confirm.w - layout.confirm.w).abs() < 1.0
-    );
+    assert!(hits.rect_of(&"close").is_some());
+    assert!(hits.rect_of(&"remember").is_some());
+    let cancel = hits.rect_of(&"cancel").unwrap();
+    let confirm = hits.rect_of(&"confirm").unwrap();
+    assert!(confirm.x > cancel.right());
+    assert!((confirm.w - theme.dialog_button_width).abs() < 0.5);
 }

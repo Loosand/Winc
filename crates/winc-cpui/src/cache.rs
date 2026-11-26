@@ -11,7 +11,7 @@ use winc_render::{Color, Frame, Rect, Snapshot};
 /// 只有当缓存处于有效态、版本键 `K` 相等、且快照覆盖的逻辑区域与缩放倍数与当前帧完全一致时
 /// 才允许复用；尺寸或缩放变化会自动失效。
 #[derive(Debug)]
-pub(crate) struct SurfaceCache<K> {
+pub struct SurfaceCache<K> {
     snapshot: Snapshot,
     key: Option<K>,
     valid: bool,
@@ -31,12 +31,12 @@ impl<K> Default for SurfaceCache<K> {
 
 impl<K: PartialEq> SurfaceCache<K> {
     /// 缓存是否仍覆盖当前缩放下的 `rect` 且版本键匹配 `key`。
-    pub(crate) fn is_fresh(&self, rect: Rect, scale: f32, key: &K) -> bool {
+    pub fn is_fresh(&self, rect: Rect, scale: f32, key: &K) -> bool {
         self.valid && self.key.as_ref() == Some(key) && self.snapshot.covers(rect, scale)
     }
 
     /// 捕获 `rect` 当前已绘制的像素，并记录版本键 `key`（复用已分配的快照缓冲）。
-    pub(crate) fn capture(&mut self, frame: &Frame<'_>, rect: Rect, key: K) {
+    pub fn capture(&mut self, frame: &Frame<'_>, rect: Rect, key: K) {
         frame.snapshot_into(rect, &mut self.snapshot);
         self.key = Some(key);
         self.valid = true;
@@ -45,13 +45,7 @@ impl<K: PartialEq> SurfaceCache<K> {
     /// 若缓存新鲜，将快照按 `tint` 恢复到 `frame` 并返回 `true`（同时累计命中次数）。
     ///
     /// `tint` 全透明时原样恢复，不做额外色彩叠加。
-    pub(crate) fn restore(
-        &mut self,
-        frame: &mut Frame<'_>,
-        rect: Rect,
-        key: &K,
-        tint: Color,
-    ) -> bool {
+    pub fn restore(&mut self, frame: &mut Frame<'_>, rect: Rect, key: &K, tint: Color) -> bool {
         if !self.is_fresh(rect, frame.scale(), key) {
             return false;
         }
@@ -61,26 +55,24 @@ impl<K: PartialEq> SurfaceCache<K> {
     }
 
     /// 标记缓存失效（保留已分配像素内存，供下次 `capture` 原地复用）。
-    pub(crate) fn invalidate(&mut self) {
+    pub fn invalidate(&mut self) {
         self.valid = false;
     }
 
     /// 清空并释放像素缓冲，立即归还系统内存（不计入空闲常驻内存）。
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.valid = false;
         self.key = None;
         self.snapshot = Snapshot::default();
     }
 
     /// 返回累计通过快照复用跳过下层重绘的帧数。
-    #[cfg(test)]
-    pub(crate) fn reuses(&self) -> u64 {
+    pub fn reuses(&self) -> u64 {
         self.reuses
     }
 
-    /// 是否持有有效快照（供测试检查释放与捕获状态）。
-    #[cfg(test)]
-    pub(crate) fn is_valid(&self) -> bool {
+    /// 是否持有有效快照（用于诊断与测试检查捕获/释放状态）。
+    pub fn is_valid(&self) -> bool {
         self.valid
     }
 }
