@@ -204,6 +204,11 @@ impl BlankRows {
         self.before.get(block).cloned().unwrap_or_default()
     }
 
+    /// 正文顶层块（不含移到文末的脚注）的空行槽位总数。
+    pub fn before_len(&self) -> usize {
+        self.before.len()
+    }
+
     /// Source range of the preceding gap when it consists of exactly one blank line between blocks.
     fn separator_before(&self, block: usize) -> Option<Range<usize>> {
         match &self.offsets[self.before(block)] {

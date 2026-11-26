@@ -5,8 +5,6 @@
 //! 时进行，结果按顶层块缓存（[`Laid`]）：文字改了只重排变了的块，宽度、字号、配色或图片大小
 //! 变了才整份重排。换行时不在「，。」这类标点前面、「（“」这类标点后面断。
 
-use std::sync::Arc;
-
 use winc_i18n::t;
 use winc_preview::markdown::properties::{PROPERTY, RAW};
 use winc_render::{Color, FontKind, Frame, Rect, Stroke};
@@ -324,7 +322,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         numbers: app.markdown_line_numbers_on() && !app.markdown_live(),
         tall: (area.h * TALL_SHARE).round().max(TALL_MIN),
     };
-    let source = Arc::as_ptr(&parsed) as usize;
+    let source = app.preview.markdown.parse_serial;
     let live = app.live_layout_leaf();
     let live_key = (live.as_ref()).map(|l| l.key(app.preedit_at(Focus::Editor)));
     let blank = live.as_ref().is_some_and(|l| l.blank);
@@ -354,7 +352,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             .and_then(|_| app.live_leaf())
             .map(|leaf| around(leaf.block));
         Near {
-            rows: (view - area.h * 2.0, view + area.h * 3.0),
+            rows: (view - area.h, view + area.h * 2.0),
             blocks: caret.into_iter().chain(head).chain(picked).collect(),
         }
     };
@@ -366,6 +364,54 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                 && toggled.is_none()
                 && !property_changed =>
         {
+            laid
+        }
+        Some(mut laid)
+            if laid.can_resume(key, source, live_key.as_ref(), widgets_hash)
+                && !laid.pending()
+                && loaded.is_empty()
+                && toggled.is_none()
+                && !property_changed =>
+        {
+            // 纯滚动或跳转跨出 `Near` 缓冲：就地释放离屏块、重排新进入视口的块，不重建整篇排版。
+            let doc_path = app.editor.active().and_then(|d| d.path.clone());
+            let remote_images = app.config.markdown_remote_images != Some(false);
+            let editable = app.markdown_live();
+            let checked = app
+                .editor
+                .active()
+                .is_some_and(|d| app.preview.markdown.is_checked(d.revision));
+            let properties = parsed
+                .properties
+                .as_ref()
+                .filter(|_| app.note_properties_available())
+                .map(|(_, fields)| app.property_panel(fields));
+            let preedit = app.preedit_at(Focus::Editor).to_owned();
+            let image_path = |url: &str| {
+                crate::app::preview::markdown::image_path(doc_path.as_deref(), url, remote_images)
+            };
+            let token = |kind| p.token(kind);
+            let input = LayoutInput {
+                rope: app.editor.active().and_then(|d| d.text().rope()),
+                preedit: &preedit,
+                surface: p.editor_bg,
+                accent: p.accent,
+                colors: winc_typeset::Colors::new(p.text, p.text_muted, p.accent, p.dark),
+                dark: p.dark,
+                token: &token,
+                images: app.preview.markdown.images.as_typeset_map(),
+                image_path: &image_path,
+                memo: &mut app.preview.markdown.memo,
+                toggled: &app.preview.markdown.toggled,
+                editable,
+                checked,
+                properties,
+                decorations: Some(&app.preview.markdown.decorations),
+            };
+            let wanted_images = laid.refresh_near(input, frame, &parsed, live.as_ref(), near);
+            for (path, url) in wanted_images {
+                app.request_markdown_image(&path, &url);
+            }
             laid
         }
         old => {
@@ -380,6 +426,8 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             if old.as_ref().is_none_or(|l| l.source != source) {
                 app.preview.markdown.selection = None;
             }
+            let current_rev = app.editor.active().map(|d| d.revision);
+            let mut slide = false;
             if !resumed {
                 app.preview.markdown.find_doc = None;
                 still = app
@@ -389,52 +437,33 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                     .and_then(|caret| {
                         app.old_markdown_caret(old.as_ref(), source, live_key.as_ref(), caret)
                     });
-                let slide = std::mem::take(&mut app.preview.markdown.slide);
+                slide = std::mem::take(&mut app.preview.markdown.slide);
                 let scroll = app.preview.markdown.scroll();
                 let motion = app.preview.markdown.motion.as_ref();
-                let current_rev = app.editor.active().map(|d| d.revision);
-                before = old
+                // 纯文字输入（已有编辑态且版本号确实变化）不触发块滑动与淡入动画，跳过对整篇拍快照并清理旧动画。
+                let typing = old
                     .as_ref()
-                    .filter(|l| l.key == key && app.markdown_live())
-                    .map(|l| {
-                        (
-                            l.snapshot_before(
-                                scroll,
-                                |i| motion.map_or(0.0, |m| m.offset(i)),
-                                current_rev,
-                            ),
-                            slide,
-                        )
-                    });
+                    .and_then(Laid::live_revision)
+                    .is_some_and(|rev| Some(rev) != current_rev);
+                if typing && !slide {
+                    app.preview.markdown.motion = None;
+                } else {
+                    before = old
+                        .as_ref()
+                        .filter(|l| l.key == key && app.markdown_live())
+                        .map(|l| {
+                            (
+                                l.snapshot_before(
+                                    scroll,
+                                    |i| motion.map_or(0.0, |m| m.offset(i)),
+                                    current_rev,
+                                ),
+                                slide,
+                            )
+                        });
+                }
             }
-            // 文字未变时保留旧的各块供沿用，并记录视口顶边所在的块，排版期间保持其屏幕位置。
-            let same = (old.as_ref())
-                .filter(|l| l.source == source && l.block_count() == parsed.blocks.len());
-            let width_changed = same.is_some_and(|l| l.key.width != key.width);
-            let top = drawn_scroll(
-                app.preview
-                    .markdown
-                    .scroll()
-                    .min(app.preview.markdown.max_scroll()),
-            );
-            let held = same.and_then(|l| l.place_at(l.content_y(top)));
-            let mut window =
-                same.map(|l| l.blocks_in(l.content_y(top) - area.h, top + area.h * 2.0));
-            let mut kept = same.map(Laid::clone_blocks);
-            let was_pending = same.is_some_and(Laid::pending);
-            // 有图片刚读好时，用到它的块大小变了，需要重排；折叠块开合时，它所在的块需要
-            // 重排；其余块沿用上次的结果。
-            let mut reuse = old.as_ref().filter(|l| l.key == key).map(|l| {
-                l.fresh()
-                    .into_iter()
-                    .filter(|(_, block)| {
-                        !block.uses_any(&loaded)
-                            && toggled.as_deref().is_none_or(|url| !block.links_to(url))
-                    })
-                    .collect()
-            });
-            let deadline = app.preview.markdown.catch_up_deadline();
-            // 视口上方的块高度变化后，视口内的块可能与排版前估计的不同：仍有未排的块时再排一轮。
+            // 单块常规实时输入快路径：条件、挂件与块数未变且无需过渡动画时，就地重排改动的块。
             let doc_path = app.editor.active().and_then(|d| d.path.clone());
             let remote_images = app.config.markdown_remote_images != Some(false);
             let editable = app.markdown_live();
@@ -448,13 +477,18 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                 .filter(|_| app.note_properties_available())
                 .map(|(_, fields)| app.property_panel(fields));
             let preedit = app.preedit_at(Focus::Editor).to_owned();
-            let mut laid = loop {
-                let later = (kept.as_deref().zip(window.clone())).map(|(old, window)| Later {
-                    old,
-                    window,
-                    deadline,
-                });
-                let fresh = reuse.take().unwrap_or_default();
+            let mut old = old;
+            let patched = if before.is_none()
+                && !slide
+                && !resumed
+                && loaded.is_empty()
+                && toggled.is_none()
+                && !property_changed
+                && properties.is_none()
+                && old.as_ref().is_some_and(|l| {
+                    l.key == key && !l.pending() && l.block_count() == parsed.blocks.len()
+                }) {
+                let mut candidate = old.take().unwrap();
                 let image_path = |url: &str| {
                     crate::app::preview::markdown::image_path(
                         doc_path.as_deref(),
@@ -477,45 +511,131 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                     toggled: &app.preview.markdown.toggled,
                     editable,
                     checked,
-                    properties: properties.clone(),
+                    properties: None,
                     decorations: Some(&app.preview.markdown.decorations),
                 };
-                let (laid, wanted_images) = Laid::build(
+                match candidate.patch_edited(
                     input,
                     frame,
                     &parsed,
-                    key,
                     source,
                     live.as_ref(),
-                    fresh,
-                    later,
-                    Some(near.clone()),
-                );
-                for (path, url) in wanted_images {
-                    app.request_markdown_image(&path, &url);
+                    near.clone(),
+                ) {
+                    Some(wanted_images) => {
+                        for (path, url) in wanted_images {
+                            app.request_markdown_image(&path, &url);
+                        }
+                        Some(candidate)
+                    }
+                    None => {
+                        old = Some(candidate);
+                        None
+                    }
                 }
-                let y = held.map_or(top - pad, |(i, off)| {
-                    laid.top(i) + off.min(laid.room_below(i))
-                });
-                let seen = laid.blocks_in(y, y + area.h);
-                if window.as_ref() == Some(&seen) || !laid.has_stale_in(seen.clone()) {
-                    break laid;
-                }
-                (reuse, window) = (Some(laid.fresh()), Some(seen));
-                kept = Some(laid.into_blocks());
+            } else {
+                None
             };
-            // 分帧排版和图片加载完成后，视口顶边所在块的屏幕位置不变。
-            let anchored = width_changed || was_pending || laid.pending() || !loaded.is_empty();
-            if let Some((i, off)) = held.filter(|_| anchored) {
-                let y = laid.top(i) + off.min(laid.room_below(i)) + pad;
-                app.preview.markdown.set_scroll(y);
-                still = None;
+            if let Some(laid) = patched {
+                laid
+            } else {
+                // 文字未变时保留旧的各块供沿用，并记录视口顶边所在的块，排版期间保持其屏幕位置。
+                let same = (old.as_ref())
+                    .filter(|l| l.source == source && l.block_count() == parsed.blocks.len());
+                let width_changed = same.is_some_and(|l| l.key.width != key.width);
+                let top = drawn_scroll(
+                    app.preview
+                        .markdown
+                        .scroll()
+                        .min(app.preview.markdown.max_scroll()),
+                );
+                let held = same.and_then(|l| l.place_at(l.content_y(top)));
+                let mut window =
+                    same.map(|l| l.blocks_in(l.content_y(top) - area.h, top + area.h * 2.0));
+                let mut kept = same.map(Laid::clone_blocks);
+                let was_pending = same.is_some_and(Laid::pending);
+                // 有图片刚读好时，用到它的块大小变了，需要重排；折叠块开合时，它所在的块需要
+                // 重排；其余块沿用上次的结果。
+                let mut reuse = old.as_ref().filter(|l| l.key == key).map(|l| {
+                    l.fresh()
+                        .into_iter()
+                        .filter(|(_, block)| {
+                            !block.uses_any(&loaded)
+                                && toggled.as_deref().is_none_or(|url| !block.links_to(url))
+                        })
+                        .collect()
+                });
+                let deadline = app.preview.markdown.catch_up_deadline();
+                // 视口上方的块高度变化后，视口内的块可能与排版前估计的不同：仍有未排的块时再排一轮。
+                let mut laid = loop {
+                    let later = (kept.as_deref().zip(window.clone())).map(|(old, window)| Later {
+                        old,
+                        window,
+                        deadline,
+                    });
+                    let fresh = reuse.take().unwrap_or_default();
+                    let image_path = |url: &str| {
+                        crate::app::preview::markdown::image_path(
+                            doc_path.as_deref(),
+                            url,
+                            remote_images,
+                        )
+                    };
+                    let token = |kind| p.token(kind);
+                    let input = LayoutInput {
+                        rope: app.editor.active().and_then(|d| d.text().rope()),
+                        preedit: &preedit,
+                        surface: p.editor_bg,
+                        accent: p.accent,
+                        colors: winc_typeset::Colors::new(p.text, p.text_muted, p.accent, p.dark),
+                        dark: p.dark,
+                        token: &token,
+                        images: app.preview.markdown.images.as_typeset_map(),
+                        image_path: &image_path,
+                        memo: &mut app.preview.markdown.memo,
+                        toggled: &app.preview.markdown.toggled,
+                        editable,
+                        checked,
+                        properties: properties.clone(),
+                        decorations: Some(&app.preview.markdown.decorations),
+                    };
+                    let (laid, wanted_images) = Laid::build(
+                        input,
+                        frame,
+                        &parsed,
+                        key,
+                        source,
+                        live.as_ref(),
+                        fresh,
+                        later,
+                        Some(near.clone()),
+                    );
+                    for (path, url) in wanted_images {
+                        app.request_markdown_image(&path, &url);
+                    }
+                    let y = held.map_or(top - pad, |(i, off)| {
+                        laid.top(i) + off.min(laid.room_below(i))
+                    });
+                    let seen = laid.blocks_in(y, y + area.h);
+                    if window.as_ref() == Some(&seen) || !laid.has_stale_in(seen.clone()) {
+                        break laid;
+                    }
+                    (reuse, window) = (Some(laid.fresh()), Some(seen));
+                    kept = Some(laid.into_blocks());
+                };
+                // 分帧排版和图片加载完成后，视口顶边所在块的屏幕位置不变。
+                let anchored = width_changed || was_pending || laid.pending() || !loaded.is_empty();
+                if let Some((i, off)) = held.filter(|_| anchored) {
+                    let y = laid.top(i) + off.min(laid.room_below(i)) + pad;
+                    app.preview.markdown.set_scroll(y);
+                    still = None;
+                }
+                app.preview.markdown.finish_catch_up(laid.pending());
+                // 释放了要画的项的块不再使用排版缓存，缓存只保留其余的块用到的条目。
+                laid.sweep_memo(&mut app.preview.markdown.memo);
+                laid.restore_hscroll_from(old.as_ref());
+                laid
             }
-            app.preview.markdown.finish_catch_up(laid.pending());
-            // 释放了要画的项的块不再使用排版缓存，缓存只保留其余的块用到的条目。
-            laid.sweep_memo(&mut app.preview.markdown.memo);
-            laid.restore_hscroll_from(old.as_ref());
-            laid
         }
     };
     laid.place(left, pad, app.live_upstream());

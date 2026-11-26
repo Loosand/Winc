@@ -108,6 +108,8 @@ pub(crate) struct MarkdownPreview {
     pub doc: Option<DocumentId>,
     /// 最近一次解析的结果。
     pub parsed: Option<Arc<Markdown>>,
+    /// 解析结果的单调递增版本号（支持就地增量更新后仍唯一标识不同解析版本）。
+    pub(crate) parse_serial: usize,
     /// 最新解析过的文档版本号（`revision`）。
     checked: Option<u64>,
     /// 正在后台解析的版本号（`revision`）。
@@ -272,6 +274,7 @@ impl Default for MarkdownPreview {
         Self {
             doc: None,
             parsed: None,
+            parse_serial: 0,
             checked: None,
             pending: None,
             cost: None,
@@ -383,6 +386,7 @@ impl MarkdownPreview {
         self.leave_book();
         self.doc = doc;
         self.parsed = None;
+        self.parse_serial = self.parse_serial.wrapping_add(1);
         self.checked = None;
         self.pending = None;
         self.cost = None;
@@ -483,16 +487,17 @@ impl App {
 
         // 3. 同步断链诊断层（`DecorationLayer::Diagnostic`）：仅在解析结果追上当前版本时重算，
         // 异步重解析期间保留上一步 `ChangeMap` 映射后的锚点。
-        if self.preview.markdown.checked == Some(doc_rev)
-            && let Some(parsed) = self.preview.markdown.parsed.clone()
+        if self.preview.markdown.checked == Some(doc_rev) && self.preview.markdown.parsed.is_some()
         {
             let diag_key = Some((
                 doc_id,
-                Arc::as_ptr(&parsed) as usize,
+                self.preview.markdown.parse_serial,
                 self.preview.markdown.links.generation,
                 self.palette.error.r.to_bits(),
             ));
-            if self.preview.markdown.diag_deco_key != diag_key {
+            if self.preview.markdown.diag_deco_key != diag_key
+                && let Some(parsed) = self.preview.markdown.parsed.clone()
+            {
                 let color = self.palette.error.alpha(0.7);
                 let mut built = Vec::new();
                 for (idx, (range, url)) in parsed.links_with_ranges().into_iter().enumerate() {
@@ -642,11 +647,11 @@ impl App {
         let Some(rope) = doc.text().rope() else {
             return false;
         };
-        // 优先尝试块级局部增量重解析：即便整篇文档很长（全文解析耗时超过 `INLINE_PARSE`），
-        // 常规输入仍可在微秒级同步完成，避免退入滞后的异步解析双态路径。
-        if let (Some(prev), Some(prev_rev)) = (md.parsed.as_deref(), md.checked)
+        // 优先尝试就地块级局部增量重解析：直接复用未改动的全部顶层块（零深拷贝），
+        // 即便整篇文档很长（全文解析耗时超过 `INLINE_PARSE`），常规输入仍可在微秒级同步完成。
+        if let (Some(prev_arc), Some(prev_rev)) = (md.parsed.as_mut(), md.checked)
             && let Some((old_edit, new_edit)) = doc.byte_edit_since(prev_rev)
-            && let Some(parsed) = prev.reparse_local(
+            && Arc::make_mut(prev_arc).reparse_local_in_place(
                 old_edit,
                 new_edit,
                 rope.len_bytes(),
@@ -654,9 +659,9 @@ impl App {
                 |r| rope.byte_slice(r).to_string(),
             )
         {
+            md.parse_serial = md.parse_serial.wrapping_add(1);
             md.pending = None;
             md.checked = Some(revision);
-            md.parsed = Some(Arc::new(parsed));
             return true;
         }
         if md.cost.is_none_or(|c| c > INLINE_PARSE) {
@@ -668,6 +673,7 @@ impl App {
         md.pending = None;
         md.checked = Some(revision);
         md.parsed = Some(Arc::new(parsed));
+        md.parse_serial = md.parse_serial.wrapping_add(1);
         true
     }
 
@@ -687,6 +693,7 @@ impl App {
                     md.pending = None;
                     md.checked = Some(revision);
                     md.parsed = Some(Arc::new(parsed));
+                    md.parse_serial = md.parse_serial.wrapping_add(1);
                 }
                 Done::Converted(id, revision, result) => {
                     if md.doc != Some(id) || md.pending != Some(revision) {
@@ -715,10 +722,12 @@ impl App {
                             md.images.replace_embedded(embedded);
                             md.failed = None;
                             md.parsed = Some(Arc::new(parsed));
+                            md.parse_serial = md.parse_serial.wrapping_add(1);
                         }
                         Err(reason) => {
                             md.failed = Some(reason);
                             md.parsed = None;
+                            md.parse_serial = md.parse_serial.wrapping_add(1);
                         }
                     }
                 }

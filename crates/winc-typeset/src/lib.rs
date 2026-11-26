@@ -44,6 +44,7 @@ mod diagram;
 mod inline;
 mod math;
 mod memo;
+mod patch;
 mod properties;
 mod raw;
 mod table;
@@ -162,6 +163,97 @@ impl Item {
                 *source = shift(*source);
             }
             _ => {}
+        }
+    }
+
+    /// 原位平移该绘制项的纵坐标 `dy`、字符序号 `dc` 与原文偏移 `ds`（用于超大块局部原位修补）。
+    pub(crate) fn shift_in_place(&mut self, dy: f32, dc: isize, ds: isize, shift_check: bool) {
+        let shift_src = |s: u32| u32::try_from((s as isize + ds).max(0)).unwrap_or(u32::MAX);
+        match self {
+            Item::Text { baseline, span, .. } => {
+                *baseline += dy;
+                if let Some(span) = span {
+                    if dc != 0 {
+                        span.start = (span.start as isize + dc).max(0) as usize;
+                    }
+                    if ds != 0
+                        && let Some(source) = &mut span.source
+                    {
+                        *source = shift_src(*source);
+                    }
+                }
+            }
+            Item::Fill { rect, .. }
+            | Item::Corners { rect, .. }
+            | Item::Link { rect, .. }
+            | Item::Code { rect, .. }
+            | Item::Table { rect, .. } => {
+                rect.y += dy;
+            }
+            Item::Image { rect, at, .. } => {
+                rect.y += dy;
+                if let Some((c, s)) = at {
+                    if dc != 0 {
+                        *c = (*c as isize + dc).max(0) as usize;
+                    }
+                    if ds != 0 {
+                        *s = shift_src(*s);
+                    }
+                }
+            }
+            Item::Spot { rect, at: (c, s) } => {
+                rect.y += dy;
+                if dc != 0 {
+                    *c = (*c as isize + dc).max(0) as usize;
+                }
+                if ds != 0 {
+                    *s = shift_src(*s);
+                }
+            }
+            Item::Check { rect, source, .. } => {
+                rect.y += dy;
+                if shift_check && ds != 0 {
+                    *source = shift_src(*source);
+                }
+            }
+            Item::Path { rect, strokes, .. } => {
+                rect.y += dy;
+                if dy != 0.0 {
+                    *strokes = strokes.iter().map(|&s| shift(s, 0.0, dy)).collect();
+                }
+            }
+            Item::Polygon { rect, points, .. } => {
+                rect.y += dy;
+                if dy != 0.0 {
+                    *points = points.iter().map(|&(x, y)| (x, y + dy)).collect();
+                }
+            }
+        }
+    }
+
+    /// 原位平移该绘制项的横坐标 `dx`（用于长表格单列变宽时平移右侧各列）。
+    pub(crate) fn shift_x(&mut self, dx: f32) {
+        if dx == 0.0 {
+            return;
+        }
+        match self {
+            Item::Text { x, .. } => *x += dx,
+            Item::Fill { rect, .. }
+            | Item::Corners { rect, .. }
+            | Item::Image { rect, .. }
+            | Item::Link { rect, .. }
+            | Item::Spot { rect, .. }
+            | Item::Check { rect, .. }
+            | Item::Code { rect, .. }
+            | Item::Table { rect, .. } => rect.x += dx,
+            Item::Path { rect, strokes, .. } => {
+                rect.x += dx;
+                *strokes = strokes.iter().map(|&s| shift(s, dx, 0.0)).collect();
+            }
+            Item::Polygon { rect, points, .. } => {
+                rect.x += dx;
+                *points = points.iter().map(|&(x, y)| (x + dx, y)).collect();
+            }
         }
     }
 
@@ -1019,17 +1111,10 @@ impl Cx<'_, '_> {
             }
             Block::Quote(alert, blocks) => self.quote(*alert, blocks, x, y, width, env, out),
             Block::List(start, items) => self.list(*start, items, x, y, width, env, out),
-            Block::Table(aligns, rows, head) => self.table(
-                aligns,
-                rows,
-                *head,
-                x,
-                y,
-                width,
-                env,
-                &mut out.items,
-                &mut out.scrolls,
-            ),
+            Block::Table(aligns, rows, head) => {
+                let record = env.depth == 0 && x == 0.0 && y == 0.0;
+                self.table(aligns, rows, *head, x, y, width, env, record, out)
+            }
             Block::Math(tex, source) => self.math_block(tex, *source, x, y, width, env, out),
             Block::Rule(at) => {
                 let h = rule_height(base);
@@ -1181,12 +1266,28 @@ impl Cx<'_, '_> {
             depth: env.depth + 1,
             ..env
         };
+        let record = env.depth == 0
+            && x == 0.0
+            && y == 0.0
+            && items.len() >= patch::HUGE_LIST_ITEMS
+            && out.items.is_empty();
+        let mut entries = if record {
+            Vec::with_capacity(items.len())
+        } else {
+            Vec::new()
+        };
+        let mut live_item = None;
         let mut top = y;
         let mut first_baseline = None;
         for (i, item) in items.iter().enumerate() {
             if i > 0 {
                 top += base * LIST_GAP;
             }
+            let item_top = top;
+            let item_start = out.items.len() as u32;
+            let tb_start = self.text.len();
+            let ch_start = self.chars;
+            let was_done = self.raw.as_ref().is_some_and(|r| r.done);
             // 记号之后没有空格的空项：记号按文字排在列表的左边缘，不画圆点和序号。
             let (item_x, item_room) = if item.bare {
                 (x, width)
@@ -1194,6 +1295,10 @@ impl Cx<'_, '_> {
                 (content_x, room)
             };
             let flow = self.blocks(&item.blocks, item_x, top, item_room, inner, out);
+            let now_done = self.raw.as_ref().is_some_and(|r| r.done);
+            if !was_done && now_done {
+                live_item = Some(i);
+            }
             first_baseline = first_baseline.or(flow.first_baseline);
             let baseline = flow.first_baseline;
             match (item.task, start) {
@@ -1220,11 +1325,46 @@ impl Cx<'_, '_> {
                 (None, None) => self.bullet(content_x, top, baseline, env, &mut out.items),
             }
             // 空的一项也占一行。
-            top += flow.height.max(if item.blocks.is_empty() {
+            let item_h = flow.height.max(if item.blocks.is_empty() {
                 (base * BODY_LINE).round()
             } else {
                 0.0
             });
+            top += item_h;
+            if record {
+                let fallback_src = entries
+                    .last()
+                    .map_or(0, |e: &patch::ListEntry| e.source_start);
+                entries.push(patch::ListEntry {
+                    items: item_start..out.items.len() as u32,
+                    text_bytes: tb_start..self.text.len(),
+                    chars: ch_start..self.chars,
+                    top: item_top,
+                    height: item_h,
+                    source_start: patch::first_block_source(&item.blocks).unwrap_or(fallback_src),
+                    content_hash: patch::list_item_content_hash(item),
+                });
+            }
+        }
+        if record
+            && out.anchors.is_empty()
+            && out.scrolls.is_empty()
+            && out.editing_blank_height == 0.0
+        {
+            let live_delta = self
+                .raw
+                .as_ref()
+                .filter(|r| r.done)
+                .map_or(0, |r| r.leaf.end as isize - r.parsed_end as isize);
+            out.patch = Some(Box::new(patch::PatchIndex::List(patch::ListPatch {
+                start,
+                width,
+                base,
+                color: env.color,
+                live_item,
+                live_delta,
+                entries,
+            })));
         }
         Flow {
             height: top - y,
@@ -1367,6 +1507,8 @@ pub struct Out {
     pub scrolls: Vec<Scroller>,
     /// 显示原文的块中渲染结果的第一项和上边缘（相对块的左上角）。
     pub preview: Option<(u32, f32)>,
+    /// 超大单块的原位修补索引（小块为 `None`）。
+    pub(crate) patch: Option<Box<patch::PatchIndex>>,
 }
 
 /// Vertical rhythm shared by prose, editable blank lines and empty lists.

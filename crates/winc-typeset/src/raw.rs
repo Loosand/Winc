@@ -57,7 +57,7 @@ impl Cx<'_, '_> {
     ///
     /// 按现在的原文切分（见 `winc_preview::markdown::cells`）；光标在表头下面那一行上、原文的
     /// 行数或列数与解析结果对不上（加了一行、一列还没解析）时为 `None`，整张表显示原文。
-    pub(super) fn live_cell(&self, rows: &[Vec<Inline>]) -> Option<LiveCell> {
+    pub(crate) fn live_cell(&self, rows: &[Vec<Inline>]) -> Option<LiveCell> {
         use winc_preview::markdown::cells;
         let raw = self.raw.as_ref()?;
         let text = raw.block.get(raw.leaf.clone())?;
@@ -101,7 +101,23 @@ impl Cx<'_, '_> {
         env: Env,
         out: &mut Out,
     ) -> Flow {
-        let flow = self.raw(x, y, width, &mut out.items);
+        let can_patch = env.depth == 0
+            && x == 0.0
+            && y == 0.0
+            && out.items.is_empty()
+            && self
+                .raw
+                .as_ref()
+                .is_some_and(|r| matches!(&r.kind, RawKind::Fenced(lang) if !matches!(&**lang, "mermaid" | "latex")));
+        let flow = if can_patch {
+            if let Some(RawKind::Fenced(lang)) = self.raw.as_ref().map(|r| r.kind.clone()) {
+                self.raw_box_into(&lang, x, y, width, true, out)
+            } else {
+                self.raw(x, y, width, &mut out.items)
+            }
+        } else {
+            self.raw(x, y, width, &mut out.items)
+        };
         let boxed = self
             .raw
             .as_ref()
@@ -275,6 +291,24 @@ impl Cx<'_, '_> {
         width: f32,
         out: &mut Vec<Item>,
     ) -> Flow {
+        let mut tmp = Out {
+            items: std::mem::take(out),
+            ..Out::default()
+        };
+        let flow = self.raw_box_into(lang, x, y, width, false, &mut tmp);
+        *out = tmp.items;
+        flow
+    }
+
+    pub(super) fn raw_box_into(
+        &mut self,
+        lang: &str,
+        x: f32,
+        y: f32,
+        width: f32,
+        record_patch: bool,
+        out: &mut Out,
+    ) -> Flow {
         let Some(raw) = &self.raw else {
             return Flow {
                 height: 0.0,
@@ -299,18 +333,53 @@ impl Cx<'_, '_> {
         let language = winc_syntax::find(lang);
         let markdown = winc_syntax::find("markdown");
         let mut state = winc_syntax::LineState::default();
-        let bg_at = out.len();
+        let bg_at = out.items.len();
+        // 先占位底色矩形，避免排完数万行后 `Vec::insert(0, ...)` 整体搬移所有项。
+        out.items.push(Item::Fill {
+            rect: Rect::new(x, y, width, 0.0),
+            color: self.colors.code_block,
+            radius: 6.0,
+        });
         let (mut top, mut first_baseline) = (y + pad, None);
         let mut start = leaf.start;
         let count = text.split('\n').count();
+        let record = record_patch
+            && fenced
+            && !matches!(lang, "mermaid" | "latex")
+            && count >= patch::HUGE_CODE_LINES
+            && blanks.is_empty();
+        let mut line_spans = if record {
+            Vec::with_capacity(count)
+        } else {
+            Vec::new()
+        };
         let caret = raw.caret;
         for (i, line) in text.split('\n').enumerate() {
             let source = u32::try_from(start).unwrap_or(0);
+            let source_end = u32::try_from(start + line.len()).unwrap_or(0);
             let here = (start..=start + line.len()).contains(&caret);
             start += line.len() + 1;
             // 第一行，以及（行数不少于两行且确为围栏时）最后一行是围栏，按 Markdown 着色。
             let fence = fenced && count > 1 && (i == 0 || (i + 1 == count && is_fence(line)));
+            let line_top = top;
+            let item_start = out.items.len() as u32;
+            let tb_start = self.text.len();
+            let ch_start = self.chars;
             if fence && !here {
+                if record {
+                    line_spans.push(patch::CodeLineSpan {
+                        items: item_start..item_start,
+                        text_bytes: tb_start..tb_start,
+                        chars: ch_start..ch_start,
+                        source_start: source,
+                        source_end,
+                        top: line_top,
+                        height: 0.0,
+                        end_state: state,
+                        fence,
+                        shown: false,
+                    });
+                }
                 continue;
             }
             let piece = if fence {
@@ -320,43 +389,67 @@ impl Cx<'_, '_> {
                 self.code_piece(line, source, lang, language, &mut state, row)
             };
             first_baseline.get_or_insert(top + piece.first_baseline.unwrap_or(0.0));
-            let at = out.len();
-            self.paste(&piece, x + pad, top, source, out);
+            let at = out.items.len();
+            self.paste(&piece, x + pad, top, source, &mut out.items);
             if fence {
                 // 围栏只是标记，以较淡的颜色绘制。
                 let muted = self.colors.muted;
-                for item in &mut out[at..] {
+                for item in &mut out.items[at..] {
                     if let Item::Text { color, .. } = item {
                         *color = muted;
                     }
                 }
             }
             top += piece.height;
+            if record {
+                line_spans.push(patch::CodeLineSpan {
+                    items: item_start..out.items.len() as u32,
+                    text_bytes: tb_start..self.text.len(),
+                    chars: ch_start..self.chars,
+                    source_start: source,
+                    source_end,
+                    top: line_top,
+                    height: piece.height,
+                    end_state: state,
+                    fence,
+                    shown: true,
+                });
+            }
         }
         let height = top + pad - y;
         let rect = Rect::new(x, y, width, height);
-        out.insert(
-            bg_at,
-            Item::Fill {
-                rect,
-                color: self.colors.code_block,
-                radius: 6.0,
-            },
-        );
-        // 代码块在编辑时同样显示复制按钮，复制围栏之间的代码。
+        out.items[bg_at] = Item::Fill {
+            rect,
+            color: self.colors.code_block,
+            radius: 6.0,
+        };
+        // 代码块在编辑时同样显示复制按钮，复制围栏之间的代码（直接按字节切片，避免拷贝整块行表）。
+        let mut code_item = None;
         if fenced && !matches!(lang, "mermaid" | "latex") {
-            let lines: Vec<&str> = text.split('\n').collect();
-            let close = usize::from(lines.len() > 1 && lines.last().is_some_and(|l| is_fence(l)));
-            let code = lines[1.min(lines.len())..lines.len() - close].join("\n");
-            out.push(Item::Code {
+            let body = patch::fenced_body(text);
+            code_item = Some(out.items.len() as u32);
+            out.items.push(Item::Code {
                 rect,
-                text: code.into(),
+                text: body.into(),
                 diagram: false,
             });
         }
+        if record {
+            out.patch = Some(Box::new(patch::PatchIndex::CodeBox(patch::CodeBoxPatch {
+                lang: lang.into(),
+                width,
+                pad,
+                row,
+                bg_item: bg_at as u32,
+                code_item,
+                lines: line_spans,
+                raw_len: text.len(),
+                leaf_start: leaf.start,
+            })));
+        }
         let mut blank_out = Out::default();
         let extra = self.blank_lines(&blanks, x, y + height, width, &mut blank_out);
-        out.append(&mut blank_out.items);
+        out.items.append(&mut blank_out.items);
         Flow {
             height: height + extra,
             first_baseline,

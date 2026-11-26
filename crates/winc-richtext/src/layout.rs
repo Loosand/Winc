@@ -145,8 +145,12 @@ impl BlankGap {
             let cols = rope
                 .filter(|r| start <= next && next <= r.len_bytes())
                 .map_or(0, |r| {
-                    let s = r.byte_slice(start..next).to_string();
-                    s.trim_end_matches(['\r', '\n']).len()
+                    let slice = r.byte_slice(start..next);
+                    let mut len = slice.len_bytes();
+                    while len > 0 && matches!(slice.byte(len - 1), b'\r' | b'\n') {
+                        len -= 1;
+                    }
+                    len
                 });
             row_cols.push(cols);
         }
@@ -199,9 +203,9 @@ pub const NEAR_BLOCKS: usize = 32;
 
 impl Near {
     /// 按本范围保留的排版结果是否够 `wanted` 使用：`wanted` 的各块都在其中，视口（高 `view`）
-    /// 前后各有半屏以上。
+    /// 前后各留有一定余量。
     pub fn covers(&self, wanted: &Near, view: f32) -> bool {
-        let rows = (wanted.rows.0 + view * 1.5, wanted.rows.1 - view * 1.5);
+        let rows = (wanted.rows.0 + view * 0.75, wanted.rows.1 - view * 0.75);
         let inside = |want: &std::ops::Range<usize>| {
             (self.blocks.iter()).any(|kept| kept.start <= want.start && want.end <= kept.end)
         };
@@ -212,6 +216,20 @@ impl Near {
     fn holds(&self, i: usize, top: f32, height: f32) -> bool {
         (top < self.rows.1 && top + height > self.rows.0)
             || self.blocks.iter().any(|blocks| blocks.contains(&i))
+    }
+}
+
+/// 判断块或其子块中是否包含带展开/收起状态的块（`<details>` 折叠块或可能折叠的 Mermaid 图）。
+fn block_has_toggle(block: &winc_preview::markdown::Block) -> bool {
+    use winc_preview::markdown::Block;
+    match block {
+        Block::Details { .. } => true,
+        Block::Code { lang, .. } => lang == "mermaid",
+        Block::Quote(_, inner) | Block::Footnote(_, inner) => inner.iter().any(block_has_toggle),
+        Block::List(_, items) => items
+            .iter()
+            .any(|item| item.blocks.iter().any(block_has_toggle)),
+        _ => false,
     }
 }
 
@@ -538,8 +556,9 @@ impl Laid {
         let mut stale = Vec::new();
         let near = near.filter(|_| parsed.blocks.len() > SHED_BLOCKS);
         let mut fresh = 0usize;
-        // 内容相同的块从第二个起使用不同的键，并带上序号，各自记录开合状态。
+        // 仅含 `<details>` 的块按重复序号区分开合状态，避免对无折叠块的长文档构造整表 HashMap。
         let mut repeats: HashMap<u64, u32> = HashMap::new();
+        let live_key_for_hash = live.map(|l| l.key(input.preedit));
         for (i, (block, &hash)) in parsed.blocks.iter().zip(&parsed.hashes).enumerate() {
             let (block, hash) = if let (0, Some(panel)) = (i, &properties) {
                 (
@@ -549,7 +568,11 @@ impl Laid {
             } else {
                 (block, hash)
             };
-            let repeat = *repeats.entry(hash).and_modify(|n| *n += 1).or_insert(0);
+            let repeat = if block_has_toggle(block) {
+                *repeats.entry(hash).and_modify(|n| *n += 1).or_insert(0)
+            } else {
+                0
+            };
             let hash = match repeat {
                 0 => hash,
                 n => winc_typeset::memo_key(|h| std::hash::Hash::hash(&(hash, n), h)),
@@ -559,13 +582,13 @@ impl Laid {
             let raw = raw
                 .as_ref()
                 .filter(|r| !mapped && r.0 == i && !(i == 0 && properties.is_some()));
-            // 显示原文的块换一个键存：光标离开后同样内容的块要重新按排版显示。
-            let hash = match raw {
-                Some((_, raw)) => winc_typeset::memo_key(|h| {
+            // 显示原文的块用 O(1) 的 `live_key` 区分缓存键，避免对超大块原文做全量哈希。
+            let hash = match (raw, &live_key_for_hash) {
+                (Some(_), Some(lk)) => winc_typeset::memo_key(|h| {
                     use std::hash::Hash;
-                    (hash, raw).hash(h);
+                    (hash, lk).hash(h);
                 }),
-                None => hash,
+                _ => hash,
             };
             let kept = later.as_ref().and_then(|later| {
                 let (old, block) = later.old.get(i)?;
@@ -845,6 +868,476 @@ impl Laid {
             && self.source == source
             && self.live.as_ref() == live
             && self.widgets_hash == widgets_hash
+    }
+
+    /// 收集 `near` 覆盖到的所有顶层块索引区间（按 `tops` 二分，O(log N)）。
+    fn near_ranges(&self, near: &Near) -> Vec<std::ops::Range<usize>> {
+        let len = self.blocks.len();
+        let mut ranges = Vec::with_capacity(1 + near.blocks.len());
+        let vis = self.blocks_in(near.rows.0, near.rows.1);
+        if vis.start < vis.end {
+            ranges.push(vis.start.min(len)..vis.end.min(len));
+        }
+        for r in &near.blocks {
+            let s = r.start.min(len);
+            let e = r.end.min(len);
+            if s < e {
+                ranges.push(s..e);
+            }
+        }
+        ranges
+    }
+
+    /// 纯滚动或跳转跨出 [`Near`] 缓冲范围时的就地刷新：只释放离开范围的块、只重排新进入且已释放的块，
+    /// 避免重建整篇文档的块表、哈希表与空行表。
+    pub fn refresh_near(
+        &mut self,
+        input: LayoutInput<'_>,
+        frame: &mut Frame<'_>,
+        parsed: &winc_preview::markdown::Markdown,
+        live: Option<&LiveLeaf>,
+        near: Near,
+    ) -> Vec<(PathBuf, String)> {
+        if self.blocks.len() <= SHED_BLOCKS || self.blocks.len() != parsed.blocks.len() {
+            return Vec::new();
+        }
+        let old_ranges = self
+            .near
+            .as_ref()
+            .map(|n| self.near_ranges(n))
+            .unwrap_or_default();
+        let new_ranges = self.near_ranges(&near);
+        let live_block = live.map(|l| l.block);
+
+        // 1. 释放已离开新 `near` 范围的旧块。
+        for range in old_ranges {
+            for i in range {
+                if live_block == Some(i) {
+                    continue;
+                }
+                if !near.holds(i, self.tops[i], self.blocks[i].1.height)
+                    && !self.blocks[i].1.is_shed()
+                {
+                    let shed = self.blocks[i].1.shed();
+                    self.blocks[i].1 = Arc::new(shed);
+                }
+            }
+        }
+
+        // 2. 仅对新 `near` 范围内已释放的块执行局部排版。
+        let needs_layout = new_ranges
+            .iter()
+            .any(|r| self.blocks[r.clone()].iter().any(|(_, b)| b.is_shed()));
+        let mut wanted = Vec::new();
+        if needs_layout {
+            let key = self.key;
+            input.memo.prepare(winc_typeset::memo_key(|h| {
+                use std::hash::Hash;
+                for v in [key.width, key.base, key.tall] {
+                    v.to_bits().hash(h);
+                }
+                for c in [key.text, key.background] {
+                    [c.r, c.g, c.b, c.a].map(f32::to_bits).hash(h);
+                }
+                key.images.hash(h);
+                key.numbers.hash(h);
+            }));
+            let properties = input.properties;
+            let raw = live.and_then(|live| {
+                let rope = input.rope?;
+                let snap = |b: usize| rope.char_to_byte(rope.byte_to_char(b.min(rope.len_bytes())));
+                let (start, end) = (snap(live.range.start), snap(live.range.end));
+                let text: Arc<str> = rope.byte_slice(start..end).to_string().into();
+                let leaf = snap(live.leaf.start).saturating_sub(start)
+                    ..snap(live.leaf.end).saturating_sub(start);
+                let caret = snap(live.at).saturating_sub(start);
+                let preedit = ((live.prose || live.table) && !input.preedit.is_empty())
+                    .then(|| Arc::from(input.preedit));
+                let parsed_end = live.parsed_end.saturating_sub(start);
+                Some((
+                    live.block,
+                    Raw::new(text, leaf, parsed_end, caret, live.prose, preedit),
+                ))
+            });
+            let mut cx = Cx {
+                frame,
+                base: key.base,
+                token: input.token,
+                surface: input.surface,
+                accent: input.accent,
+                colors: input.colors,
+                dark: input.dark,
+                images: input.images,
+                image_path: input.image_path,
+                missing_image: None,
+                wanted: Vec::new(),
+                memo: input.memo,
+                toggled: input.toggled,
+                text: String::new(),
+                chars: 0,
+                raw: None,
+                cell: None,
+                preedit: false,
+                line_numbers: key.numbers,
+                tall: key.tall,
+                repeat: 0,
+                toggles: HashMap::new(),
+            };
+            let env = Env {
+                color: cx.colors.text,
+                depth: 0,
+            };
+            for range in &new_ranges {
+                for i in range.clone() {
+                    if !self.blocks[i].1.is_shed() {
+                        continue;
+                    }
+                    let block = if let (0, Some(panel)) = (i, &properties) {
+                        panel
+                    } else {
+                        &parsed.blocks[i]
+                    };
+                    cx.repeat = if block_has_toggle(block) {
+                        let h = parsed.hashes[i];
+                        parsed.hashes[..i].iter().filter(|&&x| x == h).count() as u32
+                    } else {
+                        0
+                    };
+                    cx.toggles.clear();
+                    let raw_i = raw
+                        .as_ref()
+                        .filter(|r| r.0 == i && !(i == 0 && properties.is_some()))
+                        .map(|(_, r)| r);
+                    let laid = cx.layout_block(block, key.width, env, raw_i);
+                    self.blocks[i].1 = Arc::new(laid);
+                }
+            }
+            wanted = std::mem::take(&mut cx.wanted);
+            // 只遍历新 `near` 范围内的活跃块清理缓存，不扫描全篇 3 万块。
+            cx.memo.keep_only(
+                new_ranges
+                    .iter()
+                    .flat_map(|r| self.blocks[r.clone()].iter().map(|(_, b)| &*b.memo)),
+            );
+        } else {
+            input.memo.keep_only(
+                new_ranges
+                    .iter()
+                    .flat_map(|r| self.blocks[r.clone()].iter().map(|(_, b)| &*b.memo)),
+            );
+        }
+
+        self.near = Some(near);
+        self.caret.set(None);
+        wanted
+    }
+
+    /// 块数未变的常规单块实时输入快路径：仅重排改动的 1–2 个顶层块，就地平移后续块的 `tops`、
+    /// `starts` 与 `gaps`，跳过全篇哈希表构建与空行表重建。不满足快路径前提时返回 `None` 交由
+    /// [`Laid::build`] 完整重建。
+    pub fn patch_edited(
+        &mut self,
+        input: LayoutInput<'_>,
+        frame: &mut Frame<'_>,
+        parsed: &winc_preview::markdown::Markdown,
+        source: usize,
+        live: Option<&LiveLeaf>,
+        near: Near,
+    ) -> Option<Vec<(PathBuf, String)>> {
+        let n = self.blocks.len();
+        if n == 0
+            || n != parsed.blocks.len()
+            || self.pending()
+            || self.widgets_hash != 0
+            || input
+                .decorations
+                .map_or(0, DecorationSet::block_widget_fingerprint)
+                != 0
+            || input.properties.is_some()
+            || parsed.blank_rows.before_len() != n
+            || parsed.blank_rows.offsets().len() != self.blank_offsets.len()
+        {
+            return None;
+        }
+        // 若光标落在空行上或任意已有块处于尾空行编辑态，回退完整排版以保持空行高度完全一致。
+        if live.is_some_and(|l| l.blank) {
+            return None;
+        }
+        let checked = input.editable && input.checked;
+        let blank = &parsed.blank_rows;
+        let blank_before = |i: usize, offsets: std::ops::Range<usize>| {
+            (checked && !offsets.is_empty() && parsed.collapsed_separator_before(i).is_none())
+                .then_some(offsets)
+        };
+        let after = blank.after();
+        let blank_after = checked && after.len() > 2;
+        if live.is_some_and(|live| {
+            [
+                blank_before(live.block, blank.before(live.block)),
+                blank_before(live.block + 1, blank.before(live.block + 1)),
+                blank_after.then(|| after.clone()),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|r| (blank.offsets()[r.start]..blank.offsets()[r.end - 1]).contains(&live.at))
+        }) {
+            return None;
+        }
+
+        // 找出所有需要重排的顶层块：旧光标块、新光标块，以及内容哈希发生变化的块。
+        let old_live_block = self.live.as_ref().map(|k| k.0).filter(|&i| i < n);
+        let new_live_block = live.map(|l| l.block).filter(|&i| i < n);
+        let mut dirty: Vec<usize> = Vec::with_capacity(4);
+        if let Some(b) = old_live_block {
+            dirty.push(b);
+        }
+        if let Some(b) = new_live_block
+            && !dirty.contains(&b)
+        {
+            dirty.push(b);
+        }
+        for i in 0..n {
+            if self.blocks[i].0 != parsed.hashes[i] && !dirty.contains(&i) {
+                dirty.push(i);
+                if dirty.len() > 4 {
+                    return None;
+                }
+            }
+        }
+        if dirty.is_empty() {
+            return None;
+        }
+        dirty.sort_unstable();
+        for &i in &dirty {
+            if block_has_toggle(&parsed.blocks[i]) || self.blocks[i].1.editing_blank_height() > 0.0
+            {
+                return None;
+            }
+        }
+        // 检查空行表索引区间是否未变（保证现有 `self.gaps` 可直接就地平移纵坐标）。
+        for gap in &self.gaps {
+            let expected = match gap.before_block {
+                Some(b) => blank.before(b),
+                None => blank.after(),
+            };
+            if gap.offsets != expected {
+                return None;
+            }
+        }
+
+        let key = self.key;
+        let live_key = live.map(|l| l.key(input.preedit));
+        let raw = live.and_then(|live| {
+            let rope = input.rope?;
+            let snap = |b: usize| rope.char_to_byte(rope.byte_to_char(b.min(rope.len_bytes())));
+            let (start, end) = (snap(live.range.start), snap(live.range.end));
+            let text: Arc<str> = rope.byte_slice(start..end).to_string().into();
+            let leaf = snap(live.leaf.start).saturating_sub(start)
+                ..snap(live.leaf.end).saturating_sub(start);
+            let caret = snap(live.at).saturating_sub(start);
+            let preedit = ((live.prose || live.table) && !input.preedit.is_empty())
+                .then(|| Arc::from(input.preedit));
+            let parsed_end = live.parsed_end.saturating_sub(start);
+            Some((
+                live.block,
+                Raw::new(text, leaf, parsed_end, caret, live.prose, preedit),
+            ))
+        });
+
+        input.memo.prepare(winc_typeset::memo_key(|h| {
+            use std::hash::Hash;
+            for v in [key.width, key.base, key.tall] {
+                v.to_bits().hash(h);
+            }
+            for c in [key.text, key.background] {
+                [c.r, c.g, c.b, c.a].map(f32::to_bits).hash(h);
+            }
+            key.images.hash(h);
+            key.numbers.hash(h);
+        }));
+
+        let mut new_blocks: Vec<(usize, u64, LaidBlock)> = Vec::with_capacity(dirty.len());
+        let mut patched_in_place: Option<(usize, f32, isize)> = None;
+        let same_parsed = self.source == source;
+        let wanted = {
+            let mut cx = Cx {
+                frame,
+                base: key.base,
+                token: input.token,
+                surface: input.surface,
+                accent: input.accent,
+                colors: input.colors,
+                dark: input.dark,
+                images: input.images,
+                image_path: input.image_path,
+                missing_image: None,
+                wanted: Vec::new(),
+                memo: input.memo,
+                toggled: input.toggled,
+                text: String::new(),
+                chars: 0,
+                raw: None,
+                cell: None,
+                preedit: false,
+                line_numbers: key.numbers,
+                tall: key.tall,
+                repeat: 0,
+                toggles: HashMap::new(),
+            };
+            let env = Env {
+                color: cx.colors.text,
+                depth: 0,
+            };
+            // 超大单块（长代码/长列表/长表格）原位修补快路径：若当前独占该块且仅改动单个子项，
+            // 直接原位修补 `LaidBlock`，跳过整块数万项的重建与空间索引排序。
+            if dirty.len() == 1 {
+                let i = dirty[0];
+                let block = &parsed.blocks[i];
+                let base_hash = parsed.hashes[i];
+                let raw_i = raw.as_ref().filter(|r| r.0 == i).map(|(_, r)| r);
+                if raw_i.is_some()
+                    && let Some(laid_mut) = Arc::get_mut(&mut self.blocks[i].1)
+                {
+                    let old_h = laid_mut.height;
+                    let old_chars = laid_mut.chars;
+                    cx.repeat = 0;
+                    cx.toggles.clear();
+                    if cx.patch_block(laid_mut, block, same_parsed, key.width, env, raw_i) {
+                        let hash = match &live_key {
+                            Some(lk) => winc_typeset::memo_key(|h| {
+                                use std::hash::Hash;
+                                (base_hash, lk).hash(h);
+                            }),
+                            None => base_hash,
+                        };
+                        let dy = laid_mut.height - old_h;
+                        let dc = laid_mut.chars as isize - old_chars as isize;
+                        self.blocks[i].0 = hash;
+                        patched_in_place = Some((i, dy, dc));
+                    }
+                }
+            }
+            if patched_in_place.is_none() {
+                for &i in &dirty {
+                    let block = &parsed.blocks[i];
+                    let base_hash = parsed.hashes[i];
+                    let raw_i = raw.as_ref().filter(|r| r.0 == i).map(|(_, r)| r);
+                    let hash = match (raw_i, &live_key) {
+                        (Some(_), Some(lk)) => winc_typeset::memo_key(|h| {
+                            use std::hash::Hash;
+                            (base_hash, lk).hash(h);
+                        }),
+                        _ => base_hash,
+                    };
+                    cx.repeat = 0;
+                    cx.toggles.clear();
+                    let laid = cx.layout_block(block, key.width, env, raw_i);
+                    // 若编辑产生额外空行高度（如段尾按回车），交给完整 `Laid::build` 精确处理块间距。
+                    if laid.editing_blank_height() > 0.0 {
+                        return None;
+                    }
+                    new_blocks.push((i, hash, laid));
+                }
+            }
+            std::mem::take(&mut cx.wanted)
+        };
+
+        if let Some((i, dy, dc)) = patched_in_place {
+            if dy.abs() > 0.0 {
+                for top in &mut self.tops[i + 1..] {
+                    *top += dy;
+                }
+                self.height += dy;
+                for gap in &mut self.gaps {
+                    if gap.before_block.is_none_or(|b| b > i) {
+                        gap.top += dy;
+                    }
+                }
+            }
+            if dc != 0 {
+                for s in &mut self.starts[i + 1..] {
+                    *s = usize::try_from(*s as isize + dc).unwrap_or(0);
+                }
+                self.chars = usize::try_from(self.chars as isize + dc).unwrap_or(0);
+            }
+        }
+
+        // 就地替换改动的块并按高度差与字符数差平移后续块。
+        for (i, hash, new_block) in new_blocks {
+            let old_h = self.blocks[i].1.height;
+            let old_chars = self.blocks[i].1.chars;
+            let dy = new_block.height - old_h;
+            let dc = new_block.chars as isize - old_chars as isize;
+            let far = self
+                .near
+                .as_ref()
+                .is_some_and(|kept| !kept.holds(i, self.tops[i], new_block.height));
+            let is_live = new_live_block == Some(i);
+            let stored = if far && !is_live {
+                Arc::new(new_block.shed())
+            } else {
+                Arc::new(new_block)
+            };
+            self.blocks[i] = (hash, stored);
+            if dy.abs() > 0.0 {
+                for top in &mut self.tops[i + 1..] {
+                    *top += dy;
+                }
+                self.height += dy;
+                for gap in &mut self.gaps {
+                    if gap.before_block.is_none_or(|b| b > i) {
+                        gap.top += dy;
+                    }
+                }
+            }
+            if dc != 0 {
+                for s in &mut self.starts[i + 1..] {
+                    *s = usize::try_from(*s as isize + dc).unwrap_or(0);
+                }
+                self.chars = usize::try_from(self.chars as isize + dc).unwrap_or(0);
+            }
+        }
+
+        // 就地更新原文范围、行号与空行偏移表。
+        self.ranges.clone_from(&parsed.ranges);
+        if let Some(live) = live
+            && let Some(start) = self.ranges.get(live.block).map(|r| r.start)
+        {
+            let len = input.rope.map(|r| r.len_bytes());
+            let delta = len.map_or(0, |len| len as i64 - parsed.len as i64);
+            if delta != 0 {
+                let shift = |at: usize| usize::try_from(at as i64 + delta).unwrap_or(0);
+                for range in self.ranges.iter_mut().filter(|r| r.start > start) {
+                    *range = shift(range.start)..shift(range.end);
+                }
+            }
+            self.ranges[live.block] = live.range.clone();
+        }
+        self.lines.clone_from(&parsed.lines);
+        self.blank_offsets = Arc::clone(blank.offsets());
+        self.source = source;
+        self.live = live_key;
+        self.caret.set(None);
+
+        // 清理缓存（大文档只保留活跃块对应缓存，避免长期键入导致缓存增长）。
+        if let Some(kept) = self.near.clone() {
+            let active = self.near_ranges(&kept);
+            input.memo.sweep(
+                active
+                    .iter()
+                    .flat_map(|r| self.blocks[r.clone()].iter().map(|(_, b)| &*b.memo)),
+            );
+            if !kept.covers(&near, key.tall) {
+                let extra = self.refresh_near(input, frame, parsed, live, near);
+                let mut wanted = wanted;
+                wanted.extend(extra);
+                return Some(wanted);
+            }
+        } else {
+            input.memo.sweep(self.blocks.iter().map(|(_, b)| &*b.memo));
+        }
+
+        Some(wanted)
     }
 
     /// 本次排版在块间预留出的全部块级虚拟挂件槽位。
@@ -1719,27 +2212,63 @@ impl Laid {
         }
         let block = self.block_at_source(source)?;
         let source = source - self.ranges[block].start;
+        // 超大块通过原位修补索引先查局部项窗口（O(log N)），未命中时再回退全块扫描。
+        if let Some(win) = self.blocks[block].1.source_item_window(source)
+            && let Some(point) = self.point_in_items(block, win, source, upstream)
+        {
+            return Some(point);
+        }
+        let len = self.blocks[block].1.items().len();
+        self.point_in_items(block, 0..len, source, upstream)
+    }
+
+    fn point_in_items(
+        &self,
+        block: usize,
+        items_range: std::ops::Range<usize>,
+        source: usize,
+        upstream: bool,
+    ) -> Option<Point> {
+        let top = self.tops[block];
+        let laid = &self.blocks[block].1;
+        let end = items_range.end.min(laid.items().len());
+        let start = items_range.start.min(end);
+        let spans_iter =
+            laid.items()[start..end]
+                .iter()
+                .enumerate()
+                .filter_map(move |(off, item)| match item {
+                    Item::Text {
+                        x,
+                        baseline,
+                        size,
+                        text,
+                        span: Some(span),
+                        ..
+                    } => Some((
+                        top,
+                        *x - self.shift(block, start + off).0,
+                        *baseline,
+                        *size,
+                        span,
+                        &**text,
+                    )),
+                    _ => None,
+                });
         if upstream
-            && let Some((top, x, baseline, size, span, text)) = self
-                .spans(block..block + 1)
-                .filter(|(.., span, _, _)| span.source.is_some_and(|s| (s as usize) < source))
-                .max_by_key(|(.., span, _, _)| span.source)
-                .map(|(top, _, x, baseline, size, span, _, text)| {
-                    (top, x, baseline, size, span, text)
-                })
+            && let Some((top, x, baseline, size, span, text)) = spans_iter
+                .clone()
+                .filter(|(.., span, _)| span.source.is_some_and(|s| (s as usize) < source))
+                .max_by_key(|(.., span, _)| span.source)
             && span.char_at_source(text, source) == Some(span.advances.len())
         {
             let x = x + span.advances.iter().sum::<f32>();
             let (y, h) = line_box(top + baseline, size);
             return Some((x, self.pad + y, h));
         }
-        let (top, x, baseline, size, span, text) = self
-            .spans(block..block + 1)
-            .filter(|(.., span, _, _)| span.source.is_some_and(|s| s as usize <= source))
-            .max_by_key(|(.., span, _, _)| span.source)
-            .map(|(top, _, x, baseline, size, span, _, text)| {
-                (top, x, baseline, size, span, text)
-            })?;
+        let (top, x, baseline, size, span, text) = spans_iter
+            .filter(|(.., span, _)| span.source.is_some_and(|s| s as usize <= source))
+            .max_by_key(|(.., span, _)| span.source)?;
         let k = span.char_at_source(text, source)?;
         let x = x + span.advances[..k].iter().sum::<f32>();
         let (y, h) = line_box(top + baseline, size);

@@ -85,23 +85,29 @@ fn block_may_affect_boundary(block: &Block) -> bool {
     )
 }
 
+struct LocalPlan {
+    b0: usize,
+    b1: usize,
+    main: usize,
+    old_start: usize,
+    old_end: usize,
+    byte_delta: isize,
+    line_delta: isize,
+    start_line: usize,
+    prefix_leaves: usize,
+    suffix_leaves: usize,
+    local: Markdown,
+}
+
 impl Markdown {
-    /// 尝试仅局部重解析本次单一连续编辑区间（`old_edit` -> `new_edit`），返回与全文
-    /// [`parse`] 逐字段一致的新 [`Markdown`]；若编辑可能影响跨块或全局结构则返回 `None`。
-    ///
-    /// - `old_edit`：编辑前在旧文档中的字节范围。
-    /// - `new_edit`：编辑后在新文档中的字节范围（要求 `old_edit.start == new_edit.start`）。
-    /// - `new_len`：新文档总字节数。
-    /// - `line_of_byte`：返回新文档中任意字节偏移所在的行号（从 0 起）。
-    /// - `slice`：按字节范围读取新文档切片。
-    pub fn reparse_local(
+    fn plan_local(
         &self,
         old_edit: Range<usize>,
         new_edit: Range<usize>,
         new_len: usize,
-        line_of_byte: impl Fn(usize) -> usize,
-        slice: impl Fn(Range<usize>) -> String,
-    ) -> Option<Markdown> {
+        line_of_byte: &impl Fn(usize) -> usize,
+        slice: &impl Fn(Range<usize>) -> String,
+    ) -> Option<LocalPlan> {
         if old_edit.start != new_edit.start
             || old_edit.end > self.len
             || new_edit.end > new_len
@@ -136,14 +142,11 @@ impl Markdown {
         // 向前找到与前一块之间存在空行隔离的安全起点。
         while b0 > 0 {
             let gap = self.blank_rows.before(b0);
-            if let Some(&gap_start) = gap
-                .start
-                .checked_sub(0)
-                .and_then(|s| (!gap.is_empty()).then(|| &self.blank_rows.offsets[s]))
-                && gap_start < old_edit.start
-                && gap_start >= prop_end
-            {
-                break;
+            if !gap.is_empty() {
+                let gap_start = self.blank_rows.offsets[gap.start];
+                if gap_start < old_edit.start && gap_start >= prop_end {
+                    break;
+                }
             }
             b0 -= 1;
         }
@@ -223,163 +226,281 @@ impl Markdown {
             return None;
         }
 
-        // 检查旧叶子表没有跨过窗口边界的项。
-        if self.leaves.iter().any(|l| {
-            (l.range.start < old_start && l.range.end > old_start)
-                || (l.range.start < old_end && l.range.end > old_end)
-        }) {
+        // 检查旧叶子表没有跨过窗口边界的项（用二分定位窗口周边，避免线性扫整篇文档）。
+        let prefix_leaves = self.leaves.partition_point(|l| l.range.end <= old_start);
+        if let Some(prev) = prefix_leaves
+            .checked_sub(1)
+            .and_then(|i| self.leaves.get(i))
+            && prev.range.end > old_start
+        {
+            return None;
+        }
+        if self
+            .leaves
+            .get(prefix_leaves)
+            .is_some_and(|l| l.range.start < old_start && l.range.end > old_start)
+        {
+            return None;
+        }
+        let suffix_leaves = self.leaves.partition_point(|l| l.range.start < old_end);
+        if let Some(last) = suffix_leaves
+            .checked_sub(1)
+            .and_then(|i| self.leaves.get(i))
+            && last.range.end > old_end
+        {
             return None;
         }
 
-        let local_len = local.blocks.len();
-        let new_main = main - (b1 - b0) + local_len;
-
-        // 1. 拼接 blocks 与 hashes。
-        let mut blocks = Vec::with_capacity(self.blocks.len() - (b1 - b0) + local_len);
-        blocks.extend_from_slice(&self.blocks[..b0]);
-        blocks.extend(local.blocks);
-        blocks.extend_from_slice(&self.blocks[b1..]);
-
-        let mut hashes = Vec::with_capacity(blocks.len());
-        hashes.extend_from_slice(&self.hashes[..b0]);
-        hashes.extend(local.hashes);
-        hashes.extend_from_slice(&self.hashes[b1..]);
-
-        // 2. 拼接 ranges（正文与文末脚注按相对窗口的位置分别平移）。
-        let mut ranges = Vec::with_capacity(blocks.len());
-        ranges.extend_from_slice(&self.ranges[..b0]);
-        ranges.extend(
-            local
-                .ranges
-                .iter()
-                .map(|r| (r.start + old_start)..(r.end + old_start)),
-        );
-        for range in &self.ranges[b1..main] {
-            ranges.push(shift_range(range, byte_delta));
-        }
-        for range in &self.ranges[main..] {
-            if range.start >= old_end {
-                ranges.push(shift_range(range, byte_delta));
-            } else {
-                ranges.push(range.clone());
-            }
-        }
-
-        // 3. 拼接 lines。
         let start_line = line_of_byte(old_start);
         let old_end_line = if b1 < main {
             self.lines[b1]
         } else {
-            // 文末总行数
             self.lines.last().copied().unwrap_or(0)
         };
         let new_end_line = line_of_byte(new_end);
         let line_delta = new_end_line as isize - old_end_line as isize;
-        let mut lines = Vec::with_capacity(blocks.len());
-        lines.extend_from_slice(&self.lines[..b0]);
-        lines.extend(local.lines.iter().map(|&l| start_line + l));
-        for &l in &self.lines[b1..] {
-            lines.push(usize::try_from(l as isize + line_delta).unwrap_or(0));
+
+        Some(LocalPlan {
+            b0,
+            b1,
+            main,
+            old_start,
+            old_end,
+            byte_delta,
+            line_delta,
+            start_line,
+            prefix_leaves,
+            suffix_leaves,
+            local,
+        })
+    }
+
+    /// 就地执行块级局部增量重解析：直接复用未改动的所有顶层 [`Block`]（零深拷贝），
+    /// 返回是否成功完成增量更新；无法局部更新时保持 `self` 不变并返回 `false`。
+    pub fn reparse_local_in_place(
+        &mut self,
+        old_edit: Range<usize>,
+        new_edit: Range<usize>,
+        new_len: usize,
+        line_of_byte: impl Fn(usize) -> usize,
+        slice: impl Fn(Range<usize>) -> String,
+    ) -> bool {
+        let Some(plan) = self.plan_local(old_edit, new_edit, new_len, &line_of_byte, &slice) else {
+            return false;
+        };
+        let LocalPlan {
+            b0,
+            b1,
+            main,
+            old_start,
+            old_end,
+            byte_delta,
+            line_delta,
+            start_line,
+            prefix_leaves,
+            suffix_leaves,
+            local,
+        } = plan;
+        let local_len = local.blocks.len();
+        let new_main = main - (b1 - b0) + local_len;
+
+        // 1. 就地替换 blocks 与 hashes（未改动的块零拷贝）。
+        if local_len == b1 - b0 {
+            for (dst, src) in self.blocks[b0..b1].iter_mut().zip(local.blocks) {
+                *dst = src;
+            }
+            for (dst, src) in self.hashes[b0..b1].iter_mut().zip(local.hashes) {
+                *dst = src;
+            }
+        } else {
+            self.blocks.splice(b0..b1, local.blocks);
+            self.hashes.splice(b0..b1, local.hashes);
         }
 
-        // 4. 拼接 leaves。
-        let prefix_leaves = self.leaves.partition_point(|l| l.range.end <= old_start);
-        let suffix_leaves = self.leaves.partition_point(|l| l.range.start < old_end);
-        let mut leaves = Vec::with_capacity(
-            prefix_leaves + local.leaves.len() + (self.leaves.len() - suffix_leaves),
-        );
-        leaves.extend_from_slice(&self.leaves[..prefix_leaves]);
-        leaves.extend(local.leaves.into_iter().map(|l| LeafRange {
+        // 2. 就地平移并替换 ranges。
+        if byte_delta != 0 {
+            for range in &mut self.ranges[b1..main] {
+                *range = shift_range(range, byte_delta);
+            }
+            for range in &mut self.ranges[main..] {
+                if range.start >= old_end {
+                    *range = shift_range(range, byte_delta);
+                }
+            }
+        }
+        let local_ranges = local
+            .ranges
+            .into_iter()
+            .map(|r| (r.start + old_start)..(r.end + old_start));
+        if local_len == b1 - b0 {
+            for (dst, src) in self.ranges[b0..b1].iter_mut().zip(local_ranges) {
+                *dst = src;
+            }
+        } else {
+            self.ranges.splice(b0..b1, local_ranges);
+        }
+
+        // 3. 就地平移并替换 lines。
+        if line_delta != 0 {
+            for l in &mut self.lines[b1..] {
+                *l = usize::try_from(*l as isize + line_delta).unwrap_or(0);
+            }
+        }
+        let local_lines = local.lines.into_iter().map(|l| start_line + l);
+        if local_len == b1 - b0 {
+            for (dst, src) in self.lines[b0..b1].iter_mut().zip(local_lines) {
+                *dst = src;
+            }
+        } else {
+            self.lines.splice(b0..b1, local_lines);
+        }
+
+        // 4. 就地平移并替换 leaves。
+        if byte_delta != 0 {
+            for leaf in &mut self.leaves[suffix_leaves..] {
+                leaf.range = shift_range(&leaf.range, byte_delta);
+            }
+        }
+        let local_leaves = local.leaves.into_iter().map(|l| LeafRange {
             range: (l.range.start + old_start)..(l.range.end + old_start),
             prose: l.prose,
             table: l.table,
-        }));
-        leaves.extend(self.leaves[suffix_leaves..].iter().map(|l| LeafRange {
-            range: shift_range(&l.range, byte_delta),
-            prose: l.prose,
-            table: l.table,
-        }));
-
-        // 5. 拼接 blank_rows。
-        let mut offsets =
-            Vec::with_capacity(self.blank_rows.offsets.len() + local.blank_rows.offsets.len());
-        let mut before = Vec::with_capacity(new_main);
-
-        // 前缀 [0..b0]：原样保留。
-        for i in 0..b0 {
-            let r = self.blank_rows.before(i);
-            let s = offsets.len();
-            offsets.extend_from_slice(&self.blank_rows.offsets[r]);
-            before.push(s..offsets.len());
+        });
+        if local_leaves.len() == suffix_leaves - prefix_leaves {
+            for (dst, src) in self.leaves[prefix_leaves..suffix_leaves]
+                .iter_mut()
+                .zip(local_leaves)
+            {
+                *dst = src;
+            }
+        } else {
+            self.leaves
+                .splice(prefix_leaves..suffix_leaves, local_leaves);
         }
-        // 局部块 [0..local_len]：全部平移 +old_start。
-        for i in 0..local_len {
-            let r = local.blank_rows.before(i);
-            let s = offsets.len();
-            offsets.extend(local.blank_rows.offsets[r].iter().map(|&o| o + old_start));
-            before.push(s..offsets.len());
-        }
-        // 若后面还有正文块 b1：利用 local.blank_rows.after 恢复 b1 之前的空行表。
-        if b1 < main {
-            let s = offsets.len();
+
+        // 5. 更新 blank_rows：块数和局部空行段长度不变时直接就地平移 offsets，否则重建紧凑表。
+        let can_patch_blanks = local_len == b1 - b0 && b1 < main && {
+            let old_span_start = self.blank_rows.before(b0).start;
+            let old_span_end = self.blank_rows.before(b1).end;
+            let mut new_local_count = 0usize;
+            for i in 0..local_len {
+                new_local_count += local.blank_rows.before(i).len();
+            }
             let after_slice = &local.blank_rows.offsets[local.blank_rows.after.clone()];
-            // local.blank_rows.after 含末尾哨兵 `window_text.len() + 1` 以及结束最后一块的那一个 `\n`：
-            // 当 window_text 以 k 个空行结尾时，after_slice 长度为 k + 2（首元素为最后一块结束行下一行，
-            // 倒数第二个元素为 window_text.len()，最后一个为 window_text.len() + 1）。
-            // 去掉末尾哨兵即得到长度 k + 1 的 `before[b1]`。
-            if after_slice.len() >= 2 {
-                let useful = &after_slice[..after_slice.len() - 1];
-                // 仅当至少有 1 行空行（useful.len() >= 2）时记录；ends_with_blank_line 已确保这一点。
-                if useful.len() >= 2 {
-                    offsets.extend(useful.iter().map(|&o| o + old_start));
+            if after_slice.len() >= 3 {
+                new_local_count += after_slice.len() - 1;
+            }
+            old_span_end - old_span_start == new_local_count
+        };
+        if can_patch_blanks {
+            let old_span_start = self.blank_rows.before(b0).start;
+            let old_span_end = self.blank_rows.before(b1).end;
+            let mut offsets = self.blank_rows.offsets.to_vec();
+            let mut cursor = old_span_start;
+            for i in 0..local_len {
+                let r = local.blank_rows.before(i);
+                let s = cursor;
+                for &o in &local.blank_rows.offsets[r] {
+                    offsets[cursor] = o + old_start;
+                    cursor += 1;
+                }
+                self.blank_rows.before[b0 + i] = s..cursor;
+            }
+            let s = cursor;
+            let after_slice = &local.blank_rows.offsets[local.blank_rows.after.clone()];
+            if after_slice.len() >= 3 {
+                for &o in &after_slice[..after_slice.len() - 1] {
+                    offsets[cursor] = o + old_start;
+                    cursor += 1;
                 }
             }
-            before.push(s..offsets.len());
-
-            // 其余后缀正文块 [b1 + 1..main]：全部平移 +byte_delta。
-            for i in (b1 + 1)..main {
+            self.blank_rows.before[b1] = s..cursor;
+            if byte_delta != 0 {
+                for o in &mut offsets[old_span_end..] {
+                    *o = shift_byte(*o, byte_delta);
+                }
+            }
+            self.blank_rows.offsets = offsets.into();
+        } else {
+            let mut offsets =
+                Vec::with_capacity(self.blank_rows.offsets.len() + local.blank_rows.offsets.len());
+            let mut before = Vec::with_capacity(new_main);
+            for i in 0..b0 {
                 let r = self.blank_rows.before(i);
                 let s = offsets.len();
+                offsets.extend_from_slice(&self.blank_rows.offsets[r]);
+                before.push(s..offsets.len());
+            }
+            for i in 0..local_len {
+                let r = local.blank_rows.before(i);
+                let s = offsets.len();
+                offsets.extend(local.blank_rows.offsets[r].iter().map(|&o| o + old_start));
+                before.push(s..offsets.len());
+            }
+            if b1 < main {
+                let s = offsets.len();
+                let after_slice = &local.blank_rows.offsets[local.blank_rows.after.clone()];
+                if after_slice.len() >= 2 {
+                    let useful = &after_slice[..after_slice.len() - 1];
+                    if useful.len() >= 2 {
+                        offsets.extend(useful.iter().map(|&o| o + old_start));
+                    }
+                }
+                before.push(s..offsets.len());
+                for i in (b1 + 1)..main {
+                    let r = self.blank_rows.before(i);
+                    let s = offsets.len();
+                    offsets.extend(
+                        self.blank_rows.offsets[r]
+                            .iter()
+                            .map(|&o| shift_byte(o, byte_delta)),
+                    );
+                    before.push(s..offsets.len());
+                }
+            }
+            let after_start = offsets.len();
+            if b1 < main {
+                let r = self.blank_rows.after();
                 offsets.extend(
                     self.blank_rows.offsets[r]
                         .iter()
                         .map(|&o| shift_byte(o, byte_delta)),
                 );
-                before.push(s..offsets.len());
+            } else {
+                let r = local.blank_rows.after();
+                offsets.extend(local.blank_rows.offsets[r].iter().map(|&o| o + old_start));
             }
-        }
-
-        // 文末 after 空行表。
-        let after_start = offsets.len();
-        if b1 < main {
-            let r = self.blank_rows.after();
-            offsets.extend(
-                self.blank_rows.offsets[r]
-                    .iter()
-                    .map(|&o| shift_byte(o, byte_delta)),
-            );
-        } else {
-            let r = local.blank_rows.after();
-            offsets.extend(local.blank_rows.offsets[r].iter().map(|&o| o + old_start));
-        }
-        let after = after_start..offsets.len();
-
-        Some(Markdown {
-            blocks,
-            hashes,
-            lines,
-            blank_rows: BlankRows {
+            let after = after_start..offsets.len();
+            self.blank_rows = BlankRows {
                 offsets: offsets.into(),
                 before,
                 after,
-            },
-            properties: self.properties.clone(),
-            ranges,
-            leaves,
-            len: new_len,
-            has_link_defs: self.has_link_defs,
-            has_toc: self.has_toc,
-        })
+            };
+        }
+
+        self.len = new_len;
+        true
+    }
+
+    /// 尝试仅局部重解析本次单一连续编辑区间（`old_edit` -> `new_edit`），返回与全文
+    /// [`parse`] 逐字段一致的新 [`Markdown`]；若编辑可能影响跨块或全局结构则返回 `None`。
+    ///
+    /// - `old_edit`：编辑前在旧文档中的字节范围。
+    /// - `new_edit`：编辑后在新文档中的字节范围（要求 `old_edit.start == new_edit.start`）。
+    /// - `new_len`：新文档总字节数。
+    /// - `line_of_byte`：返回新文档中任意字节偏移所在的行号（从 0 起）。
+    /// - `slice`：按字节范围读取新文档切片。
+    pub fn reparse_local(
+        &self,
+        old_edit: Range<usize>,
+        new_edit: Range<usize>,
+        new_len: usize,
+        line_of_byte: impl Fn(usize) -> usize,
+        slice: impl Fn(Range<usize>) -> String,
+    ) -> Option<Markdown> {
+        let mut next = self.clone();
+        next.reparse_local_in_place(old_edit, new_edit, new_len, line_of_byte, slice)
+            .then_some(next)
     }
 }
 

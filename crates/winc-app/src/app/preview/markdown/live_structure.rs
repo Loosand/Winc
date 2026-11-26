@@ -1,7 +1,5 @@
 //! 可编辑 Markdown 的原文结构适配器：将活动文档接入 `winc_richtext::SourceBridge`。
 
-use std::sync::Arc;
-
 use ropey::Rope;
 use winc_core::{Lines, Selection};
 use winc_editor::Document;
@@ -61,7 +59,7 @@ impl App {
         let checked = preview.checked.filter(|_| preview.doc == Some(doc.id))?;
         let parsed = preview.parsed.as_ref()?;
         // 命中位置来自上一帧，新解析可能还没画出来。
-        if preview.layout.as_ref()?.source != Arc::as_ptr(parsed) as usize {
+        if preview.layout.as_ref()?.source != preview.parse_serial {
             return None;
         }
         let bridge = SourceBridge::new(rope, parsed, doc.revision, Some(checked));

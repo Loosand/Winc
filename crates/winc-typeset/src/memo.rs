@@ -20,6 +20,13 @@ use super::{Cx, Flow, Item, Para};
 /// 最多占用约 0.6 MB。
 const SLACK: usize = 1024;
 
+/// 单张大表格各列的宽度极值缓存（记录最大与次大值及其行号，编辑单个单元格时 O(1) 得出精确列宽）。
+#[derive(Clone)]
+pub(crate) struct TableCols {
+    pub(crate) min: Vec<(f32, usize, f32)>,
+    pub(crate) max: Vec<(f32, usize, f32)>,
+}
+
 /// 跨次排版留着的排版缓存，见模块说明。
 #[derive(Default)]
 pub struct Memo {
@@ -31,6 +38,8 @@ pub struct Memo {
     lines: HashMap<u64, (Arc<Piece>, winc_syntax::LineState)>,
     /// 量出的（最长词宽，整段宽），都是逻辑像素。
     measures: HashMap<u64, (f32, f32)>,
+    /// 大表格的列宽极值摘要（键为表格解析切片地址、行数、字号与内边距）。
+    table_cols: HashMap<u64, Arc<TableCols>>,
     /// 上次调用 [`Memo::take_touched`] 之后读取或写入的条目。
     touched: Vec<u64>,
 }
@@ -38,7 +47,7 @@ pub struct Memo {
 impl Memo {
     /// 返回三项缓存的条目总数。
     pub fn len(&self) -> usize {
-        self.flows.len() + self.lines.len() + self.measures.len()
+        self.flows.len() + self.lines.len() + self.measures.len() + self.table_cols.len()
     }
 
     /// 是否没有任何缓存条目。
@@ -89,9 +98,21 @@ impl Memo {
         self.flows.retain(|k, _| live.contains(k));
         self.lines.retain(|k, _| live.contains(k));
         self.measures.retain(|k, _| live.contains(k));
+        self.table_cols.retain(|k, _| live.contains(k));
         self.flows.shrink_to_fit();
         self.lines.shrink_to_fit();
         self.measures.shrink_to_fit();
+        self.table_cols.shrink_to_fit();
+    }
+
+    pub(crate) fn get_table_cols(&mut self, key: u64) -> Option<Arc<TableCols>> {
+        self.touch(key);
+        self.table_cols.get(&key).map(Arc::clone)
+    }
+
+    pub(crate) fn insert_table_cols(&mut self, key: u64, cols: Arc<TableCols>) {
+        self.touch(key);
+        self.table_cols.insert(key, cols);
     }
 
     pub(crate) fn get_flow(&mut self, key: u64) -> Option<Arc<Piece>> {
@@ -218,21 +239,44 @@ impl Cx<'_, '_> {
         para: Para,
         out: &mut Vec<Item>,
     ) -> Flow {
+        let source = u32::try_from(inline.source).unwrap_or(0);
+        self.flow_at_source(inline, source, x, y, width, para, out)
+    }
+
+    /// 按显式原文起点 `source` 排一段行内文字，避免为平移原文偏移而克隆 [`Inline`]。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn flow_at_source(
+        &mut self,
+        inline: &Inline,
+        source: u32,
+        x: f32,
+        y: f32,
+        width: f32,
+        para: Para,
+        out: &mut Vec<Item>,
+    ) -> Flow {
         if !inline.images.is_empty() {
-            return self.flow_at(inline, x, y, width, para, out);
+            let delta = i64::from(source) - i64::from(u32::try_from(inline.source).unwrap_or(0));
+            let first = out.len();
+            let flow = self.flow_at(inline, x, y, width, para, out);
+            if delta != 0 {
+                for item in &mut out[first..] {
+                    item.shift_source(delta as isize);
+                }
+            }
+            return flow;
         }
         let key = key(|h| {
             inline.hash(h);
             width.to_bits().hash(h);
             para.hash_into(h);
         });
-        let source = u32::try_from(inline.source).unwrap_or(0);
         let piece = match self.memo.get_flow(key) {
             Some(piece) => piece,
             None => {
                 let mut piece =
                     self.isolated(|cx, out| cx.flow_at(inline, 0.0, 0.0, width, para, out));
-                piece.source = source;
+                piece.source = u32::try_from(inline.source).unwrap_or(0);
                 let piece = Arc::new(piece);
                 self.memo.insert_flow(key, Arc::clone(&piece));
                 piece

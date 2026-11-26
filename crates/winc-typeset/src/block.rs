@@ -314,13 +314,13 @@ pub struct LaidBlock {
     /// Height already added for the editable rows below the content.
     editing_blank_height: f32,
     /// 要画的项，按绘制先后排列。
-    items: Vec<Item>,
+    pub(crate) items: Vec<Item>,
     /// 标题的锚点（小写、空格换成 `-`、去掉标点）和所在高度，`[跳转](#标题)` 用。
     anchors: Vec<(String, f32)>,
     /// 块里能选中的文字连起来：段落、单元格、代码行之间是换行，折行处不加。
     ///
     /// 选中、复制、查找都按它，位置是字符偏移。
-    text: Box<str>,
+    pub(crate) text: Box<str>,
     /// `text` 有多少个字符。
     pub chars: usize,
     /// 按高度找看得见的项用（见 [`LaidBlock::visible`]）。
@@ -332,13 +332,15 @@ pub struct LaidBlock {
     /// 排版这一块时使用的排版缓存条目，见 [`Memo::sweep`]。
     pub memo: Box<[u64]>,
     /// 输入法组字是否排在这一块中，见 [`Cx::preedit`]。
-    preedit: bool,
+    pub(crate) preedit: bool,
     /// 比正文宽、可以横向滚动的表格，按项的先后排列。
-    scrolls: Vec<Scroller>,
+    pub(crate) scrolls: Vec<Scroller>,
     /// 显示原文的块中渲染结果的第一项和上边缘（见 [`Out::preview`]）。
     preview: Option<(u32, f32)>,
     /// 要画的项已经释放时留下的内容（见 [`LaidBlock::shed`]）；项都在时为 `None`。
     shed: Option<Box<Shed>>,
+    /// 超大单块的原位修补索引（小块与已卸载块为 `None`）。
+    pub(crate) patch: Option<Box<crate::patch::PatchIndex>>,
 }
 
 /// 释放了要画的项的块留下的内容：重排时判断是否受影响，以及按链接定位。
@@ -402,6 +404,7 @@ impl LaidBlock {
             scrolls: Vec::new(),
             preview: None,
             shed: None,
+            patch: None,
         }
     }
 
@@ -419,6 +422,7 @@ impl LaidBlock {
         laid.editing_blank_height = out.editing_blank_height;
         laid.scrolls = out.scrolls;
         laid.preview = out.preview;
+        laid.patch = out.patch;
         laid
     }
 
@@ -629,6 +633,68 @@ impl LaidBlock {
     /// 块里有没有指向 `url` 的链接。
     pub fn links_to(&self, url: &str) -> bool {
         self.link_box(url).is_some()
+    }
+
+    /// 原位更新可见项空间索引（`tall` 与 `short`），供超大单块局部修补使用。
+    pub(crate) fn patch_spatial_index(
+        &mut self,
+        old_items: std::ops::Range<usize>,
+        new_len: usize,
+        dy: f32,
+    ) {
+        let di = new_len as isize - old_items.len() as isize;
+        let new_end = old_items.start + new_len;
+
+        self.tall.retain_mut(|idx| {
+            let i = *idx as usize;
+            if old_items.contains(&i) {
+                false
+            } else {
+                if i >= old_items.end {
+                    *idx = (i as isize + di) as u32;
+                }
+                true
+            }
+        });
+
+        let mut sorted = true;
+        let mut prev_top = f32::NEG_INFINITY;
+        self.short.retain_mut(|(top, idx)| {
+            let i = *idx as usize;
+            if old_items.contains(&i) {
+                return false;
+            }
+            if i >= old_items.end {
+                let shifted = (i as isize + di) as u32;
+                *idx = shifted;
+                if dy != 0.0 {
+                    *top = self.items[shifted as usize].span_y().0;
+                }
+            }
+            if *top < prev_top {
+                sorted = false;
+            }
+            prev_top = *top;
+            true
+        });
+        if !sorted {
+            self.short.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+
+        for i in old_items.start..new_end {
+            let (top, bottom) = self.items[i].span_y();
+            if bottom - top > TALL {
+                self.tall.push(i as u32);
+            } else {
+                let pos = self.short.partition_point(|&(t, _)| t <= top);
+                self.short.insert(pos, (top, i as u32));
+            }
+        }
+    }
+
+    /// 若存在超大块修补索引，按原文偏移（相对顶层块）返回可能命中的局部项窗口，避免全块扫描。
+    pub fn source_item_window(&self, source: usize) -> Option<std::ops::Range<usize>> {
+        self.patch.as_ref()?.source_item_window(source)
     }
 
     /// 和 `y0..y1`（块里的坐标）有交集的项的序号，按原来的先后（先画的底色在下面）。
