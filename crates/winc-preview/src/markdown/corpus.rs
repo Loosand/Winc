@@ -545,3 +545,76 @@ fn real_sample_epidemic_modeling_covers_all_supported_syntax() {
         );
     }
 }
+
+#[test]
+fn extreme_markdown_structures_parse_completely_and_without_panic() {
+    let mut md = String::from("# 极端样本\r\n\r\n");
+
+    // 1. 超长单段（含组合字符 e\u{0301} 与中英混排，CRLF 换行）。
+    for i in 0..160 {
+        md.push_str(&format!(
+            "段{i} cafe\u{0301} **粗体{i}** `code_{i}` [链接](https://example.com/{i})；"
+        ));
+    }
+    md.push_str("\r\n\r\n");
+
+    // 2. 宽大表格（12 列 × 60 行）。
+    for col in 0..12 {
+        md.push_str(&format!("| C{col} "));
+    }
+    md.push_str("|\r\n");
+    for _ in 0..12 {
+        md.push_str("| --- ");
+    }
+    md.push_str("|\r\n");
+    for row in 0..60 {
+        for col in 0..12 {
+            md.push_str(&format!("| v{row}_{col} "));
+        }
+        md.push_str("|\r\n");
+    }
+    md.push_str("\r\n");
+
+    // 3. 12 层深嵌套引用与列表。
+    for depth in 1..=12 {
+        md.push_str(&format!("{} 嵌套引用 {depth}\r\n", ">".repeat(depth)));
+    }
+    md.push_str("\r\n");
+    for depth in 0..12 {
+        md.push_str(&format!(
+            "{}- 嵌套列表 {}\r\n",
+            "  ".repeat(depth),
+            depth + 1
+        ));
+    }
+    md.push_str("\r\n");
+
+    // 4. 密集块级与行内公式（30 组）。
+    for i in 1..=30 {
+        md.push_str(&format!(
+            "公式 $a_{{{i}}} = \\sqrt{{{i}}}$\r\n\r\n$$\r\n\\sum_{{k=1}}^{{{i}}} k = \\frac{{{i}({i}+1)}}{{2}}\r\n$$\r\n\r\n"
+        ));
+    }
+
+    let doc = parse(&md);
+    assert!(
+        doc.blocks.iter().any(
+            |b| matches!(b, Block::Table(aligns, rows, true) if aligns.len() == 12 && rows.len() == 61)
+        ),
+        "应完整解析 12 列 × 60 数据行的宽大表格"
+    );
+    let math_blocks = doc
+        .blocks
+        .iter()
+        .filter(|b| matches!(b, Block::Math(..)))
+        .count();
+    assert_eq!(math_blocks, 30, "应解析全部 30 个块级公式");
+    assert!(
+        doc.blocks.iter().any(|b| matches!(b, Block::Quote(..))),
+        "应解析深层嵌套引用"
+    );
+    assert!(
+        doc.blocks.iter().any(|b| matches!(b, Block::List(..))),
+        "应解析深层嵌套列表"
+    );
+}

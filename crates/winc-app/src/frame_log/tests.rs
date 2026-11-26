@@ -2,20 +2,20 @@
 
 use super::*;
 
+fn make_log(enabled: bool) -> FrameLog {
+    let mut log = FrameLog::from_env();
+    log.enabled = enabled;
+    log
+}
+
 #[test]
 fn frames_are_counted_only_when_enabled() {
     let ms = Duration::from_millis;
-    let mut off = FrameLog {
-        enabled: false,
-        ..FrameLog::from_env()
-    };
+    let mut off = make_log(false);
     off.record(FramePhases::total_only(ms(30)), ms(16), (100, 100), 0);
     assert!(off.times.is_empty());
 
-    let mut on = FrameLog {
-        enabled: true,
-        ..FrameLog::from_env()
-    };
+    let mut on = make_log(true);
     // 一帧在刷新间隔以内，一帧超过（且排版为主导阶段）：只有后者计入超时帧及对应阶段。
     on.record(FramePhases::total_only(ms(5)), ms(16), (100, 100), 0);
     on.record(
@@ -68,10 +68,7 @@ fn phase_meter_decomposes_parse_layout_draw_and_present_without_double_counting(
 #[test]
 fn pointer_moves_are_timed_until_the_next_frame() {
     let ms = Duration::from_millis;
-    let mut log = FrameLog {
-        enabled: true,
-        ..FrameLog::from_env()
-    };
+    let mut log = make_log(true);
     // 一帧之前的两次移动只记一次，从较早的一次算起；没有移动的帧不记间隔。
     log.pointer_moved();
     let first = log.moved;
@@ -85,12 +82,40 @@ fn pointer_moves_are_timed_until_the_next_frame() {
     assert_eq!((log.queries.get().0, log.skipped, log.reclaimed), (1, 1, 2));
 
     // 未启用时都不记录，查询照常执行。
-    let mut off = FrameLog {
-        enabled: false,
-        ..FrameLog::from_env()
-    };
+    let mut off = make_log(false);
     off.pointer_moved();
     off.frame_skipped();
     assert_eq!(off.time_query(|| 7), 7);
     assert_eq!((off.moved, off.skipped, off.queries.get().0), (None, 0, 0));
+}
+
+#[test]
+fn slow_frame_ring_buffer_caps_capacity_and_exports_diagnostic_report() {
+    let ms = Duration::from_millis;
+    let mut log = make_log(true);
+    for i in 0..(SLOW_FRAME_CAP + 5) {
+        let phases = FramePhases {
+            parse: ms(1),
+            layout: ms(20 + (i as u64 % 3)),
+            draw: ms(4),
+            present: ms(1),
+            total: ms(26 + (i as u64 % 3)),
+        };
+        log.record(phases, ms(16), (1440, 900), 0);
+    }
+
+    assert_eq!(log.total_frames, (SLOW_FRAME_CAP + 5) as u64);
+    assert_eq!(log.total_slow, (SLOW_FRAME_CAP + 5) as u64);
+    assert_eq!(log.recent_slow.len(), SLOW_FRAME_CAP);
+    assert_eq!(log.recent_slow.front().unwrap().frame_index, 6);
+    assert_eq!(
+        log.recent_slow.back().unwrap().frame_index,
+        (SLOW_FRAME_CAP + 5) as u64
+    );
+
+    let report = log.diagnostic_report();
+    assert!(report.contains("no document content"));
+    assert!(report.contains(&format!("slow_frames={}", SLOW_FRAME_CAP + 5)));
+    assert!(report.contains("dominant=Layout"));
+    assert!(report.contains("size=1440x900"));
 }

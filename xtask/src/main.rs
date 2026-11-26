@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! cargo xtask samples          生成测试样本到 target/samples/
-//! cargo xtask bench [次数]      构建 release，测启动、内存、滚动，对照预算（默认启动测 20 次）
+//! cargo xtask bench [次数] [--record 路径] [--compare 路径]
+//!                              构建 release，测启动、内存、滚动，对照预算并落盘趋势（默认启动测 20 次）
 //! cargo xtask app [--target 目标] [--no-build]
 //!                              构建 release，组成临时签名的 macOS 应用 winc.app；目标是
 //!                              aarch64-apple-darwin 或 x86_64-apple-darwin，默认本机的架构
@@ -70,18 +71,10 @@ fn main() -> ExitCode {
         #[cfg(unix)]
         Some("tidy") => dev::tidy().map(|()| true),
         Some("vim-fixtures") => vim::fixtures(&args[1..]),
-        Some("bench") => {
-            // 至少测一次，否则没有样本可排序、无法取出中位数。
-            let runs = args
-                .get(1)
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(20)
-                .max(1);
-            bench::bench(runs)
-        }
+        Some("bench") => bench_options(&args[1..]).and_then(bench::bench),
         _ => {
             eprintln!(
-                "用法：cargo xtask samples | bench [次数] | app [--target 目标] [--no-build] | icons 目录 | server | sparkle | linux-appcast 目录 地址 AppImage… | windows-appcast 目录 地址 安装包… | dmg [--app 路径] [--output 路径] | test [--all] [--base 提交] [-- 参数] | tidy | vim-fixtures [--check] [--full] [--vim 路径]"
+                "用法：cargo xtask samples | bench [次数] [--record 路径] [--compare 路径] | app [--target 目标] [--no-build] | icons 目录 | server | sparkle | linux-appcast 目录 地址 AppImage… | windows-appcast 目录 地址 安装包… | dmg [--app 路径] [--output 路径] | test [--all] [--base 提交] [-- 参数] | tidy | vim-fixtures [--check] [--full] [--vim 路径]"
             );
             return ExitCode::from(2);
         }
@@ -95,6 +88,32 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// 解析 `bench` 的启动次数、`--record` 历史写入路径与 `--compare` 基线对比路径。
+fn bench_options(args: &[String]) -> Result<bench::BenchOptions, String> {
+    let mut opts = bench::BenchOptions::with_runs(20);
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--record" => {
+                opts.record_path =
+                    PathBuf::from(args.next().ok_or("--record 后面要跟历史文件路径")?);
+            }
+            "--compare" => {
+                opts.compare_path = Some(PathBuf::from(
+                    args.next().ok_or("--compare 后面要跟基线文件路径")?,
+                ));
+            }
+            other => {
+                let runs = other
+                    .parse::<usize>()
+                    .map_err(|_| format!("bench 不认识参数 {other}"))?;
+                opts.runs = runs.max(1);
+            }
+        }
+    }
+    Ok(opts)
 }
 
 /// 解析 `app` 的目标架构参数（`--target`）和是否跳过构建（`--no-build`）。

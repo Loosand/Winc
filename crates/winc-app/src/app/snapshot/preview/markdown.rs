@@ -982,3 +982,53 @@ fn epidemic_modeling_renders_consistently_across_themes_and_cache_cycles() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn extreme_markdown_renders_and_scrolls_consistently_offscreen() {
+    let mut md = String::from("# 极端样本离屏一致性\n\n");
+    for i in 0..120 {
+        md.push_str(&format!(
+            "超长段落第{i}段含**粗体**、`code_{i}`与[链接](https://example.com/{i})；"
+        ));
+    }
+    md.push_str("\n\n");
+    for c in 0..12 {
+        md.push_str(&format!("| 列{c} "));
+    }
+    md.push_str("|\n");
+    for _ in 0..12 {
+        md.push_str("| --- ");
+    }
+    md.push_str("|\n");
+    for r in 0..40 {
+        for c in 0..12 {
+            md.push_str(&format!("| R{r}C{c} "));
+        }
+        md.push_str("|\n");
+    }
+    md.push('\n');
+    for d in 1..=10 {
+        md.push_str(&format!("{} 第{d}层引用\n", ">".repeat(d)));
+    }
+    md.push('\n');
+    for i in 1..=16 {
+        md.push_str(&format!(
+            "$$\n\\sum_{{k=1}}^{{{i}}} \\frac{{1}}{{k^2}} = \\int_0^1 t^{{{i}}}\\,dt\n$$\n\n"
+        ));
+    }
+
+    let (mut app, dir) = live_doc("md-extreme", &md);
+    warm_all_images(&mut app);
+    assert!(
+        app.preview.markdown.height > app.preview.markdown.area.h * 2.0,
+        "极端样本总排版高度应超过两屏"
+    );
+
+    let max_scroll = app.preview.markdown.max_scroll();
+    let top_before = render_viewport(&mut app, 0.0);
+    let _mid = render_viewport(&mut app, max_scroll * 0.5);
+    let _bottom = render_viewport(&mut app, max_scroll);
+    let top_after = render_viewport(&mut app, 0.0);
+    assert_frames_equal(&top_after, &top_before, "极端样本滚回文首像素应完全一致");
+    let _ = std::fs::remove_dir_all(&dir);
+}

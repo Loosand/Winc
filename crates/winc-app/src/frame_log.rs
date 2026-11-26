@@ -7,12 +7,16 @@
 //! 另记录鼠标移动到画面更新的间隔、查询光标下的窗口的耗时、跳过的帧数和被系统收回的呈现缓冲数。
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 /// 两次输出之间的时长。
 ///
 /// 取自调参：足以收集上百帧作统计，卡顿发生后 5 s 内即有输出。
 const REPORT_EVERY: Duration = Duration::from_secs(5);
+/// 慢帧环形缓冲保留的最近超时帧上限（固定有界，避免长时间运行累积内存）。
+const SLOW_FRAME_CAP: usize = 32;
 
 /// 渲染帧的四个主要阶段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,12 +217,35 @@ pub fn finish_frame(draw_wall: Duration, present: Duration) -> FramePhases {
     PHASE_METER.with(|m| m.borrow_mut().finish(draw_wall, present))
 }
 
+/// 单次超时慢帧的结构化诊断记录（不包含任何文档正文或文件路径）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlowFrameRecord {
+    /// 自本次会话开始以来的帧序号（从 1 起）。
+    pub frame_index: u64,
+    /// 本帧四阶段及总耗时分解。
+    pub phases: FramePhases,
+    /// 本帧耗时最长的主导阶段。
+    pub dominant: FramePhase,
+    /// 触发慢帧判定时的屏幕刷新间隔。
+    pub refresh: Duration,
+    /// 该帧的物理像素尺寸。
+    pub size: (u32, u32),
+}
+
 /// 帧日志的状态；未启用时不记录。
 pub struct FrameLog {
     /// 是否启用（设置了 `WINC_FRAME_LOG`）。
     enabled: bool,
     /// 本轮统计中第一帧的时刻。
     since: Option<Instant>,
+    /// 本会话累计记录的帧数（仅启用时递增）。
+    total_frames: u64,
+    /// 本会话累计记录的超时慢帧数（跨上报周期保留，供诊断导出使用）。
+    total_slow: u64,
+    /// 本会话累计超时帧按主导阶段分类计数。
+    total_slow_by_phase: [u64; 4],
+    /// 最近 [`SLOW_FRAME_CAP`] 条超时慢帧的环形记录。
+    recent_slow: VecDeque<SlowFrameRecord>,
     /// 本轮各帧的总耗时。
     times: Vec<Duration>,
     /// 本轮各帧的解析阶段耗时。
@@ -251,6 +278,10 @@ impl FrameLog {
         Self {
             enabled: std::env::var_os("WINC_FRAME_LOG").is_some(),
             since: None,
+            total_frames: 0,
+            total_slow: 0,
+            total_slow_by_phase: [0; 4],
+            recent_slow: VecDeque::new(),
             times: Vec::new(),
             parse_times: Vec::new(),
             layout_times: Vec::new(),
@@ -264,6 +295,44 @@ impl FrameLog {
             skipped: 0,
             reclaimed: 0,
         }
+    }
+
+    /// 导出不包含任何文档正文或路径的本地纯文本诊断摘要（含慢帧主导阶段分布与最近慢帧明细）。
+    pub fn diagnostic_report(&self) -> String {
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "winc diagnostics (local-only, no document content)\n\
+             frames={} slow_frames={} slow_phases=parse:{},layout:{},draw:{},present:{} \
+             skipped_frames={} reclaimed_surfaces={}",
+            self.total_frames,
+            self.total_slow,
+            self.total_slow_by_phase[FramePhase::Parse as usize],
+            self.total_slow_by_phase[FramePhase::Layout as usize],
+            self.total_slow_by_phase[FramePhase::Draw as usize],
+            self.total_slow_by_phase[FramePhase::Present as usize],
+            self.skipped,
+            self.reclaimed,
+        );
+        for rec in &self.recent_slow {
+            let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+            let _ = writeln!(
+                out,
+                "  slow #{}: total={:.2}ms (parse={:.2} layout={:.2} draw={:.2} present={:.2}) \
+                 dominant={:?} refresh={:.2}ms size={}x{}",
+                rec.frame_index,
+                ms(rec.phases.total),
+                ms(rec.phases.parse),
+                ms(rec.phases.layout),
+                ms(rec.phases.draw),
+                ms(rec.phases.present),
+                rec.dominant,
+                ms(rec.refresh),
+                rec.size.0,
+                rec.size.1,
+            );
+        }
+        out
     }
 
     /// 记录一次鼠标移动；已有尚未反映到画面上的移动时保留更早的时刻。
@@ -319,14 +388,28 @@ impl FrameLog {
             self.waits.push(now.duration_since(moved));
         }
         let since = *self.since.get_or_insert(now);
+        self.total_frames += 1;
         self.times.push(phases.total);
         self.parse_times.push(phases.parse);
         self.layout_times.push(phases.layout);
         self.draw_times.push(phases.draw);
         self.present_times.push(phases.present);
         if phases.total > refresh {
+            let dominant = phases.dominant();
             self.slow += 1;
-            self.slow_by_phase[phases.dominant() as usize] += 1;
+            self.slow_by_phase[dominant as usize] += 1;
+            self.total_slow += 1;
+            self.total_slow_by_phase[dominant as usize] += 1;
+            if self.recent_slow.len() >= SLOW_FRAME_CAP {
+                self.recent_slow.pop_front();
+            }
+            self.recent_slow.push_back(SlowFrameRecord {
+                frame_index: self.total_frames,
+                phases,
+                dominant,
+                refresh,
+                size,
+            });
         }
         if now.duration_since(since) < REPORT_EVERY {
             return;
@@ -387,6 +470,14 @@ impl FrameLog {
         self.waits.clear();
         (self.slow, self.skipped, self.reclaimed) = (0, 0, 0);
         self.slow_by_phase = [0; 4];
+    }
+}
+
+impl Drop for FrameLog {
+    fn drop(&mut self) {
+        if self.enabled && self.total_slow > 0 {
+            eprint!("{}", self.diagnostic_report());
+        }
     }
 }
 

@@ -1,11 +1,38 @@
 //! 基准（`cargo xtask bench`）：构建 release，测启动时间、空载内存和滚动帧耗时，对照预算。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::samples::{samples, samples_dir};
 use crate::{build_release, root};
+
+mod history;
+use history::{
+    BenchRecord, MetricSample, append_history, compare_records, print_comparison, read_latest,
+};
+
+/// `cargo xtask bench` 的运行选项。
+#[derive(Debug, Clone)]
+pub struct BenchOptions {
+    /// 启动耗时测量次数（至少 1 次）。
+    pub runs: usize,
+    /// 基准历史 JSONL 落盘路径（默认 `target/bench-history.jsonl`）。
+    pub record_path: PathBuf,
+    /// 可选对比基线 JSONL 路径；为空时默认与 `record_path` 中的上一条记录对比。
+    pub compare_path: Option<PathBuf>,
+}
+
+impl BenchOptions {
+    /// 返回默认配置（给定启动测量次数）。
+    pub fn with_runs(runs: usize) -> Self {
+        Self {
+            runs: runs.max(1),
+            record_path: root().join("target").join("bench-history.jsonl"),
+            compare_path: None,
+        }
+    }
+}
 
 /// 从外部启动进程到呈现文件首帧的启动预算（毫秒）。
 ///
@@ -90,12 +117,12 @@ impl FrameStats {
     }
 }
 
-/// 跑一遍全部基准，返回所有指标是否都在预算内。
+/// 跑一遍全部基准，返回所有指标是否都在预算内，并落盘历史记录与输出趋势对比。
 ///
 /// # Errors
 ///
-/// 构建 release、生成样本或启动被测程序失败时返回错误描述。
-pub fn bench(runs: usize) -> Result<bool, String> {
+/// 构建 release、生成样本、读写历史记录或启动被测程序失败时返回错误描述。
+pub fn bench(options: BenchOptions) -> Result<bool, String> {
     build_release(&[])?;
 
     samples().map_err(|e| e.to_string())?;
@@ -105,7 +132,23 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         .join(if cfg!(windows) { "winc.exe" } else { "winc" });
     let dir = samples_dir();
     let large = dir.join("large.rs");
+    let runs = options.runs.max(1);
     let mut ok = true;
+    let mut recorded: Vec<MetricSample> = Vec::new();
+    let baseline_path = options
+        .compare_path
+        .as_deref()
+        .unwrap_or(&options.record_path);
+    let baseline = read_latest(baseline_path)?;
+
+    let mut push_metric = |key: &str, value: f64, unit: &str, budget: Option<f64>| {
+        recorded.push(MetricSample {
+            key: key.to_owned(),
+            value,
+            unit: unit.to_owned(),
+            budget,
+        });
+    };
 
     println!();
     println!("{:<34} {:>10} {:>10}  结果", "指标", "实测", "预算");
@@ -123,9 +166,13 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         BUDGET_STARTUP_MS,
         "ms",
     );
+    push_metric("startup_large_rs_ms", median, "ms", Some(BUDGET_STARTUP_MS));
 
     // 大文件：启动时先建行索引，高亮从可见区域附近开始推算。
-    for name in ["huge.txt", "huge.rs"] {
+    for (name, key) in [
+        ("huge.txt", "startup_huge_txt_ms"),
+        ("huge.rs", "startup_huge_rs_ms"),
+    ] {
         let path = dir.join(name);
         let mut times: Vec<f64> = (0..5)
             .map(|_| startup_once(&exe, &path))
@@ -137,6 +184,7 @@ pub fn bench(runs: usize) -> Result<bool, String> {
             BUDGET_STARTUP_MS,
             "ms",
         );
+        push_metric(key, times[2], "ms", Some(BUDGET_STARTUP_MS));
     }
 
     let stats = scroll_once(&exe, &large, "scroll")?;
@@ -148,8 +196,17 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         "ms",
     );
     stats.print_phases();
+    push_metric(
+        "scroll_large_rs_p95_ms",
+        stats.p95,
+        "ms",
+        Some(BUDGET_SCROLL_P95_MS),
+    );
 
-    for name in ["huge.txt", "huge.rs"] {
+    for (name, key) in [
+        ("huge.txt", "scroll_huge_txt_p95_ms"),
+        ("huge.rs", "scroll_huge_rs_p95_ms"),
+    ] {
         let stats = scroll_once(&exe, &dir.join(name), "scroll")?;
         ok &= report(
             &format!("滚动 p95（{name}）"),
@@ -158,6 +215,7 @@ pub fn bench(runs: usize) -> Result<bool, String> {
             "ms",
         );
         stats.print_phases();
+        push_metric(key, stats.p95, "ms", Some(BUDGET_SCROLL_P95_MS));
     }
 
     // Vim 模式：按键处理加随后一帧的耗时；键入的耗时用于核对关闭 Vim 模式时没有额外开销。
@@ -173,6 +231,12 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         "ms",
     );
     stats.print_phases();
+    push_metric(
+        "vim_large_rs_p95_ms",
+        stats.p95,
+        "ms",
+        Some(BUDGET_KEY_P95_MS),
+    );
     let stats = scroll_once(&exe, &large, "typing")?;
     println!("{:<34} {:>8.2}ms", "键入到出帧 p50（large.rs）", stats.p50);
     ok &= report(
@@ -182,6 +246,12 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         "ms",
     );
     stats.print_phases();
+    push_metric(
+        "typing_large_rs_p95_ms",
+        stats.p95,
+        "ms",
+        Some(BUDGET_KEY_P95_MS),
+    );
 
     let stats = scroll_once(&exe, &dir.join("long.md"), "live-typing")?;
     println!(
@@ -195,6 +265,12 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         "ms",
     );
     stats.print_phases();
+    push_metric(
+        "live_typing_long_md_p95_ms",
+        stats.p95,
+        "ms",
+        Some(BUDGET_LIVE_TYPING_P95_MS),
+    );
 
     let stats = scroll_once(&exe, &root().join("README.md"), "live-moves")?;
     println!(
@@ -208,6 +284,12 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         "ms",
     );
     stats.print_phases();
+    push_metric(
+        "live_moves_readme_p95_ms",
+        stats.p95,
+        "ms",
+        Some(BUDGET_LIVE_MOVES_P95_MS),
+    );
 
     let stats = scroll_once(&exe, &root().join("README.md"), "preview")?;
     ok &= report(
@@ -217,6 +299,24 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         "ms",
     );
     stats.print_phases();
+    push_metric(
+        "preview_readme_p95_ms",
+        stats.p95,
+        "ms",
+        Some(BUDGET_PREVIEW_P95_MS),
+    );
+
+    // 极端边界样本预览滚动（参考指标，跟踪宽大表格、深嵌套与密集公式的演进趋势）。
+    let extreme = dir.join("extreme.md");
+    if extreme.is_file() {
+        let stats = scroll_once(&exe, &extreme, "preview")?;
+        println!(
+            "{:<34} {:>8.2}ms",
+            "预览滚动 p95（extreme.md，仅供参考）", stats.p95
+        );
+        stats.print_phases();
+        push_metric("preview_extreme_md_p95_ms", stats.p95, "ms", None);
+    }
 
     // 全格式实战样稿（仅在工作区存在该文件时测量，只读运行，不修改原文件）。
     let showcase = root().join("testdata/markdown/epidemic-modeling/index.md");
@@ -230,6 +330,12 @@ pub fn bench(runs: usize) -> Result<bool, String> {
             "ms",
         );
         stats.print_phases();
+        push_metric(
+            "preview_showcase_p95_ms",
+            stats.p95,
+            "ms",
+            Some(BUDGET_SHOWCASE_PREVIEW_P95_MS),
+        );
         let stats = scroll_once(&exe, &showcase, "live-typing")?;
         println!(
             "{:<34} {:>8.2}ms",
@@ -242,6 +348,12 @@ pub fn bench(runs: usize) -> Result<bool, String> {
             "ms",
         );
         stats.print_phases();
+        push_metric(
+            "live_typing_showcase_p95_ms",
+            stats.p95,
+            "ms",
+            Some(BUDGET_LIVE_TYPING_P95_MS),
+        );
         let stats = scroll_once(&exe, &showcase, "live-moves")?;
         println!(
             "{:<34} {:>8.2}ms",
@@ -254,6 +366,12 @@ pub fn bench(runs: usize) -> Result<bool, String> {
             "ms",
         );
         stats.print_phases();
+        push_metric(
+            "live_moves_showcase_p95_ms",
+            stats.p95,
+            "ms",
+            Some(BUDGET_LIVE_MOVES_P95_MS),
+        );
     }
 
     // 快速转动鼠标滚轮：帧间隔、画面落后于滚轮的格数、最后一格之后画面停止的耗时。只列出，
@@ -303,7 +421,12 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         println!("{name:<34} {ms:>8.1}ms  {frames:.0} 帧");
     }
 
-    for name in ["large.rs", "minified.js", "huge.txt", "huge.rs"] {
+    for (name, key) in [
+        ("large.rs", "idle_large_rs_mb"),
+        ("minified.js", "idle_minified_js_mb"),
+        ("huge.txt", "idle_huge_txt_mb"),
+        ("huge.rs", "idle_huge_rs_mb"),
+    ] {
         if let Some((footprint, rss)) = memory_once(&exe, &dir.join(name), "idle")? {
             ok &= report(
                 &format!("空载物理内存（{name}）"),
@@ -312,7 +435,17 @@ pub fn bench(runs: usize) -> Result<bool, String> {
                 "MB",
             );
             println!("{:<34} {:>8.0}MB", format!("RSS（{name}，仅供参考）"), rss);
+            push_metric(key, footprint, "MB", Some(BUDGET_IDLE_MB));
         }
+    }
+
+    // 长文档预览空载物理内存（参考指标，用于跟踪 Markdown 长文档内存增长趋势）。
+    if let Some((footprint, _)) = memory_once(&exe, &dir.join("long.md"), "idle")? {
+        println!(
+            "{:<34} {:>8.1}MB",
+            "长文档物理内存（long.md，仅供参考）", footprint
+        );
+        push_metric("idle_long_md_mb", footprint, "MB", None);
     }
 
     // 打开本仓库后在全部文件中搜索、建立 ⌘P 的文件表：仓库会变大，只列出，不对照预算。
@@ -325,6 +458,19 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         }
     }
 
+    let record = BenchRecord {
+        commit: git_short_head(),
+        timestamp_s: (epoch_ms() / 1000.0) as u64,
+        all_passed: ok,
+        metrics: recorded,
+    };
+    if let Some(base) = baseline.as_ref() {
+        let diffs = compare_records(base, &record);
+        print_comparison(base, &diffs);
+    }
+    append_history(&options.record_path, &record)?;
+    println!("已追加基准记录：{}", options.record_path.display());
+
     println!();
     println!(
         "{}",
@@ -335,6 +481,20 @@ pub fn bench(runs: usize) -> Result<bool, String> {
         }
     );
     Ok(ok)
+}
+
+/// 返回当前工作区的 git 短提交哈希，不可用时返回 `"unknown"`。
+fn git_short_head() -> String {
+    Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(root())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 fn report(name: &str, value: f64, budget: f64, unit: &str) -> bool {

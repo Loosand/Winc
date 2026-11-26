@@ -24,13 +24,14 @@ pub fn samples() -> std::io::Result<()> {
     let dir = samples_dir();
     std::fs::create_dir_all(&dir)?;
 
-    let jobs: [(&str, Writer); 6] = [
+    let jobs: [(&str, Writer); 7] = [
         ("medium.rs", |p| write_source(p, 24_000)),
         ("large.rs", |p| write_source(p, 100_000)),
         ("huge.txt", |p| write_huge(p, 100)),
         ("huge.rs", |p| write_source(p, 4_000_000)),
         ("minified.js", |p| write_minified(p, 5)),
         ("long.md", |p| write_markdown(p, 600)),
+        ("extreme.md", write_extreme_markdown),
     ];
 
     for (name, write) in jobs {
@@ -178,6 +179,68 @@ fn write_markdown(path: &Path, sections: usize) -> std::io::Result<()> {
             )?,
         }
     }
+    out.flush()
+}
+
+/// 写一篇极端边界测试用的 Markdown 样本：覆盖超长段落、12 列×120 行宽大表格、12 层深嵌套
+/// 引用与列表以及密集行内/块级数学公式。
+fn write_extreme_markdown(path: &Path) -> std::io::Result<()> {
+    let mut out = BufWriter::with_capacity(1 << 20, File::create(path)?);
+    writeln!(out, "# 极端边界测试样本\n")?;
+
+    // 1. 超长单段（含中英混排、行内代码、强调与链接，约 20 KB）。
+    writeln!(out, "## 1. 超长段落\n")?;
+    for i in 0..240 {
+        write!(
+            out,
+            "第{i}句含**粗体**、*斜体*、`code_{i}`与[链接](https://example.com/e/{i})，\
+             用于检验长段折行与光标几何稳定性；"
+        )?;
+    }
+    writeln!(out, "\n")?;
+
+    // 2. 宽大表格（12 列 × 120 行）。
+    writeln!(out, "## 2. 宽大表格\n")?;
+    for col in 0..12 {
+        write!(out, "| 列{col} ")?;
+    }
+    writeln!(out, "|")?;
+    for col in 0..12 {
+        write!(out, "| {} ", if col % 2 == 0 { "---" } else { "---:" })?;
+    }
+    writeln!(out, "|")?;
+    for row in 0..120 {
+        for col in 0..12 {
+            write!(out, "| R{row}C{col} **值{}** ", row * 12 + col)?;
+        }
+        writeln!(out, "|")?;
+    }
+    writeln!(out)?;
+
+    // 3. 深层嵌套引用与列表（12 层）。
+    writeln!(out, "## 3. 深层嵌套\n")?;
+    for depth in 1..=12 {
+        writeln!(out, "{} 第 {depth} 层引用嵌套内容", ">".repeat(depth))?;
+    }
+    writeln!(out)?;
+    for depth in 0..12 {
+        writeln!(out, "{}- 第 {} 层列表嵌套项", "  ".repeat(depth), depth + 1)?;
+    }
+    writeln!(out)?;
+
+    // 4. 密集行内与块级公式（40 组）。
+    writeln!(out, "## 4. 密集数学公式\n")?;
+    for i in 1..=40 {
+        writeln!(
+            out,
+            "行内公式 $f_{{{i}}}(x) = \\frac{{x^{{{i}}} + 1}}{{x^2 + {i}}}$ 与极限 $\\lim_{{n \\to \\infty}} a_n$。\n"
+        )?;
+        writeln!(
+            out,
+            "$$\n\\sum_{{k=1}}^{{{i}}} \\frac{{1}}{{k^2}} = \\int_0^1 \\frac{{\\ln(1+t)}}{{t}}\\,dt\n$$\n"
+        )?;
+    }
+
     out.flush()
 }
 
