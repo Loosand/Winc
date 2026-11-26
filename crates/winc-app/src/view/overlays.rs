@@ -13,6 +13,7 @@ use crate::app::{
 };
 use crate::icons::Direction;
 use crate::layout::{PickerParts, SearchButton};
+use crate::ui::{self, CardFrame, TextBasis};
 
 /// 绘制查找条（⌘F、⌥⌘F）：浮在编辑区右上角，内含查找输入框，展开后含替换输入框。
 pub(super) fn draw_search(app: &mut App, frame: &mut Frame<'_>) {
@@ -224,7 +225,6 @@ pub(super) fn draw_goto(app: &mut App, frame: &mut Frame<'_>) {
         let app = &*app;
         let p = app.palette;
         let bar = app.prompt_bar();
-        draw_card(frame, p, bar, RADIUS_BAR, p.popup_bg);
 
         // 跳转到行、储藏说明，或者输入新标签的名字。
         let (title, placeholder, hint) = match &app.bars.prompt_kind {
@@ -271,13 +271,51 @@ pub(super) fn draw_goto(app: &mut App, frame: &mut Frame<'_>) {
         // 右侧的说明最多占一半宽度，保证输入框留有空间。
         let (size, max) = (app.fonts.ui_small, bar.w / 2.0);
         let hint = super::ellipsize(frame, &hint, size, max).into_owned();
-        let hint_x = bar.right() - 14.0 - frame.measure(FontKind::Ui, app.fonts.ui_small, &hint);
-        ui_text_small(frame, app, hint_x, bar, &hint, p.text_dim, bar);
-
-        let start = ui_text(frame, app, bar.x + 14.0, bar, title, p.text_muted, bar) + 10.0;
-        let area = Rect::new(start, bar.y, (hint_x - 10.0 - start).max(0.0), bar.h);
         let focused = app.focus == Focus::Prompt;
-        draw_bar_field(app, frame, area, &mut field, placeholder, focused)
+        let mut caret = None;
+        let field_slot: ui::Node<'_, ()> = ui::custom_measured(
+            |_, _, _| (0.0, bar.h),
+            |frame, area, _| {
+                caret = draw_bar_field(app, frame, area, &mut field, placeholder, focused);
+            },
+        )
+        .flex_1()
+        .h_full();
+        let mut row = ui::hstack()
+            .w(bar.w)
+            .h(bar.h)
+            .px(14.0)
+            .gap(10.0)
+            .items_center()
+            .bg(p.popup_bg)
+            .rounded(RADIUS_BAR)
+            .card_frame(CardFrame {
+                shadow: p.shadow,
+                border_base: p.popup_bg,
+                border: p.popup_border,
+            })
+            .child(
+                ui::text(title)
+                    .text_size(app.fonts.ui)
+                    .color(p.text_muted)
+                    .flex_shrink(0.0),
+            )
+            .child(field_slot);
+        if !hint.is_empty() {
+            row = row.child(
+                ui::text(hint)
+                    .text_size(app.fonts.ui_small)
+                    .color(p.text_dim)
+                    .flex_shrink(0.0),
+            );
+        }
+        let basis = TextBasis {
+            ui_size: app.fonts.ui,
+            x_height: app.metrics.ui.x_height,
+            cap_height: app.metrics.ui.cap_height,
+        };
+        ui::render(frame, basis, bar, row);
+        caret
     };
 
     app.bars.goto_input = Some(field);
@@ -1067,43 +1105,67 @@ pub(super) fn draw_conflict(
     let width = NOTICE_TEXT_X + text_w + 16.0 + buttons_w + 8.0;
     let top = app.overlay_top() + NOTICE_MARGIN;
     let card = Rect::new(area.right() - NOTICE_MARGIN - width, top, width, 36.0);
+    let icon_cy = text_icon_center_y(app, card, font, &message);
+    let basis = TextBasis {
+        ui_size: app.fonts.ui,
+        x_height: app.metrics.ui.x_height,
+        cap_height: app.metrics.ui.cap_height,
+    };
 
-    draw_card(frame, p, card, RADIUS_BAR, p.popup_bg);
-    let icon = (
-        card.x + NOTICE_ICON_X,
-        text_icon_center_y(app, card, font, &message),
-    );
-    icons::warning(frame, icon, p.warning, card);
-    ui_text(
-        frame,
-        app,
-        card.x + NOTICE_TEXT_X,
-        card,
-        &message,
-        p.text,
-        card,
-    );
-
-    let mut x = card.right() - 8.0 - buttons_w;
-    let y = card.y + (card.h - BUTTON_SMALL) / 2.0;
-    let mut buttons = Vec::new();
-    for (&action, w) in ConflictAction::ALL.iter().zip(labels) {
-        let button = Rect::new(x, y, w, BUTTON_SMALL);
+    let button_nodes = ConflictAction::ALL.iter().map(|&action| {
         let hovered = app.pointer.hover == Hover::ConflictButton(action);
-        draw_button(frame, p, button, card, hovered, false);
-        ui_text(
-            frame,
-            app,
-            button.x + 8.0,
-            button,
-            action.label(),
-            p.accent,
-            card,
+        let mut button = ui::hstack()
+            .h(BUTTON_SMALL)
+            .px(8.0)
+            .items_center()
+            .rounded(RADIUS_ROW)
+            .hit(action)
+            .child(
+                ui::text(action.label())
+                    .text_size(font)
+                    .color(p.accent)
+                    .flex_shrink(0.0),
+            );
+        if hovered {
+            button = button.bg(p.hover);
+        }
+        button
+    });
+
+    let tree = ui::hstack()
+        .w(card.w)
+        .h(card.h)
+        .pr(8.0)
+        .items_center()
+        .bg(p.popup_bg)
+        .rounded(RADIUS_BAR)
+        .card_frame(CardFrame {
+            shadow: p.shadow,
+            border_base: p.popup_bg,
+            border: p.popup_border,
+        })
+        .child(ui::custom(
+            (NOTICE_TEXT_X, card.h),
+            move |frame, slot, clip| {
+                icons::warning(frame, (slot.x + NOTICE_ICON_X, icon_cy), p.warning, clip);
+            },
+        ))
+        .child(
+            ui::text(message)
+                .text_size(font)
+                .color(p.text)
+                .flex_shrink(0.0),
+        )
+        .child(ui::spacer())
+        .child(
+            ui::hstack()
+                .gap(BUTTON_GAP)
+                .items_center()
+                .flex_shrink(0.0)
+                .children(button_nodes),
         );
-        buttons.push((button, action));
-        x += w + BUTTON_GAP;
-    }
-    Some((card, buttons))
+    let hits = ui::render(frame, basis, card, tree);
+    Some((card, hits.into_entries()))
 }
 
 /// 绘制到期后正在原地淡出的提示条。
@@ -1158,40 +1220,61 @@ fn draw_notice(
     let rect = Rect::new(x, (top + dy).round(), width, 36.0);
 
     // 浮层统一用白底卡片，只用图标的颜色区分提示的种类，不整块铺底色。
-    draw_card(frame, p, rect, RADIUS_BAR, p.popup_bg);
     let size = app.fonts.ui;
-    let icon = (
-        rect.x + NOTICE_ICON_X,
-        text_icon_center_y(app, rect, size, &message),
-    );
-    match mark {
-        None => icons::refresh_turned(frame, icon, icons::spin_turn(), p.text_muted, rect),
-        Some(NoticeKind::Info) => icons::info(frame, icon, p.accent, rect),
-        Some(NoticeKind::Done) => icons::done(frame, icon, p.git_added, rect),
-        Some(NoticeKind::Warning) => icons::warning(frame, icon, p.warning, rect),
-        Some(NoticeKind::Error) => icons::error(frame, icon, p.error, rect),
-    }
-    ui_text(
-        frame,
-        app,
-        rect.x + NOTICE_TEXT_X,
-        rect,
-        &message,
-        p.text,
-        rect,
-    );
-
-    let Some(label) = label else {
-        return (rect, None);
+    let icon_cy = text_icon_center_y(app, rect, size, &message);
+    let basis = TextBasis {
+        ui_size: app.fonts.ui,
+        x_height: app.metrics.ui.x_height,
+        cap_height: app.metrics.ui.cap_height,
     };
-    let button = Rect::new(
-        rect.right() - 8.0 - (button_w - 8.0),
-        rect.y + (rect.h - BUTTON_SMALL) / 2.0,
-        button_w - 8.0,
-        BUTTON_SMALL,
-    );
-    let hovered = app.pointer.hover == Hover::NoticeButton;
-    draw_button(frame, p, button, rect, hovered, false);
-    ui_text(frame, app, button.x + 8.0, button, label, p.accent, rect);
-    (rect, Some(button))
+    let icon_slot = ui::custom((NOTICE_TEXT_X, rect.h), move |frame, slot, clip| {
+        let icon = (slot.x + NOTICE_ICON_X, icon_cy);
+        match mark {
+            None => icons::refresh_turned(frame, icon, icons::spin_turn(), p.text_muted, clip),
+            Some(NoticeKind::Info) => icons::info(frame, icon, p.accent, clip),
+            Some(NoticeKind::Done) => icons::done(frame, icon, p.git_added, clip),
+            Some(NoticeKind::Warning) => icons::warning(frame, icon, p.warning, clip),
+            Some(NoticeKind::Error) => icons::error(frame, icon, p.error, clip),
+        }
+    });
+    let mut tree = ui::hstack()
+        .w(rect.w)
+        .h(rect.h)
+        .items_center()
+        .bg(p.popup_bg)
+        .rounded(RADIUS_BAR)
+        .card_frame(CardFrame {
+            shadow: p.shadow,
+            border_base: p.popup_bg,
+            border: p.popup_border,
+        })
+        .child(icon_slot)
+        .child(
+            ui::text(message.into_owned())
+                .text_size(size)
+                .color(p.text)
+                .flex_shrink(0.0),
+        );
+    if let Some(label) = label {
+        let mut button = ui::hstack()
+            .h(BUTTON_SMALL)
+            .px(8.0)
+            .mr(8.0)
+            .items_center()
+            .rounded(RADIUS_ROW)
+            .flex_shrink(0.0)
+            .hit(())
+            .child(
+                ui::text(label)
+                    .text_size(size)
+                    .color(p.accent)
+                    .flex_shrink(0.0),
+            );
+        if app.pointer.hover == Hover::NoticeButton {
+            button = button.bg(p.hover);
+        }
+        tree = tree.child(ui::spacer()).child(button);
+    }
+    let hits = ui::render(frame, basis, rect, tree);
+    (rect, hits.rect_of(&()))
 }

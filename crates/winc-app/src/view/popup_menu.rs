@@ -5,6 +5,7 @@
 use super::*;
 use crate::app::{CHECK_COLUMN, ICON_COLUMN, MenuIcon, POPUP_PAD, PopupLevel, PopupRow};
 use crate::icons::Direction;
+use crate::ui::{self, CardFrame, Node, TextBasis};
 
 /// 一行的高度（逻辑像素）。
 pub(super) const ROW: f32 = 24.0;
@@ -188,7 +189,7 @@ fn checked_offset(rows: &[PopupRow]) -> Option<f32> {
     None
 }
 
-/// 绘制一级菜单：卡片、各行的悬停底色、勾、文字、快捷键和子菜单箭头。
+/// 使用 [`crate::ui`] 声明式布局绘制一级菜单：卡片、可见行切片、悬停底色、勾、文字、快捷键和子菜单箭头。
 fn draw_level(
     app: &App,
     frame: &mut Frame<'_>,
@@ -198,35 +199,95 @@ fn draw_level(
 ) {
     let p = app.palette;
     let card = level.rect;
-    draw_card(frame, p, card, RADIUS_POPUP, p.popup_bg);
     let clip = card.inset(0.0, POPUP_PAD);
     let icons = icon_column(&level.rows);
-    for (i, (row, rect)) in level.rows.iter().zip(&level.row_rects).enumerate() {
-        if rect.bottom() < clip.y || rect.y > clip.bottom() {
-            continue;
-        }
+    let (size, small) = (app.fonts.ui, app.fonts.ui_small);
+    let basis = TextBasis {
+        ui_size: size,
+        x_height: app.metrics.ui.x_height,
+        cap_height: app.metrics.ui.cap_height,
+    };
+
+    let visible: Vec<usize> = level
+        .row_rects
+        .iter()
+        .enumerate()
+        .filter_map(|(i, rect)| (rect.bottom() >= clip.y && rect.y <= clip.bottom()).then_some(i))
+        .collect();
+    let top_scroll = visible
+        .first()
+        .map_or(0.0, |&first| clip.y - level.row_rects[first].y);
+
+    let mut row_nodes: Vec<Node<'_, ()>> = Vec::with_capacity(visible.len());
+    for i in visible {
+        let row = &level.rows[i];
+        let row_h = level.row_rects[i].h;
         let (title, subtitle, icon, checked, enabled, key, submenu) = match row {
             PopupRow::Heading(label) => {
-                ui_text_small(
-                    frame,
-                    app,
-                    rect.x + WORKSPACE_INSET,
-                    *rect,
-                    label,
-                    p.text_dim,
-                    clip,
+                row_nodes.push(
+                    ui::hstack()
+                        .w_full()
+                        .h(row_h)
+                        .flex_shrink(0.0)
+                        .pl(WORKSPACE_INSET)
+                        .items_center()
+                        .child(
+                            ui::text(label.as_str())
+                                .text_size(small)
+                                .color(p.text_dim)
+                                .flex_shrink(0.0),
+                        ),
                 );
                 continue;
             }
             PopupRow::Separator => {
-                let y = (rect.y + rect.h / 2.0).round();
-                let line = Rect::new(
-                    rect.x + ROW_INSET + 6.0,
-                    y,
-                    rect.w - 2.0 * ROW_INSET - 12.0,
-                    1.0,
+                row_nodes.push(
+                    ui::box_()
+                        .w_full()
+                        .h(row_h)
+                        .flex_shrink(0.0)
+                        .px(ROW_INSET + 6.0)
+                        .justify_center()
+                        .child(ui::divider(p.separator)),
                 );
-                frame.rect_clipped(line, p.separator, 0.0, clip);
+                continue;
+            }
+            PopupRow::Query(query) => {
+                // 键入的文字：搜索图标放在打勾的一列，文字与各行的名称对齐，下面一条分隔线。
+                let search_slot = ui::custom(
+                    (CHECK_COLUMN + icons, ROW.min(row_h - 1.0).max(0.0)),
+                    move |frame, slot, clip| {
+                        let cy = icon_center_y(app, slot, size);
+                        icons::search(frame, (slot.x + 13.0, cy), 0.75, p.text_muted, clip);
+                    },
+                );
+                row_nodes.push(
+                    ui::vstack()
+                        .w_full()
+                        .h(row_h)
+                        .flex_shrink(0.0)
+                        .child(
+                            ui::hstack()
+                                .w_full()
+                                .flex_1()
+                                .items_center()
+                                .child(search_slot)
+                                .child(
+                                    ui::text(query.as_str())
+                                        .text_size(size)
+                                        .color(p.text)
+                                        .flex_shrink(0.0),
+                                ),
+                        )
+                        .child(
+                            ui::box_()
+                                .w_full()
+                                .h(1.0)
+                                .px(ROW_INSET + 6.0)
+                                .flex_shrink(0.0)
+                                .child(ui::divider(p.separator)),
+                        ),
+                );
                 continue;
             }
             PopupRow::Item {
@@ -262,29 +323,9 @@ fn draw_level(
                 };
                 (name.as_str(), None, Some(icon), *checked, true, "", *dir)
             }
-            // 键入的文字：搜索图标放在打勾的一列，文字与各行的名称对齐，下面一条分隔线。
-            PopupRow::Query(query) => {
-                let title_row = Rect::new(rect.x, rect.y, rect.w, ROW);
-                let cy = icon_center_y(app, title_row, app.fonts.ui);
-                icons::search(frame, (rect.x + 13.0, cy), 0.75, p.text_muted, clip);
-                let text_x = rect.x + CHECK_COLUMN + icons;
-                ui_text(frame, app, text_x, title_row, query, p.text, clip);
-                let line = Rect::new(
-                    rect.x + ROW_INSET + 6.0,
-                    rect.bottom() - 1.0,
-                    rect.w - 2.0 * ROW_INSET - 12.0,
-                    1.0,
-                );
-                frame.rect_clipped(line, p.separator, 0.0, clip);
-                continue;
-            }
         };
+
         let hovered = level.hover == Some(i);
-        if hovered {
-            let band = rect.inset(ROW_INSET, 1.0);
-            let fill = if workspace { p.hover } else { p.accent_fill };
-            frame.rect_clipped(band, fill, RADIUS_ROW, clip);
-        }
         let current_path = matches!(icon, Some(MenuIcon::NotebookFolder { current: true }));
         let (ink, dim) = if hovered && !workspace {
             band_ink(p)
@@ -295,94 +336,191 @@ fn draw_level(
         } else {
             (p.text_dim, p.text_dim)
         };
-        let title_row = Rect::new(
-            rect.x,
-            rect.y,
-            rect.w,
-            if workspace { WORKSPACE_ROW } else { ROW },
-        );
-        if checked {
-            let cy = icon_center_y(app, title_row, app.fonts.ui);
-            icons::check(frame, (rect.x + 13.0, cy), 9.0, ink, clip);
-        }
+        let title_h = if workspace { WORKSPACE_ROW } else { ROW };
         let leading_icon = icon.filter(|icon| *icon != MenuIcon::ICloud);
-        if let Some(icon) = leading_icon {
-            let (w, h) = icon.size();
-            let cy = icon_center_y(app, title_row, app.fonts.ui);
-            let x = if workspace {
-                WORKSPACE_INSET
-            } else {
-                CHECK_COLUMN + (ICON_COLUMN - 6.0 - w) / 2.0
-            };
-            let at = (rect.x + x, cy - h / 2.0);
-            if icon == MenuIcon::Typora
-                && let Some(pixels) = app_icon
-            {
-                frame.pixels_scaled(
-                    Rect::new(at.0, at.1, w, h),
-                    pixels.width,
-                    pixels.height,
-                    &pixels.rgba,
-                    clip,
-                );
-            } else {
-                app.draw_menu_icon(frame, icon, at, clip);
-            }
-        }
-        let text_x = rect.x
-            + if workspace {
-                WORKSPACE_INSET
-                    + if leading_icon.is_some() {
-                        ICON_COLUMN
-                    } else {
-                        0.0
-                    }
-            } else {
-                CHECK_COLUMN + icons
-            };
-        let right = rect.right()
-            - if workspace {
-                WORKSPACE_INSET
-            } else {
-                RIGHT_PAD
-            };
-        let mut room = right - text_x;
+        let lead_w = if workspace {
+            WORKSPACE_INSET
+                + if leading_icon.is_some() {
+                    ICON_COLUMN
+                } else {
+                    0.0
+                }
+        } else {
+            CHECK_COLUMN + icons
+        };
+        let right_pad = if workspace {
+            WORKSPACE_INSET
+        } else {
+            RIGHT_PAD
+        };
+        let mut room = card.w - lead_w - right_pad;
         if !key.is_empty() {
-            let w = frame.measure(FontKind::Ui, app.fonts.ui_small, key);
-            ui_text_small(frame, app, right - w, title_row, key, dim, clip);
+            let w = frame.measure(FontKind::Ui, small, key);
             room -= w + KEY_GAP / 2.0;
         }
         if submenu {
-            let cy = icon_center_y(app, title_row, app.fonts.ui);
-            icons::chevron(frame, (right - 3.0, cy), 6.0, Direction::Right, dim, clip);
             room -= KEY_GAP / 2.0;
         }
-        if icon == Some(MenuIcon::ICloud) {
-            let provider = "iCloud";
-            let width = frame.measure(FontKind::Ui, app.fonts.ui, provider);
-            let at = right - width - 18.0;
-            let cy = icon_center_y(app, title_row, app.fonts.ui);
-            app.draw_menu_icon(frame, MenuIcon::ICloud, (at - 18.0, cy - 6.0), clip);
-            ui_text(frame, app, at, title_row, provider, p.text_muted, clip);
-            let x = right - 2.0;
-            let strokes = [
-                winc_render::Stroke::Line(x - 5.0, cy + 2.5, x, cy - 2.5),
-                winc_render::Stroke::Line(x - 5.0, cy - 2.5, x, cy - 2.5),
-                winc_render::Stroke::Line(x, cy - 2.5, x, cy + 2.5),
-            ];
-            frame.stroke(&strokes, 1.1, p.text_dim, clip);
-            room = (at - text_x - 24.0).max(0.0);
-        }
-        let title = if workspace {
-            truncate_end(frame, title, app.fonts.ui, room.max(0.0))
+        let icloud_w = if icon == Some(MenuIcon::ICloud) {
+            let width = frame.measure(FontKind::Ui, size, "iCloud");
+            room = (card.w - right_pad - width - 18.0 - lead_w - 24.0).max(0.0);
+            Some(width)
         } else {
-            ellipsize(frame, title, app.fonts.ui, room.max(0.0))
+            None
         };
-        ui_text(frame, app, text_x, title_row, &title, ink, clip);
-        if let Some(subtitle) = subtitle {
-            let line = Rect::new(rect.x, rect.y + ROW - 6.0, rect.w, ROW - 4.0);
-            let subtitle = ellipsize(frame, subtitle, app.fonts.ui_small, room.max(0.0));
-            ui_text_small(frame, app, text_x, line, &subtitle, dim, clip);
+        let shown_title = if workspace {
+            truncate_end(frame, title, size, room.max(0.0)).into_owned()
+        } else {
+            ellipsize(frame, title, size, room.max(0.0)).into_owned()
+        };
+        let shown_subtitle =
+            subtitle.map(|sub| ellipsize(frame, sub, small, room.max(0.0)).into_owned());
+
+        let band_title_h = (title_h - 2.0).max(0.0);
+        let lead_slot = ui::custom(
+            ((lead_w - ROW_INSET).max(0.0), band_title_h),
+            move |frame, slot, clip| {
+                let row_ref = Rect::new(slot.x - ROW_INSET, slot.y - 1.0, slot.w, title_h);
+                let cy = icon_center_y(app, row_ref, size);
+                if checked {
+                    icons::check(frame, (row_ref.x + 13.0, cy), 9.0, ink, clip);
+                }
+                if let Some(icon) = leading_icon {
+                    let (w, h) = icon.size();
+                    let x = if workspace {
+                        WORKSPACE_INSET
+                    } else {
+                        CHECK_COLUMN + (ICON_COLUMN - 6.0 - w) / 2.0
+                    };
+                    let at = (row_ref.x + x, cy - h / 2.0);
+                    if icon == MenuIcon::Typora
+                        && let Some(pixels) = app_icon
+                    {
+                        frame.pixels_scaled(
+                            Rect::new(at.0, at.1, w, h),
+                            pixels.width,
+                            pixels.height,
+                            &pixels.rgba,
+                            clip,
+                        );
+                    } else {
+                        app.draw_menu_icon(frame, icon, at, clip);
+                    }
+                }
+            },
+        );
+
+        let text_col = if let Some(shown_subtitle) = shown_subtitle {
+            ui::vstack()
+                .flex_1()
+                .h_full()
+                .justify_center()
+                .child(
+                    ui::hstack().w_full().h(ROW - 6.0).items_center().child(
+                        ui::text(shown_title)
+                            .text_size(size)
+                            .color(ink)
+                            .flex_shrink(0.0),
+                    ),
+                )
+                .child(
+                    ui::hstack().w_full().h(ROW - 8.0).items_center().child(
+                        ui::text(shown_subtitle)
+                            .text_size(small)
+                            .color(dim)
+                            .flex_shrink(0.0),
+                    ),
+                )
+        } else {
+            ui::hstack().flex_1().h_full().items_center().child(
+                ui::text(shown_title)
+                    .text_size(size)
+                    .color(ink)
+                    .flex_shrink(0.0),
+            )
+        };
+
+        let mut band = ui::hstack()
+            .w_full()
+            .h_full()
+            .pr((right_pad - ROW_INSET).max(0.0))
+            .rounded(RADIUS_ROW)
+            .child(lead_slot)
+            .child(text_col);
+        if hovered {
+            band = band.bg(if workspace { p.hover } else { p.accent_fill });
         }
+        if !key.is_empty() {
+            band = band.child(
+                ui::hstack()
+                    .h(band_title_h)
+                    .items_center()
+                    .flex_shrink(0.0)
+                    .child(ui::text(key).text_size(small).color(dim).flex_shrink(0.0)),
+            );
+        }
+        if submenu {
+            band = band.child(ui::custom((8.0, band_title_h), move |frame, slot, clip| {
+                let row_ref = Rect::new(slot.x, slot.y - 1.0, slot.w, title_h);
+                let cy = icon_center_y(app, row_ref, size);
+                icons::chevron(
+                    frame,
+                    (slot.right() - 3.0, cy),
+                    6.0,
+                    Direction::Right,
+                    dim,
+                    clip,
+                );
+            }));
+        }
+        if let Some(provider_w) = icloud_w {
+            band = band.child(ui::custom(
+                (provider_w + 36.0, band_title_h),
+                move |frame, slot, clip| {
+                    let row_ref = Rect::new(slot.x, slot.y - 1.0, slot.w, title_h);
+                    let at = slot.right() - provider_w - 18.0;
+                    let cy = icon_center_y(app, row_ref, size);
+                    app.draw_menu_icon(frame, MenuIcon::ICloud, (at - 18.0, cy - 6.0), clip);
+                    ui_text(frame, app, at, row_ref, "iCloud", p.text_muted, clip);
+                    let x = slot.right() - 2.0;
+                    let strokes = [
+                        winc_render::Stroke::Line(x - 5.0, cy + 2.5, x, cy - 2.5),
+                        winc_render::Stroke::Line(x - 5.0, cy - 2.5, x, cy - 2.5),
+                        winc_render::Stroke::Line(x, cy - 2.5, x, cy + 2.5),
+                    ];
+                    frame.stroke(&strokes, 1.1, p.text_dim, clip);
+                },
+            ));
+        }
+
+        row_nodes.push(
+            ui::box_()
+                .w_full()
+                .h(row_h)
+                .flex_shrink(0.0)
+                .px(ROW_INSET)
+                .py(1.0)
+                .child(band),
+        );
     }
+
+    let tree = ui::vstack()
+        .w(card.w)
+        .h(card.h)
+        .py(POPUP_PAD)
+        .bg(p.popup_bg)
+        .rounded(RADIUS_POPUP)
+        .card_frame(CardFrame {
+            shadow: p.shadow,
+            border_base: p.popup_bg,
+            border: p.popup_border,
+        })
+        .child(
+            ui::vstack()
+                .w_full()
+                .flex_1()
+                .scroll_y(top_scroll)
+                .children(row_nodes),
+        );
+    ui::render(frame, basis, card, tree);
 }
