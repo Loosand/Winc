@@ -704,10 +704,10 @@ impl App {
         // 切换标签的路径很多，个别没经过 `activate_tab` 的也在绘制之前开始读（见
         // `Document::pending`）。
         self.load_active_in_background();
-        // 当前标签已读好但尚未拿到首次 Markdown 解析结果时，立即同步解析（常规文档）或发起后台解析；
-        // 若进入后台解析，下方的 `holding_frame` 会继续保留上一帧，避免切页闪出一帧空白。
-        self.prepare_markdown_after_switch(None);
-        // 当前标签在读或等待首次 Markdown 解析：先不画，屏幕上留着上一帧，就绪或到时再画
+        // 当前标签已读好但尚未拿到首次预览结果时，立即同步解析（常规文档）或发起后台任务；
+        // 若进入后台加载，下方的 `holding_frame` 会继续保留上一帧，避免切页闪出一帧空白。
+        self.prepare_previews_after_switch(None);
+        // 当前标签在读或等待首次预览就绪：先不画，屏幕上留着上一帧，就绪或到时再画
         // （见 `App::holding_frame`）。
         if self.holding_frame(Instant::now()).is_some() {
             self.disk.loads.held = true;

@@ -157,11 +157,11 @@ impl App {
             .retain(|(id, _)| editor.index_of(*id).is_some());
     }
 
-    /// 当前标签刚读取完成：重新布局、衔接首次 Markdown 解析、提示只读的原因、保证光标可见并请求重绘。
+    /// 当前标签刚读取完成：重新布局、衔接各类预览首次解析、提示只读的原因、保证光标可见并请求重绘。
     fn loaded_active(&mut self, load_since: Option<Instant>) {
         self.caches.sticky_cache = None;
         self.relayout();
-        self.prepare_markdown_after_switch(load_since);
+        self.prepare_previews_after_switch(load_since);
         self.announce_readonly();
         self.ensure_caret_visible();
         self.request_redraw();
@@ -269,7 +269,8 @@ impl App {
         Some(now + PROGRESS_STEP)
     }
 
-    /// 当前标签正在读取或等待首次 Markdown 解析、且尚未到 [`HOLD`] 时，返回可以跳过绘制的截止时刻。
+    /// 当前标签正在读取或等待首次预览（Markdown / JSON / 表格 / 图片 / PDF）就绪、
+    /// 且尚未到 [`HOLD`] 时，返回可以跳过绘制的截止时刻。
     pub(in crate::app) fn holding_frame(&self, now: Instant) -> Option<Instant> {
         let active = self.editor.active()?;
         if let Some((id, since)) = self.disk.loads.since
@@ -281,7 +282,13 @@ impl App {
                 return Some(until);
             }
         }
-        if let Some(since) = self.markdown_holding_first_parse(active.id) {
+        let preview_since = self
+            .markdown_holding_first_parse(active.id)
+            .or_else(|| self.json_holding_first_parse(active.id))
+            .or_else(|| self.table_holding_first_load(active.id))
+            .or_else(|| self.picture_holding_first_load(active.id))
+            .or_else(|| self.pdf_holding_first_open(active.id));
+        if let Some(since) = preview_since {
             let until = since + HOLD;
             if now < until {
                 return Some(until);

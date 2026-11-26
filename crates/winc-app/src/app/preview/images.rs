@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 use std::sync::{Arc, mpsc};
+use std::time::Instant;
 
 use winc_config::State;
 use winc_editor::{DocumentId, Editor, PictureState, PreviewKind, PreviewMode};
@@ -32,6 +33,8 @@ pub(crate) struct ImageJobs {
     receiver: mpsc::Receiver<Done>,
     /// 已提交后台、尚未返回的加载任务，键为（文档，文档版本号）。
     pending: HashSet<(DocumentId, u64)>,
+    /// 首次提交图片/SVG 后台解码的时刻，供 [`App::holding_frame`] 避免切页闪白。
+    pub(crate) first_load_since: Option<(DocumentId, Instant)>,
     rendered_sender: mpsc::Sender<Rendered>,
     rendered: mpsc::Receiver<Rendered>,
     /// 正在后台绘制的 SVG；完成前不提交新的绘制（见 [`App::render_picture`]）。
@@ -99,6 +102,7 @@ impl Default for ImageJobs {
             sender,
             receiver,
             pending: HashSet::new(),
+            first_load_since: None,
             rendered_sender,
             rendered,
             drawing: None,
@@ -135,6 +139,26 @@ impl App {
         self.advance_previews();
     }
 
+    /// 切换标签、读盘完成或切预览模式后，立即推进各类预览的首次解析/加载，避免先闪出一帧空白。
+    pub(in crate::app) fn prepare_previews_after_switch(&mut self, hold_since: Option<Instant>) {
+        if self.settings.standalone || self.settings.open || self.library_shown() {
+            return;
+        }
+        if self.editor.active().is_none_or(|d| d.is_pending()) {
+            return;
+        }
+        while let Ok(done) = self.preview.images.receiver.try_recv() {
+            self.accept_image(done);
+        }
+        self.prepare_markdown_after_switch(hold_since);
+        self.advance_json_with_since(hold_since);
+        self.poll_tables();
+        self.advance_tables_with_since(hold_since);
+        self.poll_pdf();
+        self.advance_pdf_with_since(hold_since);
+        self.advance_picture_load_with_since(hold_since);
+    }
+
     /// 推进当前标签的各种预览：收下后台完成的结果，提交落后的解析、读取和绘制任务。
     ///
     /// 拆分后画其他窗格之前也调用：每个窗格有自己的预览状态。
@@ -147,6 +171,10 @@ impl App {
         self.advance_pdf();
         self.advance_picture_view();
         self.advance_tables();
+        self.advance_picture_load_with_since(None);
+    }
+
+    fn advance_picture_load_with_since(&mut self, hold_since: Option<Instant>) {
         let Some(doc) = self.editor.active() else {
             return;
         };
@@ -177,6 +205,15 @@ impl App {
             Box::new(move || image::load(&path))
         };
         self.preview.images.pending.insert(key);
+        if self
+            .preview
+            .images
+            .first_load_since
+            .is_none_or(|(id, _)| id != key.0)
+        {
+            self.preview.images.first_load_since =
+                Some((key.0, hold_since.unwrap_or_else(Instant::now)));
+        }
         let (sender, proxy) = (self.preview.images.sender.clone(), self.link.proxy.clone());
         winc_editor::background::spawn(move || {
             let result = job();
@@ -186,6 +223,19 @@ impl App {
                 let _ = proxy.send_event(UserEvent::ImageReady);
             }
         });
+    }
+
+    /// 当前文档正在等待首次图片/SVG 解码完成时，返回开始等待的时刻（供 [`App::holding_frame`] 使用）。
+    pub(in crate::app) fn picture_holding_first_load(&self, id: DocumentId) -> Option<Instant> {
+        if self.settings.standalone || self.settings.open || self.library_shown() {
+            return None;
+        }
+        let doc = self.editor.active().filter(|d| d.id == id)?;
+        if !matches!(doc.picture, Some(PictureState::Loading)) {
+            return None;
+        }
+        let (doc_id, since) = self.preview.images.first_load_since?;
+        (doc_id == id && self.preview.images.pending.contains(&(id, doc.revision))).then_some(since)
     }
 
     /// 当前标签分栏预览、右边的图落后于文字时，在后台解析最新的文字（没保存的修改也算）。
@@ -380,6 +430,14 @@ impl App {
 
     fn accept_image(&mut self, (id, revision, result): Done) {
         self.preview.images.pending.remove(&(id, revision));
+        if self
+            .preview
+            .images
+            .first_load_since
+            .is_some_and(|(doc_id, _)| doc_id == id)
+        {
+            self.preview.images.first_load_since = None;
+        }
         if let Some(index) = self.editor.index_of(id)
             && self.editor.documents[index].set_picture(revision, result)
         {

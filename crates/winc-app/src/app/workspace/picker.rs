@@ -584,7 +584,11 @@ impl App {
         }
         // 浏览远端目录时提前读取选中的子目录。
         self.prefetch_remote_listing();
-        self.request_redraw();
+        if !self.picker_lists_symbols() && self.picker_backdrop_eligible() {
+            self.request_overlay_redraw();
+        } else {
+            self.request_redraw();
+        }
     }
 
     /// 滚动结果列表，使选中项进入可见范围。
@@ -726,6 +730,29 @@ impl App {
             });
         }
     }
+
+    /// `⌘P`、笔记库搜索或属性弹层稳定打开、且下方主区不会随面板交互变化时返回 `true`，
+    /// 允许复用底层静态主区快照（[`FrameState::backdrop`]），仅重绘浮层卡片本身。
+    pub(crate) fn picker_backdrop_eligible(&self) -> bool {
+        let p = &self.overlays.picker;
+        p.open
+            && p.places.is_none()
+            && p.symbols.is_none()
+            && p.card.motion.is_none()
+            && p.places_out.is_none()
+            && self.bars.goto_input.is_none()
+            && self.overlays.form_dialog.is_none()
+            && self.overlays.alert.is_none()
+            && self.popup().is_none()
+            && !self.settings.open
+            && self.settings.motion.is_none()
+            && self.notice.text.is_none()
+            && self.notice.leaving.is_none()
+            && self.jumps.name_hint.is_none()
+            && self.hits.conflict_card.is_none()
+            && self.hits.merge_card.is_none()
+            && !self.dragging()
+    }
 }
 
 /// 返回快速打开卡片（或位置浮窗）中结果列表可显示区域的高度（逻辑像素）。
@@ -770,6 +797,7 @@ pub struct Picker {
     /// 快速打开面板中的查询输入。
     pub(crate) input: TextField,
     pub(crate) notebook: Option<super::note_search::NoteSearch>,
+    pub(crate) notebook_cache: super::note_search::CachedNoteIndex,
     pub(crate) property: Option<PropertyPopup>,
     /// 当前查询命中的文件索引下标。
     pub(crate) hits: Vec<usize>,
@@ -836,6 +864,7 @@ impl Default for Picker {
             doc: None,
             input: TextField::default(),
             notebook: None,
+            notebook_cache: Default::default(),
             property: None,
             hits: Vec::new(),
             selected: 0,

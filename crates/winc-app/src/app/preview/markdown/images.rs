@@ -1,6 +1,35 @@
 //! Markdown 预览中的图片：后台读取与解码、按显示大小绘制，以及释放屏幕之外的图片数据。
 
+use std::collections::VecDeque;
+
 use super::*;
+
+/// 切换文档时最多保留的本地图片缓存数量与渲染像素总字节上限。
+const RECENT_IMAGE_SLOTS: usize = 12;
+const RECENT_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+
+struct CachedImage {
+    path: PathBuf,
+    url: String,
+    width: u32,
+    height: u32,
+    density: u32,
+    pixels: Vec<Arc<Pixels>>,
+    bytes: usize,
+}
+
+impl CachedImage {
+    fn to_slot(&self) -> ImageSlot {
+        ImageSlot::Ready {
+            width: self.width,
+            height: self.height,
+            density: self.density,
+            picture: None,
+            pixels: self.pixels.clone(),
+            drawing: Vec::new(),
+        }
+    }
+}
 
 /// Markdown 预览的图片缓存池：统一管理图片槽位、原始地址、内嵌媒体和失效版本。
 #[derive(Default)]
@@ -13,23 +42,125 @@ pub(crate) struct ImagePool {
     embedded: HashMap<PathBuf, Arc<[u8]>>,
     /// 刚读取完成（或读取失败）的图片：只重排用到这些图片的块，无需整份重排。
     loaded: Vec<PathBuf>,
+    /// 最近访问文档中已按显示尺寸渲染好的本地图片，用于文档来回切换时首帧直接复用。
+    recent: VecDeque<CachedImage>,
+    /// `recent` 中已渲染像素的总字节数。
+    recent_bytes: usize,
     /// 图片全部作废的计数：联网设置改变或切换文档时递增，触发整份重排。
     version: u64,
 }
 
 impl ImagePool {
-    /// 丢弃已读取的图片并递增版本号（联网设置改变或切换文档时调用）。
+    /// 丢弃已读取的图片并递增版本号（联网设置改变或完全清理缓存时调用）。
     pub(crate) fn forget(&mut self) {
         self.slots.clear();
         self.urls.clear();
+        self.recent.clear();
+        self.recent_bytes = 0;
         self.version += 1;
     }
 
-    /// 切换文档时释放全部图片缓存、内嵌媒体与待刷新队列。
-    pub(super) fn reset(&mut self) {
-        self.forget();
+    /// 切换文档时保留有界数量的最近本地渲染图片供切回时首帧复用，释放内嵌媒体与待刷新队列。
+    pub(super) fn reset(&mut self, seed_recent: bool) {
+        for (path, slot) in self.slots.drain() {
+            if self.embedded.contains_key(&path)
+                || self.urls.get(&path).is_some_and(|u| u.contains("://"))
+            {
+                continue;
+            }
+            let ImageSlot::Ready {
+                width,
+                height,
+                density,
+                pixels,
+                drawing,
+                ..
+            } = slot
+            else {
+                continue;
+            };
+            if !drawing.is_empty() {
+                continue;
+            }
+            let existing = self.recent.iter().position(|c| c.path == path);
+            if pixels.is_empty() && existing.is_some() {
+                // 上一个文档没用到这张图时 `release_unused` 会清空其像素，保留 `recent` 里已有的渲染像素。
+                continue;
+            }
+            let url = self.urls.get(&path).cloned().unwrap_or_default();
+            let bytes: usize = pixels.iter().map(|p| p.rgba.len()).sum();
+            if bytes > RECENT_IMAGE_BYTES {
+                continue;
+            }
+            if let Some(pos) = existing
+                && let Some(old) = self.recent.remove(pos)
+            {
+                self.recent_bytes = self.recent_bytes.saturating_sub(old.bytes);
+            }
+            self.recent_bytes += bytes;
+            self.recent.push_front(CachedImage {
+                path,
+                url,
+                width,
+                height,
+                density,
+                pixels,
+                bytes,
+            });
+            while self.recent.len() > RECENT_IMAGE_SLOTS || self.recent_bytes > RECENT_IMAGE_BYTES {
+                if let Some(evicted) = self.recent.pop_back() {
+                    self.recent_bytes = self.recent_bytes.saturating_sub(evicted.bytes);
+                } else {
+                    break;
+                }
+            }
+        }
+        self.urls.clear();
         self.embedded.clear();
         self.loaded.clear();
+        self.version += 1;
+        if seed_recent {
+            for cached in &self.recent {
+                self.slots.insert(cached.path.clone(), cached.to_slot());
+                self.urls.insert(cached.path.clone(), cached.url.clone());
+            }
+        }
+    }
+
+    /// 磁盘上的图片文件发生变化时淘汰对应缓存，避免展示旧像素。
+    pub(crate) fn evict_paths(&mut self, rescan: bool, paths: &[PathBuf]) {
+        let mut removed = false;
+        if rescan {
+            if !self.recent.is_empty() {
+                self.recent.clear();
+                self.recent_bytes = 0;
+                removed = true;
+            }
+            let embedded = &self.embedded;
+            let urls = &self.urls;
+            let before = self.slots.len();
+            self.slots.retain(|path, _| {
+                embedded.contains_key(path)
+                    || urls.get(path).is_some_and(|u| u.contains("://"))
+            });
+            removed |= self.slots.len() != before;
+        } else {
+            for path in paths {
+                if let Some(pos) = self.recent.iter().position(|c| &c.path == path)
+                    && let Some(old) = self.recent.remove(pos)
+                {
+                    self.recent_bytes = self.recent_bytes.saturating_sub(old.bytes);
+                    removed = true;
+                }
+                if !self.embedded.contains_key(path) && self.slots.remove(path).is_some() {
+                    self.urls.remove(path);
+                    removed = true;
+                }
+            }
+        }
+        if removed {
+            self.version += 1;
+        }
     }
 
     /// 用转换结果里的内嵌媒体替换当前内嵌图片集合。

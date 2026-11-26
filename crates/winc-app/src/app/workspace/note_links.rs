@@ -62,6 +62,10 @@ pub(crate) struct Index {
 }
 
 impl Index {
+    pub(crate) fn has_note(&self, path: &Path) -> bool {
+        self.notes.contains_key(path)
+    }
+
     #[cfg(test)]
     pub(crate) fn backlinks(&self, path: &Path) -> Option<&Backlinks> {
         self.incoming.get(path)
@@ -309,6 +313,33 @@ pub(crate) struct State {
 }
 
 impl App {
+    /// 笔记库链接索引已就绪时，用内存表快速确认库内 `.md` 路径存在，避免首帧绘制时主线程同步 `stat`。
+    /// 索引中未命中、索引尚未就绪或路径不在索引覆盖范围内时返回 `None`，由调用方回退到文件系统检查，
+    /// 保证新建文件尚未完成增量扫描时不会误报断链。
+    pub(crate) fn indexed_note_exists(&self, target: &Path) -> Option<bool> {
+        let root = self.library_root()?;
+        if self.note_links.root.as_deref() != Some(root)
+            || self.note_links.response.is_some()
+            || self.note_links.queued.is_some()
+        {
+            return None;
+        }
+        let index = self.note_links.index.as_ref()?;
+        let normalized = normalize(target)?;
+        let rel = normalized.strip_prefix(root).ok()?;
+        if rel
+            .components()
+            .any(|part| part.as_os_str().to_string_lossy().starts_with('.'))
+        {
+            return None;
+        }
+        let is_md = normalized
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+        (is_md && index.has_note(&normalized)).then_some(true)
+    }
+
     pub(crate) fn ensure_note_links(&mut self) {
         let Some(root) = self.library_root() else {
             return;

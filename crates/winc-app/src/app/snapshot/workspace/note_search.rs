@@ -92,3 +92,51 @@ fn notebook_search_dialog_matches_titles_and_body_and_preview_does_not_open_a_re
     );
     let _ = std::fs::remove_dir_all(root.parent().unwrap());
 }
+
+#[test]
+fn notebook_search_reuses_cached_index_and_backdrop_while_typing_and_moving() {
+    let (mut app, root) = note_app("minc-search-cache-backdrop");
+    paint(&mut app);
+
+    // 首次打开完成索引并写入缓存；关闭后再次打开直接复用内存索引，不再闪空/重扫磁盘。
+    app.open_notebook_search();
+    paint(&mut app);
+    assert_eq!(app.overlays.picker.hits.len(), 2);
+    app.close_picker();
+    paint(&mut app);
+
+    app.open_notebook_search();
+    assert!(
+        !app.overlays.picker.notebook.as_ref().unwrap().loading(),
+        "缓存命中时不应重新触发后台全库扫描"
+    );
+    assert_eq!(app.overlays.picker.hits.len(), 2);
+
+    // 首帧捕获底层主区静态快照，之后打字筛选和上下移动选区均直接复用底图快照。
+    paint(&mut app);
+    assert!(app.frame.backdrop.is_valid());
+    let reuses_before = app.frame.backdrop.reuses();
+    app.edit_field(|f| f.insert("薄荷"));
+    paint(&mut app);
+    assert!(
+        app.frame.backdrop.reuses() > reuses_before,
+        "笔记库搜索输入筛选应命中 backdrop 底图快照复用"
+    );
+    let reuses_after_type = app.frame.backdrop.reuses();
+    app.picker_move(true);
+    paint(&mut app);
+    assert!(
+        app.frame.backdrop.reuses() > reuses_after_type,
+        "笔记库搜索上下移动选区应命中 backdrop 底图快照复用"
+    );
+
+    // 磁盘新增笔记并通知变更后，下次打开会刷新索引并能搜到新笔记。
+    app.close_picker();
+    let oolong = root.join("乌龙.md");
+    std::fs::write(&oolong, "# 乌龙\n\n清香乌龙茶。\n").unwrap();
+    app.notebook_search_changed(false, std::slice::from_ref(&oolong));
+    app.open_notebook_search();
+    assert_eq!(app.overlays.picker.hits.len(), 3);
+
+    let _ = std::fs::remove_dir_all(root.parent().unwrap());
+}

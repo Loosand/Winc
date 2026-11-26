@@ -923,6 +923,7 @@ impl App {
                     .and_then(|relative| relative.components().next())
                     .map(|first| entry.dir.join(first));
                 self.picker_touched(top.into_iter().collect());
+                self.notebook_search_changed(false, std::slice::from_ref(&path));
             }
             Err(e) => {
                 entry.error = Some(e.to_string());

@@ -306,3 +306,157 @@ fn large_markdown_holds_previous_frame_across_first_async_parse() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn writing_mode_preserves_scroll_property_fold_and_recent_images_across_note_switches() {
+    use crate::app::preview::markdown::ImageSlot;
+    use winc_editor::{PreviewKind, PreviewMode};
+
+    // 1x1 合法 PNG，用于验证本地插图在切走再切回后首帧直接复用。
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
+        0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99, 0x3D, 0x1D, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    let dir = sample_folder("loading-md-preserve-state");
+    let pic = dir.join("pic.png");
+    std::fs::write(&pic, PNG_1X1).unwrap();
+    let note_a = dir.join("a.md");
+    let note_b = dir.join("b.md");
+    let mut body_a = String::from("---\ncreated: 2026-11-15\nwhy: 保留状态\n---\n\n");
+    for i in 0..5 {
+        body_a.push_str(&format!("## 前文 {i}\n\n一段用于把图片放在滚后视口内的正文。\n\n"));
+    }
+    body_a.push_str("![图](pic.png)\n\n");
+    for i in 0..35 {
+        body_a.push_str(&format!("## 节 {i}\n\n一段足够长以产生滚动距离的测试正文。\n\n"));
+    }
+    std::fs::write(&note_a, &body_a).unwrap();
+    std::fs::write(&note_b, "---\ncreated: 2026-11-16\n---\n\n第二篇笔记。\n").unwrap();
+
+    let mut app = app_with(&note_a, false);
+    app.editor
+        .set_preview_default(PreviewKind::Markdown, PreviewMode::Preview);
+    app.set_preview_mode(PreviewMode::Preview);
+    for _ in 0..3 {
+        app.wait_for_markdown();
+        paint(&mut app);
+    }
+
+    // 滚动到图片所在视口并折叠属性面板，再模拟写作模式关闭旧文档并切去另一篇笔记。
+    app.preview.markdown.scroll_to(180.0);
+    app.toggle_property_panel();
+    for _ in 0..3 {
+        app.wait_for_markdown();
+        paint(&mut app);
+    }
+    let canon_pic = winc_config::files::canonicalize(&pic).unwrap();
+    assert!(matches!(
+        app.preview.markdown.images.get(&canon_pic),
+        Some(ImageSlot::Ready { pixels, .. }) if !pixels.is_empty()
+    ));
+    let old_a_id = app.editor.active().unwrap().id;
+    assert!(app.preview.markdown.property_collapsed.contains(&old_a_id));
+
+    app.close_documents(&[old_a_id]);
+    app.open_path(&note_b);
+    app.wait_for_markdown();
+    paint(&mut app);
+    let b_id = app.editor.active().unwrap().id;
+
+    // 切回 a.md（分配了全新的 DocumentId）：滚动位置、属性折叠态与本地图片均首帧保留。
+    app.close_documents(&[b_id]);
+    app.open_path(&note_a);
+    let new_a_id = app.editor.active().unwrap().id;
+    assert_ne!(new_a_id, old_a_id);
+    assert!((app.preview.markdown.scroll() - 180.0).abs() < 1.0);
+    assert!(app.preview.markdown.property_collapsed.contains(&new_a_id));
+    assert!(matches!(
+        app.preview.markdown.images.get(&canon_pic),
+        Some(ImageSlot::Ready { pixels, .. }) if !pixels.is_empty()
+    ));
+    assert!(!app.preview.markdown.is_busy());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn json_and_csv_parse_inline_for_small_files_and_hold_frame_for_large_files() {
+    use winc_editor::{PreviewKind, PreviewMode, TableState};
+
+    let dir = sample_folder("loading-other-previews");
+    let small_json = dir.join("small.json");
+    let big_json = dir.join("big.json");
+    let small_csv = dir.join("small.csv");
+    std::fs::write(&small_json, r#"{"name":"minc","items":[1,2,3]}"#).unwrap();
+    let mut big = String::from("{\"rows\":[");
+    for i in 0..2500 {
+        if i > 0 {
+            big.push(',');
+        }
+        big.push_str(&format!("{{\"id\":{i},\"label\":\"item-{i:04}-padding\"}}"));
+    }
+    big.push_str("]}");
+    assert!(big.len() > crate::app::preview::json::INLINE_FIRST_JSON_BYTES);
+    std::fs::write(&big_json, &big).unwrap();
+    std::fs::write(&small_csv, "name,score\nalice,95\nbob,88\n").unwrap();
+
+    let mut app = app_with(&dir, false);
+    app.editor
+        .set_preview_default(PreviewKind::Json, PreviewMode::Preview);
+    app.editor
+        .set_preview_default(PreviewKind::Table, PreviewMode::Preview);
+
+    // 小 JSON：读盘完成后首帧直接同步解析，不闪“正在加载…”。
+    let load = open_unloaded(&mut app, &small_json);
+    deliver(&mut app, load);
+    assert!(app.preview.json.graph.is_some());
+    assert!(app.holding_frame(Instant::now()).is_none());
+
+    // 大 JSON：读盘完成后转后台解析，并沿用读盘起点继续保留上一帧。
+    let load = open_unloaded(&mut app, &big_json);
+    let big_id = load.0;
+    let t0 = Instant::now() - Duration::from_millis(20);
+    app.disk.loads.since = Some((big_id, t0));
+    deliver(&mut app, load);
+    assert!(app.preview.json.graph.is_none());
+    assert_eq!(app.preview.json.first_parse_since, Some((big_id, t0)));
+    assert!(app.holding_frame(t0 + Duration::from_millis(50)).is_some());
+    assert!(app.holding_frame(t0 + Duration::from_millis(120)).is_none());
+
+    // 小 CSV：读盘完成后首帧直接同步建表，不闪空白。
+    let load = open_unloaded(&mut app, &small_csv);
+    deliver(&mut app, load);
+    assert!(matches!(
+        app.editor
+            .active()
+            .and_then(|d| d.table.as_deref())
+            .map(|v| &v.state),
+        Some(TableState::Ready(_))
+    ));
+    assert!(app.holding_frame(Instant::now()).is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn indexed_note_exists_resolves_in_library_markdown_without_disk_stat() {
+    let dir = sample_folder("loading-indexed-links");
+    let root = winc_config::files::canonicalize(&dir).unwrap();
+    std::fs::write(root.join("a.md"), "# A\n\n[B](b.md)\n").unwrap();
+    std::fs::write(root.join("b.md"), "# B\n").unwrap();
+
+    let mut app = app_with(&root.join("a.md"), false);
+    app.ensure_note_links();
+    app.poll_note_links();
+    assert_eq!(app.indexed_note_exists(&root.join("b.md")), Some(true));
+    // 未在索引中命中的路径、非 .md 附件与隐藏目录回退给文件系统确认，避免新文件误报断链。
+    assert_eq!(app.indexed_note_exists(&root.join("missing.md")), None);
+    assert_eq!(app.indexed_note_exists(&root.join("pic.png")), None);
+    assert_eq!(app.indexed_note_exists(&root.join(".hidden/x.md")), None);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

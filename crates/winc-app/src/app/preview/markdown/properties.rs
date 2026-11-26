@@ -290,12 +290,26 @@ impl App {
     }
 
     pub(in crate::app) fn toggle_property_panel(&mut self) {
-        let Some(id) = self.editor.active().map(|doc| doc.id) else {
+        let Some((id, path)) = self
+            .editor
+            .active()
+            .map(|doc| (doc.id, doc.path.clone()))
+        else {
             return;
         };
-        let collapsed = &mut self.preview.markdown.property_collapsed;
-        if !collapsed.remove(&id) {
-            collapsed.insert(id);
+        let md = &mut self.preview.markdown;
+        let collapsed = if md.property_collapsed.remove(&id) {
+            false
+        } else {
+            md.property_collapsed.insert(id);
+            true
+        };
+        if let Some(path) = path {
+            if collapsed {
+                md.path_property_collapsed.insert(path);
+            } else {
+                md.path_property_collapsed.remove(&path);
+            }
         }
         self.invalidate_property_panel();
     }

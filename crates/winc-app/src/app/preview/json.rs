@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::sync::mpsc;
+use std::time::Instant;
 
 use winc_editor::{DocumentId, PreviewKind, PreviewMode};
 use winc_render::Rect;
@@ -15,6 +16,8 @@ pub(crate) use layout::{Layout, ROW_H};
 
 const MIN_ZOOM: f32 = 0.005;
 const MAX_ZOOM: f32 = 2.5;
+/// 首次切换到 JSON 预览时，在界面线程上直接同步解析的体积上限（字节）。
+pub(crate) const INLINE_FIRST_JSON_BYTES: usize = 64 * 1024;
 
 /// 结构图内的点击目标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +48,7 @@ pub(crate) struct JsonView {
     doc: Option<DocumentId>,
     checked: Option<Key>,
     pending: Option<Key>,
+    pub(crate) first_parse_since: Option<(DocumentId, Instant)>,
     sender: mpsc::Sender<Done>,
     receiver: mpsc::Receiver<Done>,
     pub(crate) graph: Option<Graph>,
@@ -77,6 +81,7 @@ impl Default for JsonView {
             doc: None,
             checked: None,
             pending: None,
+            first_parse_since: None,
             sender,
             receiver,
             graph: None,
@@ -98,6 +103,7 @@ impl JsonView {
         if self.doc != doc {
             self.doc = doc;
             self.checked = None;
+            self.first_parse_since = None;
             self.graph = None;
             self.error = None;
             self.collapsed.clear();
@@ -119,6 +125,9 @@ impl JsonView {
             return false;
         }
         self.checked = Some(key);
+        if self.first_parse_since.is_some_and(|(id, _)| id == key.0) {
+            self.first_parse_since = None;
+        }
         match result {
             Ok(graph) => {
                 self.graph = Some(graph);
@@ -236,6 +245,10 @@ impl App {
     }
 
     pub(super) fn advance_json(&mut self) {
+        self.advance_json_with_since(None);
+    }
+
+    pub(super) fn advance_json_with_since(&mut self, hold_since: Option<Instant>) {
         let current = self.json_key();
         let doc = current.map(|(id, _)| id);
         if doc != self.preview.json.doc && matches!(self.pointer.drag, Drag::Json { .. }) {
@@ -255,8 +268,22 @@ impl App {
             view.accept(current, (key, Err(Error::Limit)));
             return;
         }
+        if view.graph.is_none()
+            && view.error.is_none()
+            && rope.len_bytes() <= INLINE_FIRST_JSON_BYTES
+        {
+            let result = json::parse(&rope.to_string());
+            view.accept(current, (key, result));
+            return;
+        }
         let (rope, sender, proxy) = (rope.clone(), view.sender.clone(), self.link.proxy.clone());
         view.pending = Some(key);
+        if view.graph.is_none()
+            && view.error.is_none()
+            && view.first_parse_since.is_none_or(|(s, _)| s != key.0)
+        {
+            view.first_parse_since = Some((key.0, hold_since.unwrap_or_else(Instant::now)));
+        }
         winc_editor::background::spawn(move || {
             let result = json::parse(&rope.to_string());
             if sender.send((key, result)).is_ok()
@@ -265,6 +292,22 @@ impl App {
                 let _ = proxy.send_event(UserEvent::ImageReady);
             }
         });
+    }
+
+    /// 当前文档正在等待首次 JSON 结构图解析时，返回开始等待的时刻（供 [`App::holding_frame`] 使用）。
+    pub(in crate::app) fn json_holding_first_parse(&self, id: DocumentId) -> Option<Instant> {
+        if self.settings.standalone || self.settings.open || self.library_shown() {
+            return None;
+        }
+        self.json_area()?;
+        let view = &self.preview.json;
+        let (doc, since) = view.first_parse_since?;
+        (doc == id
+            && view.doc == Some(id)
+            && view.graph.is_none()
+            && view.error.is_none()
+            && view.pending.is_some())
+        .then_some(since)
     }
 
     pub(super) fn poll_json(&mut self) {

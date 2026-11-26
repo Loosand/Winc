@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 use std::io::Read as _;
 use std::path::Path;
+use std::sync::Arc;
 
 use super::*;
 use crate::layout::PickerParts;
@@ -36,8 +37,15 @@ pub(crate) enum Purpose {
     FollowLink(Option<String>),
 }
 
+#[derive(Default)]
+pub(crate) struct CachedNoteIndex {
+    root: Option<PathBuf>,
+    index: Option<Arc<NoteIndex>>,
+    dirty: bool,
+}
+
 pub(crate) struct NoteSearch {
-    pub(crate) index: NoteIndex,
+    pub(crate) index: Arc<NoteIndex>,
     response: Option<mpsc::Receiver<NoteIndex>>,
     pub(crate) titles_only: bool,
     pub(crate) purpose: Purpose,
@@ -150,22 +158,59 @@ pub(crate) fn preview_rect(card: Rect, parts: PickerParts) -> Rect {
 }
 
 impl App {
+    pub(in crate::app) fn notebook_search_changed(&mut self, rescan: bool, paths: &[PathBuf]) {
+        let Some(root) = self.library_root().map(Path::to_path_buf) else {
+            return;
+        };
+        let cache = &mut self.overlays.picker.notebook_cache;
+        if cache.root.as_deref() != Some(root.as_path()) || cache.index.is_none() {
+            return;
+        }
+        if rescan
+            || paths.iter().any(|path| {
+                path.strip_prefix(&root).is_ok_and(|rel| {
+                    rel.components()
+                        .all(|part| !part.as_os_str().to_string_lossy().starts_with('.'))
+                })
+            })
+        {
+            cache.dirty = true;
+        }
+    }
+
     pub(in crate::app) fn open_notebook_search(&mut self) {
         let Some(root) = self.library_root().map(Path::to_path_buf) else {
             return;
         };
-        let (send, receive) = mpsc::channel();
+        let (cached, needs_scan) = {
+            let cache = &self.overlays.picker.notebook_cache;
+            if cache.root.as_deref() == Some(root.as_path())
+                && let Some(index) = cache.index.clone()
+            {
+                (index, cache.dirty)
+            } else {
+                (Arc::new(NoteIndex::default()), true)
+            }
+        };
+        let (send, receive) = if needs_scan {
+            let (send, receive) = mpsc::channel();
+            (Some(send), Some(receive))
+        } else {
+            (None, None)
+        };
         self.open_picker_mode(Some(NoteSearch {
-            index: NoteIndex::default(),
-            response: Some(receive),
+            index: cached,
+            response: receive,
             titles_only: false,
             purpose: Purpose::Open,
             preview: true,
             keyboard_mouse: self.pointer.mouse,
         }));
-        self.spawn_then(UserEvent::NotebookSearchScanned, move || {
-            let _ = send.send(index_notes(&root));
-        });
+        if let Some(send) = send {
+            self.spawn_then(UserEvent::NotebookSearchScanned, move || {
+                let _ = send.send(index_notes(&root));
+            });
+        }
     }
 
     pub(in crate::app) fn choose_wiki_note(&mut self, paths: &[PathBuf], anchor: Option<String>) {
@@ -201,10 +246,10 @@ impl App {
             })
             .collect();
         self.open_picker_mode(Some(NoteSearch {
-            index: NoteIndex {
+            index: Arc::new(NoteIndex {
                 notes,
                 limited: false,
-            },
+            }),
             response: None,
             titles_only: true,
             purpose,
@@ -214,17 +259,31 @@ impl App {
     }
 
     pub(in crate::app) fn poll_notebook_search(&mut self) {
-        let Some(search) = self.overlays.picker.notebook.as_mut() else {
+        let received = self
+            .overlays
+            .picker
+            .notebook
+            .as_mut()
+            .and_then(|search| search.response.as_ref()?.try_recv().ok());
+        let Some(index) = received else {
             return;
         };
-        if let Some(index) = search
-            .response
-            .as_ref()
-            .and_then(|result| result.try_recv().ok())
-        {
+        let index = Arc::new(index);
+        if let Some(root) = self.library_root().map(Path::to_path_buf) {
+            self.overlays.picker.notebook_cache = CachedNoteIndex {
+                root: Some(root),
+                index: Some(Arc::clone(&index)),
+                dirty: false,
+            };
+        }
+        if let Some(search) = self.overlays.picker.notebook.as_mut() {
             search.index = index;
             search.response = None;
-            self.picker_refresh();
+        }
+        self.picker_refresh();
+        if self.picker_backdrop_eligible() {
+            self.request_overlay_redraw();
+        } else {
             self.request_redraw();
         }
     }

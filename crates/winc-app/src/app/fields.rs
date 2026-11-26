@@ -83,7 +83,13 @@ impl App {
         }
 
         self.reset_blink();
-        self.request_redraw();
+        if (self.focus == Focus::Dialog && self.overlays.form_dialog.is_some())
+            || (self.focus == Focus::Picker && self.picker_backdrop_eligible())
+        {
+            self.request_overlay_redraw();
+        } else {
+            self.request_redraw();
+        }
     }
 
     /// 复制输入框中选中的文字；`cut` 为 `true` 时同时删除选中的文字。

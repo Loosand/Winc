@@ -313,7 +313,8 @@ impl App {
         let settings = self.settings.open;
         let modal = self.overlays.form_dialog.is_some()
             || self.overlays.alert.is_some()
-            || self.popup().is_some();
+            || self.popup().is_some()
+            || self.overlays.picker.notebook.is_some();
         let hovered = ScrollArea::ALL.into_iter().find(|&area| {
             if modal || settings != (area == ScrollArea::Settings) {
                 return false;

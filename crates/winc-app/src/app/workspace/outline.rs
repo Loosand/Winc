@@ -534,14 +534,19 @@ impl App {
             return;
         };
         let language = doc.highlighter.language();
-        let Some(proxy) = self.link.proxy.clone() else {
+        // 64 KB 以内的常见文档符号提取在 0.2 ms 内完成，直接同步更新，使侧栏大纲与正文同帧切换。
+        const INLINE_OUTLINE_BYTES: usize = 64 * 1024;
+        if self.link.proxy.is_none() || rope.len_bytes() <= INLINE_OUTLINE_BYTES {
             let items = symbols::symbols(&rope, language);
             self.apply_outline(Some(id), items, None);
             return;
+        }
+        let Some(proxy) = self.link.proxy.clone() else {
+            return;
         };
-        // `Rope` 的克隆只复制根节点的引用，代价与文件长度无关。
+        // `Rope` 的克隆只复制根节点的引用，代价与文件长度无关；大文件复用公共后台线程池。
         let (sender, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
+        winc_editor::background::spawn(move || {
             let items = symbols::symbols(&rope, language);
             let _ = sender.send((id, revision, items));
             let _ = proxy.send_event(UserEvent::Outline);

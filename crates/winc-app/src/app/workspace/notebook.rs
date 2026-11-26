@@ -318,6 +318,7 @@ impl App {
             .filter(|path| self.note_in_library(path))
         {
             self.note_links_changed(false, std::slice::from_ref(&path));
+            self.notebook_search_changed(false, std::slice::from_ref(&path));
         }
     }
 }

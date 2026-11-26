@@ -774,7 +774,13 @@ impl App {
 
             if visible != self.blink.visible {
                 self.blink.visible = visible;
-                self.request_redraw();
+                if (self.focus == Focus::Dialog && self.overlays.form_dialog.is_some())
+                    || (self.focus == Focus::Picker && self.picker_backdrop_eligible())
+                {
+                    self.request_overlay_redraw();
+                } else {
+                    self.request_redraw();
+                }
             }
 
             earliest(

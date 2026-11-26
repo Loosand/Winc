@@ -1178,10 +1178,22 @@ impl App {
         if hover != self.pointer.hover {
             self.leave_tooltip();
         }
+        let picker_only = |h: Hover| matches!(h, Hover::None | Hover::PickerRow(_) | Hover::PickerPart(_));
+        let overlay_only = self.picker_backdrop_eligible()
+            && picker_only(hover)
+            && picker_only(self.pointer.hover)
+            && !hover.has_tooltip()
+            && !self.pointer.hover.has_tooltip()
+            && !toc(hover)
+            && !toc(self.pointer.hover);
         self.pointer.hover = hover;
         self.overlays.tooltip.since = hover.has_tooltip().then(Instant::now);
         self.overlays.tooltip.shown = false;
-        self.request_redraw();
+        if overlay_only {
+            self.request_overlay_redraw();
+        } else {
+            self.request_redraw();
+        }
     }
 
     /// 结束所有进行中的拖动。

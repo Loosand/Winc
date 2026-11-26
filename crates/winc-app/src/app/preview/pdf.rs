@@ -12,6 +12,7 @@ use crate::app::ScrollTarget;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
+use std::time::Instant;
 
 use winc_editor::{DocumentId, Unsupported};
 use winc_preview::image::Pixels;
@@ -155,6 +156,8 @@ pub(crate) struct PdfPreview {
     receiver: mpsc::Receiver<Done>,
     /// 打开的结果：各页大小（点），或失败的原因；尚未打开完时为 `None`。
     pub pages: Option<Result<Arc<[PageSize]>, String>>,
+    /// 首次打开 PDF 的起始时刻，供 [`App::holding_frame`] 在首页尺寸就绪前保留上一帧。
+    pub(crate) first_open_since: Option<(DocumentId, Instant)>,
     /// 目录（书签），在侧栏的大纲里列出；尚未读完时为 `None`，读完没有目录时为空。
     pub outline: Option<Arc<[OutlineItem]>>,
     /// 渲染好的页：页号到位图，只保留当前需要的页。
@@ -206,6 +209,7 @@ impl Default for PdfPreview {
             sender,
             receiver,
             pages: None,
+            first_open_since: None,
             outline: None,
             rendered: HashMap::new(),
             failed: HashMap::new(),
@@ -254,6 +258,7 @@ impl PdfPreview {
             wanted.clear();
         }
         self.pages = None;
+        self.first_open_since = None;
         self.outline = None;
         self.rendered.clear();
         self.failed.clear();
@@ -340,6 +345,10 @@ impl App {
     ///
     /// 每次绘制前调用。
     pub(crate) fn advance_pdf(&mut self) {
+        self.advance_pdf_with_since(None);
+    }
+
+    pub(super) fn advance_pdf_with_since(&mut self, hold_since: Option<Instant>) {
         let active = self
             .editor
             .active()
@@ -368,6 +377,7 @@ impl App {
         pdf.restore = saved;
         pdf.path = Some(path.clone());
         pdf.doc = Some((id, revision));
+        pdf.first_open_since = Some((id, hold_since.unwrap_or_else(Instant::now)));
         if scroll.is_none() {
             self.reveal_pdf_tools();
         }
@@ -447,8 +457,27 @@ impl App {
             });
         if spawned.is_err() {
             pdf.requests = None;
+            pdf.first_open_since = None;
             pdf.pages = Some(Err(winc_i18n::t!("preview-pdf-render-failed").to_owned()));
         }
+    }
+
+    /// 当前文档正在等待首次打开 PDF 获取各页尺寸时，返回开始等待的时刻（供 [`App::holding_frame`] 使用）。
+    pub(in crate::app) fn pdf_holding_first_open(&self, id: DocumentId) -> Option<Instant> {
+        if self.settings.standalone || self.settings.open || self.library_shown() {
+            return None;
+        }
+        let doc = self
+            .editor
+            .active()
+            .filter(|d| d.id == id && d.unsupported == Some(Unsupported::Pdf))?;
+        let pdf = &self.preview.pdf;
+        let (doc_id, since) = pdf.first_open_since?;
+        (doc_id == id
+            && pdf.doc == Some((id, doc.revision))
+            && pdf.pages.is_none()
+            && pdf.requests.is_some())
+        .then_some(since)
     }
 
     /// 返回目录的现场中记录的、文件 `path` 的阅读位置。
@@ -492,6 +521,7 @@ impl App {
             let pdf = &mut self.preview.pdf;
             match done {
                 Done::Opened(generation, opened) if generation == pdf.generation => {
+                    pdf.first_open_since = None;
                     pdf.pages = Some(opened.map(Arc::from));
                     if pdf.pages.as_ref().is_some_and(Result::is_err) {
                         pdf.requests = None;

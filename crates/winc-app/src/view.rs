@@ -148,6 +148,7 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
         && app.motion.alert_card.motion.is_none()
         && app.notice.leaving.is_none()
         && !app.animating();
+    let picker_static = app.picker_backdrop_eligible() && !app.animating();
     if modal_static
         && app
             .frame
@@ -165,7 +166,28 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
         }
         return;
     }
-    if !dialog_open && !alert_open && !popup_open {
+    if picker_static
+        && app
+            .frame
+            .backdrop
+            .restore(frame, frame.bounds(), &(), Color::hex(0).alpha(0.0))
+    {
+        frame.end_wallpaper();
+        app.hits.picker_parts.clear();
+        if app.overlays.picker.property.is_some() {
+            app.follow_property_picker();
+            draw_picker(app, frame);
+        } else {
+            if app.overlays.picker.notebook.is_some() {
+                workspace::note_search::draw_scrim(app, frame);
+            }
+            let rect = app.layout.picker;
+            draw_moving_card(app, frame, Card::Picker, rect, draw_picker);
+        }
+        app.overlays.tooltip.link.take();
+        return;
+    }
+    if !dialog_open && !alert_open && !popup_open && !picker_static {
         app.frame.backdrop.clear();
     }
     app.hits.clear();
@@ -252,6 +274,9 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
     if bar_open {
         let rect = app.prompt_bar();
         draw_moving_card(app, frame, Card::Bar, rect, draw_goto);
+    }
+    if picker_static {
+        app.frame.backdrop.capture(frame, frame.bounds(), ());
     }
     if picker_open {
         if app.overlays.picker.notebook.is_some() {

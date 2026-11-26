@@ -4,14 +4,18 @@
 
 use std::collections::HashSet;
 use std::sync::mpsc;
+use std::time::Instant;
 
-use winc_editor::DocumentId;
+use winc_editor::{DocumentId, TableState};
 use winc_preview::table::{self, Area, Table};
 use winc_render::Rect;
 use winit::keyboard::{Key, NamedKey};
 
 use crate::app::{App, Drag, Focus, UserEvent};
 use crate::layout::{hscrollbar_thumb, scroll_for_thumb, scrollbar_thumb};
+
+/// 首次切换到 CSV/TSV 表格预览时，在界面线程上直接同步解析的体积上限（字节）。
+pub(crate) const INLINE_FIRST_TABLE_BYTES: usize = 64 * 1024;
 
 /// 后台读好的表格：文档、读取依据的文档版本号、读取结果。
 type Done = (DocumentId, u64, Result<Table, String>);
@@ -22,6 +26,8 @@ pub(crate) struct TableJobs {
     receiver: mpsc::Receiver<Done>,
     /// 已提交后台、尚未返回的任务，键为（文档，文档版本号）。
     pending: HashSet<(DocumentId, u64)>,
+    /// 首次在后台读取表格的起点时刻，供 [`App::holding_frame`] 避免切页闪白。
+    pub(crate) first_load_since: Option<(DocumentId, Instant)>,
 }
 
 impl Default for TableJobs {
@@ -31,6 +37,7 @@ impl Default for TableJobs {
             sender,
             receiver,
             pending: HashSet::new(),
+            first_load_since: None,
         }
     }
 }
@@ -42,6 +49,10 @@ impl App {
     /// 的文件。同一文档同时只读一版：打字快过读取时，上一版回来以后直接读最新的，中间的版本
     /// 跳过。
     pub(crate) fn advance_tables(&mut self) {
+        self.advance_tables_with_since(None);
+    }
+
+    pub(super) fn advance_tables_with_since(&mut self, hold_since: Option<Instant>) {
         let Some(doc) = self.editor.active() else {
             return;
         };
@@ -56,6 +67,35 @@ impl App {
             .iter()
             .any(|&(id, _)| id == key.0)
         {
+            return;
+        }
+        let initial_loading = matches!(
+            doc.table.as_deref().map(|v| &v.state),
+            Some(TableState::Loading)
+        );
+        if doc.unsupported.is_none()
+            && initial_loading
+            && let Some(rope) = doc.text().rope()
+            && rope.len_bytes() <= INLINE_FIRST_TABLE_BYTES
+        {
+            let tabs = doc.highlighter.language().id == "tsv";
+            let sheet = table::read_delimited(&rope.to_string(), tabs);
+            if let Some(doc) = self.editor.active_mut() {
+                doc.set_table(
+                    revision,
+                    Ok(Table {
+                        sheets: vec![sheet],
+                    }),
+                );
+            }
+            if self
+                .preview
+                .tables
+                .first_load_since
+                .is_some_and(|(id, _)| id == key.0)
+            {
+                self.preview.tables.first_load_since = None;
+            }
             return;
         }
         let path = doc.path.clone();
@@ -82,6 +122,16 @@ impl App {
             }
         };
         self.preview.tables.pending.insert(key);
+        if initial_loading
+            && self
+                .preview
+                .tables
+                .first_load_since
+                .is_none_or(|(id, _)| id != key.0)
+        {
+            self.preview.tables.first_load_since =
+                Some((key.0, hold_since.unwrap_or_else(Instant::now)));
+        }
         let (sender, proxy) = (self.preview.tables.sender.clone(), self.link.proxy.clone());
         winc_editor::background::spawn(move || {
             let result = job();
@@ -93,10 +143,41 @@ impl App {
         });
     }
 
+    /// 当前文档正在等待首次表格读取完成时，返回开始等待的时刻（供 [`App::holding_frame`] 使用）。
+    pub(in crate::app) fn table_holding_first_load(&self, id: DocumentId) -> Option<Instant> {
+        if self.settings.standalone || self.settings.open || self.library_shown() {
+            return None;
+        }
+        let doc = self.editor.active().filter(|d| d.id == id)?;
+        if !matches!(
+            doc.table.as_deref().map(|v| &v.state),
+            Some(TableState::Loading)
+        ) {
+            return None;
+        }
+        let (doc_id, since) = self.preview.tables.first_load_since?;
+        (doc_id == id
+            && self
+                .preview
+                .tables
+                .pending
+                .iter()
+                .any(|&(pending_id, _)| pending_id == id))
+        .then_some(since)
+    }
+
     /// 接收后台读好的表格，放入对应的文档。
     pub(crate) fn poll_tables(&mut self) {
         while let Ok((id, revision, result)) = self.preview.tables.receiver.try_recv() {
             self.preview.tables.pending.remove(&(id, revision));
+            if self
+                .preview
+                .tables
+                .first_load_since
+                .is_some_and(|(doc_id, _)| doc_id == id)
+            {
+                self.preview.tables.first_load_since = None;
+            }
             let doc = self.editor.documents.iter_mut().find(|d| d.id == id);
             if doc.is_some_and(|d| d.set_table(revision, result)) {
                 self.request_redraw();

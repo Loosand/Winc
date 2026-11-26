@@ -7,7 +7,7 @@
 
 use crate::app::ScrollTarget;
 use crate::app::scroll::set_scroll_line;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 
@@ -84,6 +84,10 @@ pub(crate) const INLINE_FIRST_PARSE_BYTES: usize = 64 * 1024;
 
 /// 一张图片最多保留的已绘制尺寸数（种）；超出时移除最早绘制的尺寸。
 const SIZES: usize = 4;
+/// 按路径保留的滚动位置记录上限（写作模式关闭旧文档后再次打开同一篇笔记时恢复）。
+const RECENT_DOC_STATES: usize = 64;
+/// 切换文档后保留最近几篇笔记的排版缓存（Mermaid、公式、代码块等），切回时首帧复用。
+const RECENT_MEMOS: usize = 3;
 
 /// 预览左侧的标题指示条上可以指向的位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +117,8 @@ pub(crate) struct MarkdownPreview {
     pub area: winc_render::Rect,
     /// 预览的文档；当前标签改变时重新开始。
     pub doc: Option<DocumentId>,
+    /// 当前预览文档对应的路径（用于写作模式切回同一笔记时恢复滚动、属性折叠与排版缓存）。
+    doc_path: Option<PathBuf>,
     /// 最近一次解析的结果。
     pub parsed: Option<Arc<Markdown>>,
     /// 解析结果的单调递增版本号（支持就地增量更新后仍唯一标识不同解析版本）。
@@ -130,14 +136,19 @@ pub(crate) struct MarkdownPreview {
     pub(crate) cost: Option<std::time::Duration>,
     /// 各文档预览的滚动位置（逻辑像素），切换到其他标签再切回时保持不变。
     scrolls: HashMap<DocumentId, f32>,
+    /// 按路径保留的滚动位置，供写作模式关闭并重新打开同一笔记时恢复。
+    path_scrolls: HashMap<PathBuf, f32>,
     /// 排版结果，见 [`laid::Laid`]。
     pub layout: Option<crate::app::preview::markdown::laid::Laid>,
     pub(crate) property_layout_dirty: bool,
     pub(crate) property_collapsed: HashSet<DocumentId>,
+    pub(crate) path_property_collapsed: HashSet<PathBuf>,
     pub(crate) property_source: HashSet<DocumentId>,
     pub(crate) imported_property_types: properties::ImportedTypes,
     /// 排版缓存，见 `winc_typeset::Memo`。
     pub memo: crate::app::preview::markdown::laid::Memo,
+    /// 最近离开的文档的排版缓存，来回切换带图表/公式的笔记时直接复用。
+    recent_memos: VecDeque<(PathBuf, crate::app::preview::markdown::laid::Memo)>,
     /// 图片缓存池（槽位、原始地址、内嵌媒体、待刷新队列和版本号）。
     pub(crate) images: images::ImagePool,
     /// docx、EPUB 读取或转换失败的原因；没有失败时为 `None`。
@@ -283,6 +294,7 @@ impl Default for MarkdownPreview {
         let (sender, receiver) = mpsc::channel();
         Self {
             doc: None,
+            doc_path: None,
             parsed: None,
             parse_serial: 0,
             checked: None,
@@ -290,13 +302,16 @@ impl Default for MarkdownPreview {
             first_parse_since: None,
             cost: None,
             scrolls: HashMap::new(),
+            path_scrolls: HashMap::new(),
             layout: None,
             property_layout_dirty: false,
             property_collapsed: HashSet::new(),
+            path_property_collapsed: HashSet::new(),
             property_source: HashSet::new(),
             imported_property_types: properties::ImportedTypes::default(),
             last_table: None,
             memo: Default::default(),
+            recent_memos: VecDeque::new(),
             images: images::ImagePool::default(),
             failed: None,
             contents: None,
@@ -341,9 +356,11 @@ impl Default for MarkdownPreview {
 }
 
 impl MarkdownPreview {
-    /// 标签 `id` 关闭后释放其滚动位置。
+    /// 标签 `id` 关闭后释放其按 ID 索引的滚动与属性面板状态（按路径记忆的仍保留）。
     pub(crate) fn forget(&mut self, id: DocumentId) {
         self.scrolls.remove(&id);
+        self.property_collapsed.remove(&id);
+        self.property_source.remove(&id);
     }
 
     /// 和 `other` 交换各本书的阅读位置。
@@ -376,6 +393,18 @@ impl MarkdownPreview {
         if let Some(id) = self.doc {
             self.scrolls.insert(id, y);
         }
+        if let Some(path) = self.doc_path.as_ref() {
+            if y > 0.0 {
+                if self.path_scrolls.len() >= RECENT_DOC_STATES
+                    && !self.path_scrolls.contains_key(path)
+                {
+                    self.path_scrolls.clear();
+                }
+                self.path_scrolls.insert(path.clone(), y);
+            } else {
+                self.path_scrolls.remove(path);
+            }
+        }
     }
 
     /// 丢弃已读取的图片（联网设置改变时调用）：下次绘制时重新排版并重新读取。
@@ -390,12 +419,49 @@ impl MarkdownPreview {
 
     /// 将预览切换为文档 `doc`（不再显示预览时为 `None`）。
     ///
-    /// 释放上一个文档的解析结果、排版和图片，再次显示时重新解析和排版；滚动位置保留。约 1 MB 的
-    /// 文档，这些合计约 10 MB；单张解码后的图片最多约 26 MB（2560 × 2560 RGBA），
-    /// 网络图片再次预览时从磁盘缓存读取。
-    fn reset(&mut self, doc: Option<DocumentId>) {
+    /// 释放上一个文档的解析结果与排版，但保留按路径记忆的滚动位置、属性折叠态、最近几篇的排版缓存
+    /// （Mermaid/公式/代码高亮）以及有界数量的本地渲染图片，切回同一笔记时可首帧直接复用。
+    fn reset(&mut self, doc: Option<DocumentId>, path: Option<PathBuf>) {
         self.leave_book();
+        if let Some(old_path) = self.doc_path.take() {
+            if let Some(old_id) = self.doc
+                && let Some(&y) = self.scrolls.get(&old_id)
+            {
+                if y > 0.0 {
+                    if self.path_scrolls.len() >= RECENT_DOC_STATES
+                        && !self.path_scrolls.contains_key(&old_path)
+                    {
+                        self.path_scrolls.clear();
+                    }
+                    self.path_scrolls.insert(old_path.clone(), y);
+                } else {
+                    self.path_scrolls.remove(&old_path);
+                }
+            }
+            let old_memo = std::mem::take(&mut self.memo);
+            self.recent_memos.retain(|(p, _)| p != &old_path);
+            self.recent_memos.push_front((old_path, old_memo));
+            self.recent_memos.truncate(RECENT_MEMOS);
+        } else {
+            self.memo = Default::default();
+        }
         self.doc = doc;
+        self.doc_path = path.clone();
+        if let (Some(id), Some(new_path)) = (doc, path.as_ref()) {
+            if !self.scrolls.contains_key(&id)
+                && let Some(&saved) = self.path_scrolls.get(new_path)
+            {
+                self.scrolls.insert(id, saved);
+            }
+            if self.path_property_collapsed.contains(new_path) {
+                self.property_collapsed.insert(id);
+            }
+            if let Some(pos) = self.recent_memos.iter().position(|(p, _)| p == new_path)
+                && let Some((_, memo)) = self.recent_memos.remove(pos)
+            {
+                self.memo = memo;
+            }
+        }
         self.parsed = None;
         self.parse_serial = self.parse_serial.wrapping_add(1);
         self.checked = None;
@@ -404,10 +470,9 @@ impl MarkdownPreview {
         self.cost = None;
         self.layout = None;
         self.live.reset_doc();
-        self.memo = Default::default();
         self.find_doc = None;
         self.motion = None;
-        self.images.reset();
+        self.images.reset(doc.is_some());
         self.failed = None;
         self.contents = None;
         self.decorations.clear();
@@ -615,14 +680,16 @@ impl App {
         let shown = self.markdown_shown_area().is_some();
         let Some(doc) = self.editor.active().filter(|_| shown) else {
             if self.preview.markdown.doc.is_some() {
-                self.preview.markdown.reset(None);
+                self.preview.markdown.reset(None, None);
             }
             return;
         };
-        let (id, revision) = (doc.id, doc.revision);
+        let (id, revision, path) = (doc.id, doc.revision, doc.path.clone());
         let md = &mut self.preview.markdown;
         if md.doc != Some(id) {
-            md.reset(Some(id));
+            md.reset(Some(id), path);
+        } else if md.doc_path != path {
+            md.doc_path = path;
         }
         if md.checked == Some(revision) {
             return;

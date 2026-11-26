@@ -91,7 +91,11 @@ impl App {
                 Some(_) => Some(Broken::File),
                 None => (doc.path.as_deref())
                     .and_then(|path| local_target(path, url))
-                    .filter(|target| !self.may_exist(target))
+                    .filter(|target| {
+                        !self
+                            .indexed_note_exists(target)
+                            .unwrap_or_else(|| self.may_exist(target))
+                    })
                     .map(|_| Broken::File),
             },
         };
