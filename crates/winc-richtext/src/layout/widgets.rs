@@ -7,7 +7,7 @@ use std::sync::Arc;
 use winc_render::Rect;
 
 use crate::decorations::{
-    Decoration, DecorationId, DecorationKind, DecorationLayer, DecorationSet,
+    Decoration, DecorationId, DecorationKind, DecorationLayer, DecorationSet, WidgetAction,
 };
 
 /// 块级虚拟挂件卡片与相邻正文块之间的纵向留白（逻辑像素）。
@@ -24,6 +24,8 @@ pub struct LaidWidget {
     pub key: Arc<str>,
     /// 可选默认卡片标题/摘要文字。
     pub label: Arc<str>,
+    /// 卡片携带的交互按钮动作列表。
+    pub actions: Vec<WidgetAction>,
     /// 锚定到的原文 UTF-8 字节偏移。
     pub source: usize,
     /// 锚定到的顶层块序号（空文档时为 `None`）。
@@ -65,15 +67,7 @@ impl<'a> WidgetBuckets<'a> {
                         orphan.push(dec);
                     } else {
                         let source = dec.range.start;
-                        let block_idx = ranges
-                            .iter()
-                            .rposition(|r| r.contains(&source))
-                            .or_else(|| ranges.iter().rposition(|r| r.end == source))
-                            .or_else(|| {
-                                ranges.partition_point(|r| r.start <= source).checked_sub(1)
-                            })
-                            .unwrap_or(0)
-                            .min(block_count - 1);
+                        let block_idx = block_index_for_source(ranges, source, block_count);
                         if *is_after {
                             after.entry(block_idx).or_default().push(dec);
                         } else {
@@ -109,6 +103,7 @@ impl<'a> WidgetBuckets<'a> {
                 if let DecorationKind::BlockWidget {
                     key: wkey,
                     label,
+                    actions,
                     height,
                     after,
                 } = &dec.kind
@@ -119,6 +114,7 @@ impl<'a> WidgetBuckets<'a> {
                         layer: dec.layer,
                         key: Arc::clone(wkey),
                         label: Arc::clone(label),
+                        actions: actions.clone(),
                         source: dec.range.start,
                         block: Some(block),
                         after: *after,
@@ -144,6 +140,7 @@ impl<'a> WidgetBuckets<'a> {
                 if let DecorationKind::BlockWidget {
                     key: wkey,
                     label,
+                    actions,
                     height,
                     after,
                 } = &dec.kind
@@ -155,6 +152,7 @@ impl<'a> WidgetBuckets<'a> {
                         layer: dec.layer,
                         key: Arc::clone(wkey),
                         label: Arc::clone(label),
+                        actions: actions.clone(),
                         source: dec.range.start,
                         block: Some(block),
                         after: *after,
@@ -173,6 +171,7 @@ impl<'a> WidgetBuckets<'a> {
             if let DecorationKind::BlockWidget {
                 key: wkey,
                 label,
+                actions,
                 height,
                 after,
             } = &dec.kind
@@ -184,6 +183,7 @@ impl<'a> WidgetBuckets<'a> {
                     layer: dec.layer,
                     key: Arc::clone(wkey),
                     label: Arc::clone(label),
+                    actions: actions.clone(),
                     source: dec.range.start,
                     block: None,
                     after: *after,
@@ -194,6 +194,31 @@ impl<'a> WidgetBuckets<'a> {
         }
         y
     }
+}
+
+/// 在按起点升序排列的顶层块范围切片 `ranges` 中以 $O(\log B)$ 定位 `source` 所属的块序号。
+fn block_index_for_source(ranges: &[Range<usize>], source: usize, block_count: usize) -> usize {
+    if ranges.is_empty() || block_count == 0 {
+        return 0;
+    }
+    let hi = ranges.partition_point(|r| r.start <= source);
+    if hi == 0 {
+        return 0;
+    }
+    let candidate = (hi - 1).min(block_count - 1);
+    if ranges[candidate].contains(&source) {
+        return candidate;
+    }
+    if candidate > 0 && ranges[candidate - 1].contains(&source) {
+        return candidate - 1;
+    }
+    if ranges[candidate].end == source {
+        return candidate;
+    }
+    if candidate > 0 && ranges[candidate - 1].end == source {
+        return candidate - 1;
+    }
+    candidate
 }
 
 /// 排版结果持有的块级挂件槽位集合与查询接口。
@@ -228,9 +253,18 @@ impl WidgetSlots {
         self.items.iter().find(|w| w.id == id)
     }
 
-    /// 返回内容坐标 `(cx, cy)` 命中的块级虚拟挂件槽位。
+    /// 返回内容坐标 `(cx, cy)` 命中的块级虚拟挂件槽位（利用纵向单调性做 $O(\log W)$ 检索）。
     pub(super) fn hit(&self, cx: f32, cy: f32) -> Option<&LaidWidget> {
-        self.items.iter().find(|w| w.rect.contains(cx, cy))
+        let start = self.items.partition_point(|w| w.rect.bottom() <= cy);
+        for w in &self.items[start..] {
+            if w.rect.y > cy {
+                break;
+            }
+            if w.rect.contains(cx, cy) {
+                return Some(w);
+            }
+        }
+        None
     }
 
     /// 若第 `block` 块下方存在 `after` 块级虚拟挂件，返回首个挂件的上边缘（相对内容顶部）。
@@ -242,14 +276,18 @@ impl WidgetSlots {
             .min_by(f32::total_cmp)
     }
 
-    /// 枚举与视口裁剪区 `clip` 相交的块级挂件及其窗口坐标系矩形。
+    /// 枚举与视口裁剪区 `clip` 相交的块级挂件及其窗口坐标系矩形（$O(\log W + K)$）。
     pub(super) fn visible(
         &self,
         left: f32,
         origin_y: f32,
         clip: Rect,
     ) -> impl Iterator<Item = (&LaidWidget, Rect)> {
-        self.items.iter().filter_map(move |widget| {
+        let top = clip.y - origin_y;
+        let bottom = clip.bottom() - origin_y;
+        let start = self.items.partition_point(|w| w.rect.bottom() <= top);
+        let end = self.items.partition_point(|w| w.rect.y < bottom).max(start);
+        self.items[start..end].iter().filter_map(move |widget| {
             let r = Rect::new(
                 left + widget.rect.x,
                 origin_y + widget.rect.y,
@@ -258,5 +296,60 @@ impl WidgetSlots {
             );
             (r.bottom() > clip.y && r.y < clip.bottom() && r.h > 0.0).then_some((widget, r))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_search_anchors_and_queries_many_block_widgets() {
+        let block_count = 2_000usize;
+        let ranges: Vec<Range<usize>> = (0..block_count).map(|i| (i * 20)..(i * 20 + 18)).collect();
+        let mut decs = DecorationSet::new();
+        for i in 0..200usize {
+            let b = i * 10;
+            decs.upsert(
+                Decoration::block_widget(
+                    DecorationId(i as u64 + 1),
+                    DecorationLayer::Annotation,
+                    b * 20 + 5,
+                    format!("note-{i}"),
+                    40.0,
+                    true,
+                )
+                .with_label(format!("批注 {i}"))
+                .with_action("resolve", "解决", true),
+            );
+        }
+
+        let buckets = WidgetBuckets::collect(Some(&decs), block_count, &ranges);
+        let mut laid = Vec::new();
+        let mut y = 0.0_f32;
+        for b in 0..block_count {
+            y = buckets.place_before(b, 600.0, y, &mut laid);
+            y += 24.0;
+            y = buckets.place_after(b, 600.0, y, &mut laid);
+        }
+
+        let slots = WidgetSlots::new(laid, buckets.hash());
+        assert_eq!(slots.len(), 200);
+        let target = slots.find_by_id(DecorationId(101)).unwrap();
+        assert_eq!(target.block, Some(1000));
+        assert_eq!(target.actions.len(), 1);
+        assert_eq!(&*target.actions[0].id, "resolve");
+
+        // 命中测试与可见窗口枚举应精确命中目标挂件。
+        let hit = slots
+            .hit(100.0, target.rect.y + 10.0)
+            .expect("should hit widget");
+        assert_eq!(hit.id, DecorationId(101));
+
+        let clip = Rect::new(0.0, 0.0, 800.0, 200.0);
+        let origin_y = -target.rect.y + 40.0;
+        let visible: Vec<_> = slots.visible(20.0, origin_y, clip).collect();
+        assert!(visible.iter().any(|(w, _)| w.id == DecorationId(101)));
+        assert!(visible.len() <= 3, "只应枚举视口附近的少量挂件");
     }
 }

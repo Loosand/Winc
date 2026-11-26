@@ -147,19 +147,21 @@ fn draw_decoration_gaps(
     }
 }
 
-/// 绘制行内虚拟挂件（幽灵补全）与块级虚拟区块卡片（批注卡片、AI 修订建议等）。
+/// 绘制行内虚拟挂件（幽灵补全）与由 `winc-cpui` 声明式卡片承接的块级虚拟区块（批注、AI 修订建议等）。
 #[allow(clippy::too_many_arguments)]
 fn draw_decoration_widgets(
     frame: &mut Frame<'_>,
     laid: &Laid,
     decorations: &winc_richtext::DecorationSet,
     p: &Palette,
+    basis: crate::ui::TextBasis,
+    small: f32,
     left: f32,
     origin_y: f32,
     clip: Rect,
     base: f32,
+    widget_actions: &mut Vec<(Rect, (winc_richtext::DecorationId, std::sync::Arc<str>))>,
 ) {
-    use winc_richtext::DecorationLayer;
     for (at, text, style) in decorations.inline_widgets() {
         if let Some((x, y, h)) = laid.inline_widget_point(at) {
             let sy = origin_y + laid.content_y(y);
@@ -189,40 +191,111 @@ fn draw_decoration_widgets(
         }
     }
     for (widget, r) in laid.visible_widgets(left, origin_y, clip) {
-        let tone = match widget.layer {
-            DecorationLayer::AiPreview => p.accent,
-            DecorationLayer::Diagnostic => p.error,
-            DecorationLayer::Annotation | DecorationLayer::Search => p.warning,
-        };
-        let bg = tone.alpha(if p.dark { 0.12 } else { 0.08 });
-        let bar = tone.alpha(0.75);
-        frame.rect_clipped(r, bg, 8.0, clip);
-        frame.rect_clipped(
-            Rect::new(r.x, r.y + 4.0, 3.0, (r.h - 8.0).max(0.0)),
-            bar,
-            1.5,
-            clip,
-        );
-        let caption = if widget.label.is_empty() {
-            &*widget.key
-        } else {
-            &*widget.label
-        };
-        if !caption.is_empty() {
-            let size = (base * 0.85).round().max(11.0);
-            let baseline = r.y + (r.h + size * 0.72) * 0.5;
-            frame.text_faux(
-                FontKind::Ui,
-                Default::default(),
-                size,
-                r.x + 12.0,
-                baseline,
-                caption,
-                p.text,
-                r.intersect(clip),
-            );
+        let card = build_widget_card(widget, r, p, base, small);
+        let laid_card = crate::ui::layout(frame, basis, (Some(r.w), Some(r.h)), card);
+        let hits = laid_card.paint_at(frame, (r.x, r.y), r.intersect(clip));
+        for (rect, action_id) in hits.into_entries() {
+            widget_actions.push((rect, (widget.id, action_id)));
         }
     }
+}
+
+/// 用 `winc-cpui` 声明式布局构建单个块级装饰挂件卡片（左侧语义色条、标签徽章、摘要与操作按钮）。
+fn build_widget_card<'a>(
+    widget: &'a winc_richtext::LaidWidget,
+    r: Rect,
+    p: &Palette,
+    base: f32,
+    small: f32,
+) -> crate::ui::Node<'a, std::sync::Arc<str>> {
+    use crate::ui::{self, widgets};
+    use winc_richtext::DecorationLayer;
+
+    let (tone, tag) = match widget.layer {
+        DecorationLayer::AiPreview => (p.accent, "AI"),
+        DecorationLayer::Diagnostic => (p.error, "提示"),
+        DecorationLayer::Annotation => (p.warning, "批注"),
+        DecorationLayer::Search => (p.warning, "查找"),
+    };
+    let bg = tone.alpha(if p.dark { 0.12 } else { 0.08 });
+    let bar = tone.alpha(0.75);
+    let chip_bg = tone.alpha(if p.dark { 0.24 } else { 0.14 });
+    let size = (base * 0.85).round().max(11.0);
+    let caption = if widget.label.is_empty() {
+        &*widget.key
+    } else {
+        &*widget.label
+    };
+
+    let mut card = ui::hstack()
+        .w(r.w)
+        .h(r.h)
+        .pr(10.0)
+        .gap(10.0)
+        .items_center()
+        .bg(bg)
+        .rounded(8.0)
+        .overflow_hidden()
+        .child(
+            ui::box_()
+                .w(3.0)
+                .h((r.h - 8.0).max(0.0))
+                .flex_shrink(0.0)
+                .bg(bar)
+                .rounded(1.5),
+        );
+
+    if !widget.actions.is_empty() || r.h >= 40.0 {
+        card = card.child(widgets::chip(tag, tone, chip_bg, small, 20.0));
+    }
+
+    if !caption.is_empty() {
+        card = card.child(
+            ui::text(caption)
+                .text_size(size)
+                .line_height((size + 5.0).min(r.h))
+                .color(p.text)
+                .wrap()
+                .flex_1()
+                .min_w(0.0),
+        );
+    } else if !widget.actions.is_empty() {
+        card = card.child(ui::spacer());
+    }
+
+    if !widget.actions.is_empty() {
+        let buttons = widget.actions.iter().map(|action| {
+            let (fill, fg) = if action.primary {
+                (p.accent_fill, p.text_on_accent)
+            } else {
+                (p.hover, p.text)
+            };
+            ui::hstack()
+                .h(24.0_f32.min((r.h - 6.0).max(16.0)))
+                .px(10.0)
+                .items_center()
+                .justify_center()
+                .flex_shrink(0.0)
+                .bg(fill)
+                .rounded(6.0)
+                .hit(std::sync::Arc::clone(&action.id))
+                .child(
+                    ui::text(action.label.as_ref())
+                        .text_size(small)
+                        .color(fg)
+                        .flex_shrink(0.0),
+                )
+        });
+        card = card.child(
+            ui::hstack()
+                .gap(6.0)
+                .items_center()
+                .flex_shrink(0.0)
+                .children(buttons),
+        );
+    }
+
+    card
 }
 
 /// 在未被装饰层覆盖的失效链接（如纯图片链接）下方绘制错误色虚线。
@@ -1122,15 +1195,23 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     if (!md.decorations.is_empty() || laid.has_widgets())
         && motion.as_ref().is_none_or(|m| !m.moving())
     {
+        let basis = crate::ui::TextBasis {
+            ui_size: app.fonts.ui,
+            x_height: app.metrics.ui.x_height,
+            cap_height: app.metrics.ui.cap_height,
+        };
         draw_decoration_widgets(
             frame,
             &laid,
             &md.decorations,
             p,
+            basis,
+            app.fonts.ui_small,
             left,
             origin_y,
             area,
             key.base,
+            &mut app.hits.markdown_widget_actions,
         );
     }
     // 显示滚动条的表格：鼠标所在的表格，其次是最近一次横向滚动的表格。

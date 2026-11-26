@@ -53,6 +53,28 @@ pub struct WidgetStyle {
     pub italic: bool,
 }
 
+/// 块级虚拟挂件卡片上的交互动作描述符（纯数据，不依赖任何界面框架）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WidgetAction {
+    /// 动作稳定标识（如 `"accept"`、`"dismiss"`）。
+    pub id: Arc<str>,
+    /// 按钮展示文案。
+    pub label: Arc<str>,
+    /// 是否为主操作按钮（如「采纳」「应用」）。
+    pub primary: bool,
+}
+
+impl WidgetAction {
+    /// 构造一条块级挂件动作描述符。
+    pub fn new(id: impl Into<Arc<str>>, label: impl Into<Arc<str>>, primary: bool) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            primary,
+        }
+    }
+}
+
 /// 装饰形态：区间标记、行内虚文字或块级虚拟区块。
 #[derive(Debug, Clone, PartialEq)]
 pub enum DecorationKind {
@@ -74,6 +96,8 @@ pub enum DecorationKind {
         key: Arc<str>,
         /// 可选默认卡片标题/摘要文字（宿主无自定义渲染器时作为可读卡片文案显示）。
         label: Arc<str>,
+        /// 卡片携带的交互按钮动作列表（由宿主界面层如 CPUI 渲染并路由命中）。
+        actions: Vec<WidgetAction>,
         /// 预留逻辑像素高度。
         height: f32,
         /// `true` 表示排在锚点所在块下方，`false` 表示排在上方。
@@ -149,6 +173,7 @@ impl Decoration {
             kind: DecorationKind::BlockWidget {
                 key: key.into(),
                 label: Arc::from(""),
+                actions: Vec::new(),
                 height,
                 after,
             },
@@ -160,6 +185,19 @@ impl Decoration {
     pub fn with_label(mut self, text: impl Into<Arc<str>>) -> Self {
         if let DecorationKind::BlockWidget { label, .. } = &mut self.kind {
             *label = text.into();
+        }
+        self
+    }
+
+    /// 为块级虚拟区块追加一个交互操作按钮（如「采纳」「忽略」）。
+    pub fn with_action(
+        mut self,
+        id: impl Into<Arc<str>>,
+        label: impl Into<Arc<str>>,
+        primary: bool,
+    ) -> Self {
+        if let DecorationKind::BlockWidget { actions, .. } = &mut self.kind {
+            actions.push(WidgetAction::new(id, label, primary));
         }
         self
     }
@@ -226,6 +264,7 @@ impl DecorationSet {
             if let DecorationKind::BlockWidget {
                 key,
                 label,
+                actions,
                 height,
                 after,
             } = &d.kind
@@ -235,6 +274,7 @@ impl DecorationSet {
                 d.range.start.hash(&mut h);
                 key.hash(&mut h);
                 label.hash(&mut h);
+                actions.hash(&mut h);
                 height.to_bits().hash(&mut h);
                 after.hash(&mut h);
             }

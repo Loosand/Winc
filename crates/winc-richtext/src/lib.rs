@@ -24,7 +24,7 @@ pub use commands::{
 };
 pub use decorations::{
     Decoration, DecorationId, DecorationKind, DecorationLayer, DecorationSet, MarkStyle,
-    WidgetStyle,
+    WidgetAction, WidgetStyle,
 };
 pub use input_rules::{FenceEnterRule, InputRulePlan};
 pub use layout::{

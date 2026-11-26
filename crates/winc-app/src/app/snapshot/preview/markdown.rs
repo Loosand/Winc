@@ -1032,3 +1032,57 @@ fn extreme_markdown_renders_and_scrolls_consistently_offscreen() {
     assert_frames_equal(&top_after, &top_before, "极端样本滚回文首像素应完全一致");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn block_widget_with_actions_renders_via_cpui_and_collects_hits() {
+    use winc_richtext::{Decoration, DecorationId, DecorationLayer};
+
+    let mut md = String::from("# 标题\n\n第一段用于挂载修订建议卡片。\n\n");
+    for i in 0..40 {
+        md.push_str(&format!("第 {i} 段填充内容用于支撑滚动裁剪验证。\n\n"));
+    }
+    let (mut app, dir) = live_doc("md-cpui-widget", &md);
+    let anchor = md.find("第一段").unwrap();
+    let id = DecorationId(501);
+    app.preview.markdown.decorations.upsert(
+        Decoration::block_widget(
+            id,
+            DecorationLayer::AiPreview,
+            anchor,
+            "ai-rev-1",
+            52.0,
+            true,
+        )
+        .with_label("AI 建议：将第一段改写为更简洁的导语")
+        .with_action("accept", "采纳", true)
+        .with_action("dismiss", "忽略", false),
+    );
+    paint(&mut app);
+
+    assert_eq!(doc_text(&app), md, "挂载带动作的块级挂件不得修改原文");
+    let actions = &app.hits.markdown_widget_actions;
+    assert_eq!(actions.len(), 2, "应收集到采纳与忽略两个 CPUI 按钮命中区");
+    let (accept_rect, (aid1, act1)) = &actions[0];
+    let (dismiss_rect, (aid2, act2)) = &actions[1];
+    assert_eq!((*aid1, &**act1), (id, "accept"));
+    assert_eq!((*aid2, &**act2), (id, "dismiss"));
+    assert!(
+        dismiss_rect.x >= accept_rect.right(),
+        "两个按钮应横向排布且不重叠: accept={accept_rect:?}, dismiss={dismiss_rect:?}"
+    );
+
+    // 滚动到文末使卡片离开视口：命中表应自动清空，滚回文首后恢复。
+    let max_scroll = app.preview.markdown.max_scroll();
+    app.scroll_markdown_to(max_scroll);
+    paint(&mut app);
+    assert!(
+        app.hits.markdown_widget_actions.is_empty(),
+        "滚出视口后不应残留按钮命中区"
+    );
+
+    app.scroll_markdown_to(0.0);
+    paint(&mut app);
+    assert_eq!(app.hits.markdown_widget_actions.len(), 2);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -72,6 +72,11 @@ pub struct Hits {
     pub(crate) markdown_pictures: Vec<(winc_render::Rect, std::path::PathBuf)>,
     /// 上一帧绘制的代码块（屏幕坐标）：鼠标移入、移出时重绘，以显示或隐藏复制按钮。
     pub(crate) markdown_codes: Vec<winc_render::Rect>,
+    /// 上一帧由 `winc-cpui` 绘制的块级装饰挂件操作按钮命中区域：`(按钮矩形, (装饰标识, 动作标识))`。
+    pub(crate) markdown_widget_actions: Vec<(
+        winc_render::Rect,
+        (winc_richtext::DecorationId, std::sync::Arc<str>),
+    )>,
     /// 编辑区顶部钉住的各行，绘制时记录，点击和悬停时使用。
     pub(crate) sticky: Vec<StickyRow>,
     /// 上一帧绘制了复制按钮的代码块的内容；按钮在 `links` 中只记录 `COPY`，点击时才取这里的
@@ -151,6 +156,7 @@ impl Hits {
             markdown_images,
             markdown_pictures,
             markdown_codes,
+            markdown_widget_actions,
             sticky,
             markdown_copy,
             markdown_expand,
@@ -202,6 +208,7 @@ impl Hits {
         markdown_images.clear();
         markdown_pictures.clear();
         markdown_codes.clear();
+        markdown_widget_actions.clear();
         sticky.clear();
         *markdown_copy = None;
         *markdown_expand = None;
