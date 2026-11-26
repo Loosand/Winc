@@ -74,6 +74,89 @@ impl Face {
         Self::open_as(file, pin_weight.then_some(0))
     }
 
+    /// 按真粗体打开 `file`（相对常规字重偏移 `base_shift` 增加粗体字重，优先走可变字体 `wght` 轴、
+    /// 同族粗体文件或系统轮廓字体的粗体命名实例，如 `PingFangSC-Semibold`）。
+    ///
+    /// 仅当确实获得明显更重的真实字形（字重增量不少于 [`MIN_BOLD_GAIN`]）时返回 `Some`
+    /// （且 `embolden == 0.0`），否则返回 `None` 交由调用方回退到描边模拟粗体。
+    pub(crate) fn open_bold(file: &FontFile, base_shift: i16) -> Option<Face> {
+        let data = load(&file.path)?;
+        let selected = select(&data, file.postscript.as_deref())?;
+        let font = selected.font;
+        let (offset, key) = (font.offset, font.key);
+        let base_shift = f32::from(base_shift);
+
+        // 1. 系统提供轮廓的字体（macOS 15+ `hvgl` 苹方）：在同一文件中查找同字族更粗的命名实例。
+        if selected.system {
+            let base_weight = selected
+                .instance
+                .as_ref()
+                .map_or(REGULAR, |inst| inst.weight(&font))
+                + base_shift;
+            let (bold_font, bold_ps, coords, gained) = system_bold_instance(
+                &data,
+                file.postscript.as_deref(),
+                &font,
+                base_weight,
+                BOLD_STEP,
+            )?;
+            if gained < MIN_BOLD_GAIN {
+                return None;
+            }
+            let system = SystemOutlines::new(&file.path, &bold_ps, &bold_font)?;
+            let (bold_offset, bold_key) = (bold_font.offset, bold_font.key);
+            return Some(Face {
+                data,
+                offset: bold_offset,
+                key: bold_key,
+                coords,
+                system: Some(system),
+                embolden: 0.0,
+            });
+        }
+
+        // 2. 可变字体（swash 直接读取轮廓，如 `SFNS.ttf` / `Inter[wght]`）：沿 `wght` 轴加粗。
+        if let Some((min, max)) = weight_range(&font) {
+            let (coords, gained) = match selected.instance {
+                Some(instance) => {
+                    let base = (instance.weight(&font) + base_shift).clamp(min, max);
+                    let (coords, reached) =
+                        instance.shifted(&font, base_shift + BOLD_STEP, (min, max));
+                    (coords, reached - base)
+                }
+                None => {
+                    let base = (REGULAR + base_shift).clamp(min, max);
+                    let target = (base + BOLD_STEP).clamp(min, max);
+                    let coords = font
+                        .variations()
+                        .normalized_coords([("wght", target)])
+                        .collect();
+                    (coords, target - base)
+                }
+            };
+            if gained < MIN_BOLD_GAIN {
+                return None;
+            }
+            return Some(Face {
+                data,
+                offset,
+                key,
+                coords,
+                system: None,
+                embolden: 0.0,
+            });
+        }
+
+        // 3. 静态字族：在同一目录中查找同族粗体文件（如 `SegoeUI-Bold`、`NotoSansCJK-Bold`）。
+        let (sibling_file, reached) = sibling(file, &font, BOLD_STEP)?;
+        if reached < MIN_BOLD_GAIN {
+            return None;
+        }
+        let mut face = Self::open_as(&sibling_file, Some(0))?;
+        face.embolden = 0.0;
+        Some(face)
+    }
+
     /// 打开字体；`shift` 为 `None` 时不固定字重，否则是字重的偏移。
     fn open_as(file: &FontFile, shift: Option<i16>) -> Option<Face> {
         let data = load(&file.path)?;
@@ -254,6 +337,55 @@ pub(super) const REGULAR: f32 = 400.0;
 
 /// `BOLD_RATIO` 对应的字重差：常规体 400 到粗体 700。
 const BOLD_STEP: f32 = 300.0;
+
+/// 认定找到真实粗体字形的最小字重增量（例如 Regular 400 → Semibold 600 增量为 200）。
+const MIN_BOLD_GAIN: f32 = 150.0;
+
+/// 在系统轮廓字体文件 `data`（如 macOS `PingFangUI.ttc`）中查找与当前字族前缀一致的更粗命名实例。
+fn system_bold_instance<'a>(
+    data: &'a [u8],
+    postscript: Option<&str>,
+    fallback_font: &FontRef<'a>,
+    base_weight: f32,
+    step: f32,
+) -> Option<(FontRef<'a>, String, Vec<i16>, f32)> {
+    let ps = postscript
+        .map(str::to_owned)
+        .or_else(|| postscript_name(fallback_font))?;
+    let prefix = ps.split_once('-').map_or(ps.as_str(), |(p, _)| p);
+    let wanted = base_weight + step;
+    let count = swash::FontDataRef::new(data).map_or(1, |d| d.len());
+    let mut best: Option<(FontRef<'a>, String, Vec<i16>, f32)> = None;
+    for font in (0..count).filter_map(|i| FontRef::from_index(data, i)) {
+        for inst in font.instances() {
+            let Some(name) = instance_postscript(&font, inst.index()) else {
+                continue;
+            };
+            let inst_prefix = name.split_once('-').map_or(name.as_str(), |(p, _)| p);
+            if inst_prefix != prefix {
+                continue;
+            }
+            let values: Vec<f32> = inst.values().collect();
+            let weight = font
+                .variations()
+                .position(|v| v.tag() == WGHT)
+                .and_then(|at| values.get(at).copied())
+                .unwrap_or(REGULAR);
+            let gained = weight - base_weight;
+            if gained < MIN_BOLD_GAIN || weight > wanted + 100.0 {
+                continue;
+            }
+            let closer = best.as_ref().is_none_or(|(_, _, _, best_gain)| {
+                (step - gained).abs() < (step - *best_gain).abs()
+            });
+            if closer {
+                let coords: Vec<i16> = inst.normalized_coords().collect();
+                best = Some((font, name, coords, gained));
+            }
+        }
+    }
+    best
+}
 
 /// 可变字体的一个命名实例。
 pub(crate) struct Instance {

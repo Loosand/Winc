@@ -38,8 +38,12 @@ fn sequence_start(atoms: &[Atom], c: char, run: usize) -> Option<usize> {
 
 struct Atom {
     kind: AtomKind,
-    /// 宽度（逻辑像素）。
+    /// 宽度（逻辑像素，含排版阶段施加的字距、混排留白或标点挤压）。
     width: f32,
+    /// 仅因与后一原子相邻而附加在末尾的视觉留白（如中西文混排间距）；若在该原子后折行则去掉。
+    trailing_gap: f32,
+    /// 行首开括号挤压时字形相对 `x` 的左移量（逻辑像素）。
+    lead_shift: f32,
     /// 在样式表（`atoms` 返回的第二项）中的序号。
     run: usize,
     /// 这一个前面能不能换行。
@@ -200,6 +204,8 @@ impl Cx<'_, '_> {
                         tex: tex.into(),
                     },
                     width,
+                    trailing_gap: 0.0,
+                    lead_shift: 0.0,
                     run,
                     brk: true,
                     space: false,
@@ -213,6 +219,8 @@ impl Cx<'_, '_> {
                 atoms.push(Atom {
                     kind: AtomKind::Pad,
                     width: pad,
+                    trailing_gap: 0.0,
+                    lead_shift: 0.0,
                     run,
                     brk: true,
                     space: false,
@@ -231,6 +239,8 @@ impl Cx<'_, '_> {
                         Some((path, w, h)) => atoms.push(Atom {
                             kind: AtomKind::Image { path, h },
                             width: w,
+                            trailing_gap: 0.0,
+                            lead_shift: 0.0,
                             run,
                             brk: true,
                             space: false,
@@ -260,6 +270,8 @@ impl Cx<'_, '_> {
                     atoms.push(Atom {
                         kind: AtomKind::Newline,
                         width: 0.0,
+                        trailing_gap: 0.0,
+                        lead_shift: 0.0,
                         run,
                         brk: true,
                         space: false,
@@ -273,6 +285,8 @@ impl Cx<'_, '_> {
                 atoms.push(Atom {
                     kind: AtomKind::Pad,
                     width: pad,
+                    trailing_gap: 0.0,
+                    lead_shift: 0.0,
                     run,
                     brk: false,
                     space: false,
@@ -292,7 +306,84 @@ impl Cx<'_, '_> {
                 atoms[i].brk = true;
             }
         }
+        self.apply_typography(&mut atoms, &runs);
         (atoms, runs)
+    }
+
+    /// 排版微调：中西文/数字混排自动视觉留白、连续全角标点挤压、拉丁字偶字距调整。
+    ///
+    /// 所有调整仅体现在 `Atom::width` 与 `Span::advances` 中，绝不改写 Markdown 原文，
+    /// 并由 `Frame::text_faux_advances` 按同一份宽度绘制，确保光标、命中与选区完全精确。
+    fn apply_typography(&mut self, atoms: &mut [Atom], runs: &[RunStyle]) {
+        // 中西文视觉留白严格窄于当前字体的真实空格宽（上限 0.16 em、约 CSS text-autospace 的 1/7 em），
+        // 既提供柔和的视觉呼吸感，又让用户可分辨是否手打了真实空格，并保证在中西文交界键入空格时光标单调右移。
+        const CJK_LATIN_MAX_EM: f32 = 0.16;
+        const CJK_LATIN_SPACE_RATIO: f32 = 0.60;
+        const CJK_MATH_EM: f32 = 0.16;
+        for i in 1..atoms.len() {
+            let st0 = runs[atoms[i - 1].run];
+            let st1 = runs[atoms[i].run];
+            if (st0.flags | st1.flags) & Style::CODE != 0 {
+                continue;
+            }
+            match (&atoms[i - 1].kind, &atoms[i].kind) {
+                (AtomKind::Char(a), AtomKind::Char(b)) => {
+                    let (a, b) = (*a, *b);
+                    // 1. 拉丁比例字体字偶 kerning（同样式相邻西文字母/标点对）。
+                    if st0.font == FontKind::Ui
+                        && st1.font == FontKind::Ui
+                        && st0.faux == st1.faux
+                        && (st0.size - st1.size).abs() < 0.01
+                    {
+                        let kern = self.frame.kern_faux(st0.font, st0.faux, st0.size, a, b);
+                        if kern != 0.0 && atoms[i - 1].width + kern > 0.5 {
+                            atoms[i - 1].width += kern;
+                        }
+                    }
+                    // 2. 中日韩文字与拉丁字母/ASCII 数字之间的自动视觉间距（仅显示层）。
+                    if (is_cjk_ideograph(a) && is_latin_or_digit(b))
+                        || (is_latin_or_digit(a) && is_cjk_ideograph(b))
+                    {
+                        let sz = st0.size.min(st1.size);
+                        let space = self
+                            .frame
+                            .advance_faux(FontKind::Ui, Faux::default(), sz, ' ');
+                        let gap = (sz * CJK_LATIN_MAX_EM)
+                            .min(space * CJK_LATIN_SPACE_RATIO)
+                            .max(0.0);
+                        atoms[i - 1].width += gap;
+                        atoms[i - 1].trailing_gap += gap;
+                        continue;
+                    }
+                    // 3. 连续全角标点挤压（仅针对实际宽度接近 1em 的全角字形，避免压扁比例标点）。
+                    if atoms[i - 1].width >= st0.size * 0.85 && atoms[i].width >= st1.size * 0.85 {
+                        let scale = if is_cjk_close_or_stop(a) && is_cjk_close_or_stop(b) {
+                            Some(0.58)
+                        } else if is_cjk_close_or_stop(a) && is_cjk_open(b) {
+                            Some(0.55)
+                        } else if is_cjk_open(a) && is_cjk_open(b) {
+                            Some(0.58)
+                        } else {
+                            None
+                        };
+                        if let Some(scale) = scale {
+                            atoms[i - 1].width *= scale;
+                        }
+                    }
+                }
+                (AtomKind::Char(a), AtomKind::Math { .. }) if is_cjk_ideograph(*a) => {
+                    let gap = (st0.size.min(st1.size) * CJK_MATH_EM).max(0.0);
+                    atoms[i - 1].width += gap;
+                    atoms[i - 1].trailing_gap += gap;
+                }
+                (AtomKind::Math { .. }, AtomKind::Char(b)) if is_cjk_ideograph(*b) => {
+                    let gap = (st0.size.min(st1.size) * CJK_MATH_EM).max(0.0);
+                    atoms[i - 1].width += gap;
+                    atoms[i - 1].trailing_gap += gap;
+                }
+                _ => {}
+            }
+        }
     }
 
     fn push_char(
@@ -330,6 +421,8 @@ impl Cx<'_, '_> {
             atoms.push(Atom {
                 kind: AtomKind::Char(c),
                 width: 0.0,
+                trailing_gap: 0.0,
+                lead_shift: 0.0,
                 run,
                 brk: false,
                 space: false,
@@ -345,6 +438,8 @@ impl Cx<'_, '_> {
         atoms.push(Atom {
             kind: AtomKind::Char(c),
             width,
+            trailing_gap: 0.0,
+            lead_shift: 0.0,
             run,
             brk,
             space: is_space(c),
@@ -364,7 +459,7 @@ impl Cx<'_, '_> {
         para: Para,
         out: &mut Vec<Item>,
     ) -> Flow {
-        let (atoms, runs) = self.atoms(inline, para, width);
+        let (mut atoms, runs) = self.atoms(inline, para, width);
         let lines = break_lines(&atoms, width);
         // 没有文字的段落（只有记号的列表项）仍记下原文位置，可编辑的预览中光标落在该行。
         // 光标所在的空段落按原文重新生成，没有对照，取段落的起点。
@@ -376,6 +471,7 @@ impl Cx<'_, '_> {
         let mut first_baseline = None;
         let main = self.frame.metrics(FontKind::Ui, para.size);
         let mut prev_end = 0;
+        let total_atoms = atoms.len();
         for line in lines {
             // 块文字里：`<br>`、硬换行处换行，自动折行处不插入字符。
             if atoms[prev_end..line.start]
@@ -386,6 +482,28 @@ impl Cx<'_, '_> {
                 self.chars += 1;
             }
             prev_end = line.end;
+            // 行尾折行处去掉只因后一原子而附加的混排间距，避免右对齐或末字留白虚长。
+            if line.start < line.end && line.end < total_atoms {
+                let last = &mut atoms[line.end - 1];
+                if last.trailing_gap > 0.0 {
+                    last.width = (last.width - last.trailing_gap).max(0.0);
+                    last.trailing_gap = 0.0;
+                }
+            }
+            // 行首全角开括号挤压（左移左侧空边，使墨迹与正文左边缘视觉对齐，同时光标仍在左边界内）。
+            if line.start < line.end
+                && let AtomKind::Char(c) = atoms[line.start].kind
+            {
+                let st = runs[atoms[line.start].run];
+                if st.flags & (Style::CODE | Style::SYNTAX) == 0
+                    && is_cjk_open(c)
+                    && atoms[line.start].width >= st.size * 0.85
+                {
+                    let squeeze = atoms[line.start].width * 0.35;
+                    atoms[line.start].width -= squeeze;
+                    atoms[line.start].lead_shift = squeeze;
+                }
+            }
             let atoms = &atoms[line.clone()];
             // 行高取正文的行距，图片较高时增加该行的高度；基线以下保留正文的下行高度。
             let (mut ascent, mut descent) = (main.ascent, main.descent);
@@ -456,6 +574,7 @@ impl Cx<'_, '_> {
                     span: Some(Span {
                         start: self.chars,
                         advances: Arc::from([]),
+                        lead_shift: 0.0,
                         source: Some(source),
                         jumps: None,
                     }),
@@ -502,6 +621,7 @@ impl Cx<'_, '_> {
                         if text.text.is_empty() {
                             text.x = *pen;
                             text.start = self.chars;
+                            text.lead_shift = atom.lead_shift;
                             text.source = atom.source;
                         } else if let (Some(at), Some(source)) = (text.source, atom.source)
                             && source != text.next
@@ -689,6 +809,8 @@ fn end_web_link(atoms: &mut Vec<Atom>, runs: &mut Vec<RunStyle>, inline: &Inline
     atoms.push(Atom {
         kind: AtomKind::ExternalLink,
         width: st.size * 0.95,
+        trailing_gap: 0.0,
+        lead_shift: 0.0,
         run,
         brk: false,
         space: false,
@@ -703,6 +825,8 @@ struct Pending {
     advances: Vec<f32>,
     start: usize,
     x: f32,
+    /// 首字左移量（行首全角开括号挤压）。
+    lead_shift: f32,
     /// 第一个字符在原文中的位置、原文不连续之处（见 [`Span`]）。
     source: Option<u32>,
     jumps: Vec<(u32, u32)>,
@@ -736,6 +860,7 @@ fn flush_text(
         span: Some(Span {
             start: pending.start,
             advances: pending.advances.into(),
+            lead_shift: pending.lead_shift,
             source: pending.source,
             jumps: (!pending.jumps.is_empty()).then(|| pending.jumps.into()),
         }),
@@ -768,8 +893,8 @@ fn break_lines(atoms: &[Atom], width: f32) -> Vec<std::ops::Range<usize>> {
             last_break = Some(i);
         }
         // 保留 0.01 逻辑像素的余量：测得的宽度加上边距再减去（表格的列宽）会产生浮点误差，
-        // 恰好放得下的最后一个字符不应折到下一行。
-        if x + atom.width > width + 0.01 && i > start && !atom.space {
+        // 恰好放得下的最后一个字符不应折到下一行；行末折行处不计入因后一原子附加的 `trailing_gap`。
+        if x + (atom.width - atom.trailing_gap) > width + 0.01 && i > start && !atom.space {
             // 没有可断处、只能在字与字之间强制断行时，若下一行将以不能出现在行首的标点开头，
             // 断点向前移一个字，使该标点与前一个字一起换行。
             let forced = |mut at: usize| {
@@ -811,6 +936,57 @@ fn is_cjk(c: char) -> bool {
     matches!(c as u32,
         0x2E80..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFFEF
         | 0x20000..=0x2FA1F)
+}
+
+/// 中日韩表意文字与假名/谚文（不含全角标点）：与西文/数字相邻时自动加视觉间距。
+fn is_cjk_ideograph(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x3041..=0x309F
+            | 0x30A0..=0x30FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2FA1F
+    )
+}
+
+/// 拉丁字母或 ASCII 数字：与中日韩文字相邻时自动加视觉间距。
+fn is_latin_or_digit(c: char) -> bool {
+    c.is_ascii_alphanumeric() || (('\u{00C0}'..='\u{024F}').contains(&c) && !matches!(c, '×' | '÷'))
+}
+
+/// 全角右括号、顿号与句读标点（墨迹偏左、右半为空白，连续出现时可挤压右侧空白）。
+fn is_cjk_close_or_stop(c: char) -> bool {
+    matches!(
+        c,
+        '，' | '。'
+            | '、'
+            | '；'
+            | '：'
+            | '？'
+            | '！'
+            | '）'
+            | '】'
+            | '》'
+            | '」'
+            | '』'
+            | '〕'
+            | '〉'
+            | '｝'
+            | '］'
+            | '”'
+            | '’'
+    )
+}
+
+/// 全角左括号与开引号（墨迹偏右、左半为空白，行首或连续出现时可挤压左侧空白）。
+fn is_cjk_open(c: char) -> bool {
+    matches!(
+        c,
+        '（' | '【' | '《' | '「' | '『' | '〔' | '〈' | '｛' | '［' | '“' | '‘'
+    )
 }
 
 /// 是否可以在字 `p` 与紧随其后的 `c` 之间换行。

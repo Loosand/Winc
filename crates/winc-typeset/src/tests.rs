@@ -286,3 +286,143 @@ fn edge_labels_do_not_overlap() {
         }
     }
 }
+
+#[test]
+fn cjk_latin_spacing_and_punctuation_squeeze_and_kerning_work_without_mutating_text() {
+    // 1. 中西文/数字混排自动加视觉间距，且不修改块文字。
+    let collect_text = |items: &[Item]| -> String {
+        items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Text { text, .. } => Some(&**text),
+                _ => None,
+            })
+            .collect()
+    };
+    let mixed = lay("中文Rust版本2026年", 600.0);
+    assert_eq!(collect_text(&mixed[0].0.items), "中文Rust版本2026年");
+    let mixed_adv: Vec<f32> = mixed[0]
+        .0
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::Text {
+                span: Some(span), ..
+            } => Some(span.advances.iter().copied()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    // 字符序：0:中 1:文 2:R 3:u 4:s 5:t 6:版 7:本 8:2 9:0 10:2 11:6 12:年
+    assert_eq!(mixed_adv.len(), 13);
+    assert!(
+        mixed_adv[1] > mixed_adv[0] + 0.5,
+        "「文」后接 R 应增加视觉留白: {:?}",
+        mixed_adv
+    );
+    assert!(
+        mixed_adv[7] > mixed_adv[6] + 0.5,
+        "「本」后接 2 应增加视觉留白: {:?}",
+        mixed_adv
+    );
+    // 手打空格的宽度仍严格大于自动留白，确保输入空格时光标单调推进。
+    let spaced = lay("中文 Rust", 600.0);
+    let spaced_w: f32 = spaced[0]
+        .0
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::Text {
+                span: Some(span), ..
+            } => Some(span.advances.iter().sum::<f32>()),
+            _ => None,
+        })
+        .sum();
+    let tight = lay("中文Rust", 600.0);
+    let tight_w: f32 = tight[0]
+        .0
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::Text {
+                span: Some(span), ..
+            } => Some(span.advances.iter().sum::<f32>()),
+            _ => None,
+        })
+        .sum();
+    assert!(
+        spaced_w > tight_w + 0.5,
+        "手打空格应比自动混排留白更宽: spaced={spaced_w}, tight={tight_w}"
+    );
+
+    // 2. 连续全角标点挤压与行首全角开括号挤压。
+    let punct = lay("「测试」，（括号）", 600.0);
+    assert_eq!(collect_text(&punct[0].0.items), "「测试」，（括号）");
+    let first_span = punct[0]
+        .0
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Item::Text {
+                span: Some(span), ..
+            } => Some(span),
+            _ => None,
+        })
+        .expect("应有文字段");
+    assert!(
+        first_span.lead_shift > 2.0,
+        "行首全角开括号应启用左移挤压: lead_shift={}",
+        first_span.lead_shift
+    );
+    // 字符序：0:「 1:测 2:试 3:」 4:， 5:（ 6:括 7:号 8:）
+    let cjk_w = first_span.advances[1];
+    assert!(
+        first_span.advances[0] < cjk_w * 0.75,
+        "行首「宽度应被挤压: adv0={}, cjk={cjk_w}",
+        first_span.advances[0]
+    );
+    assert!(
+        first_span.advances[3] < cjk_w * 0.75,
+        "连续标点」，中的」应被挤压: adv3={}, cjk={cjk_w}",
+        first_span.advances[3]
+    );
+    assert!(
+        first_span.advances[4] < cjk_w * 0.75,
+        "连续标点，（中的，应被挤压: adv4={}, cjk={cjk_w}",
+        first_span.advances[4]
+    );
+
+    // 3. 拉丁比例字体字偶 kerning（AV / To）在 macOS SFNS 上应使字偶略微收紧。
+    #[cfg(target_os = "macos")]
+    {
+        let kerned = lay("AVATAR To We", 600.0);
+        let spans: Vec<&Span> = kerned[0]
+            .0
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Text {
+                    span: Some(span), ..
+                } => Some(span),
+                _ => None,
+            })
+            .collect();
+        let alone_a = lay("A", 600.0);
+        let a_w = alone_a[0]
+            .0
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Text {
+                    span: Some(span), ..
+                } => span.advances.first().copied(),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            spans[0].advances[0] < a_w,
+            "AV 字偶应启用负字距调整: kerned_A={} vs alone_A={a_w}",
+            spans[0].advances[0]
+        );
+    }
+}

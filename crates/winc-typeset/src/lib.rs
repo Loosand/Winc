@@ -281,6 +281,7 @@ impl Item {
                 span: span.as_ref().map(|s| Span {
                     start: s.start + dc,
                     advances: Arc::clone(&s.advances),
+                    lead_shift: s.lead_shift,
                     source: s.source,
                     jumps: s.jumps.clone(),
                 }),
@@ -386,6 +387,8 @@ pub struct Span {
     pub start: usize,
     /// 每个字的宽度（逻辑像素）。
     pub advances: Arc<[f32]>,
+    /// 行首开括号挤压时第一个字形相对 `x` 的左移量（逻辑像素）；常规文本段为 `0.0`。
+    pub lead_shift: f32,
     /// 第一个字在原文中的位置（字节偏移，相对所在顶层块的起点）；由原文生成的文字（提示块的
     /// 标题、图里的字）为 `None`。
     pub source: Option<u32>,
@@ -1419,6 +1422,7 @@ impl Cx<'_, '_> {
                 span: Some(Span {
                     start: self.chars,
                     advances: Arc::new([]),
+                    lead_shift: 0.0,
                     source: Some(source),
                     jumps: None,
                 }),
@@ -1451,6 +1455,7 @@ impl Cx<'_, '_> {
                     span: Some(Span {
                         start: run_start,
                         advances: std::mem::take(&mut run_adv).into(),
+                        lead_shift: 0.0,
                         source: Some(run_source),
                         jumps: None,
                     }),
@@ -1483,6 +1488,7 @@ impl Cx<'_, '_> {
                 span: Some(Span {
                     start: run_start,
                     advances: run_adv.into(),
+                    lead_shift: 0.0,
                     source: Some(run_source),
                     jumps: None,
                 }),

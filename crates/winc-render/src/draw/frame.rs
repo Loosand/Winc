@@ -435,7 +435,12 @@ impl Frame<'_> {
     ///
     /// 空白等没有墨迹的字符返回 `None`。排版公式时据此确定根号、分数线、括号的高度。
     pub fn ink(&mut self, kind: FontKind, faux: Faux, size: f32, c: char) -> Option<(f32, f32)> {
-        let Resolved { slot, glyph, .. } = self.glyphs.lookup_faux(kind, faux, size, c);
+        let Resolved {
+            slot,
+            glyph,
+            faux_bold,
+            ..
+        } = self.glyphs.lookup_faux(kind, faux, size, c);
         let s = self.scale;
         let key = GlyphKey {
             slot,
@@ -443,7 +448,7 @@ impl Frame<'_> {
             size: (size * s * 4.0) as u32,
             subpixel: 0,
             oblique: (kind.italic() || faux.italic) && !text::font::italic_slot(slot),
-            bold: faux.bold,
+            bold: faux_bold,
             dark: self.dark,
         };
         let glyph = self.glyphs.get(key, size * s, self.gamma)?;
@@ -539,6 +544,70 @@ impl Frame<'_> {
         pen
     }
 
+    /// 按排版阶段算好的逐字前进宽度 `advances` 与首字左移量 `lead_shift` 绘制一段文字，
+    /// 使中西文混排间距、标点挤压、拉丁字偶调整后的屏幕字形与光标/选区几何完全一致。
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_faux_advances(
+        &mut self,
+        kind: FontKind,
+        faux: Faux,
+        size: f32,
+        x: f32,
+        baseline: f32,
+        text: &str,
+        advances: &[f32],
+        lead_shift: f32,
+        color: Color,
+        clip: Rect,
+    ) -> f32 {
+        let mut pen = x;
+        let mut char_idx = 0usize;
+
+        for unit in sequence::units(text) {
+            let visible = pen <= clip.right().min(self.limit.right());
+            match unit {
+                sequence::Unit::Char(c) => {
+                    let resolved = self.glyphs.lookup_faux(kind, faux, size, c);
+                    let draw_x = if char_idx == 0 && lead_shift != 0.0 {
+                        pen - lead_shift
+                    } else {
+                        pen
+                    };
+                    if visible {
+                        self.draw_glyph(
+                            kind,
+                            faux,
+                            size,
+                            (draw_x, baseline),
+                            c,
+                            resolved,
+                            color,
+                            clip,
+                        );
+                    }
+                    let adv = advances.get(char_idx).copied().unwrap_or(resolved.advance);
+                    pen += adv;
+                    char_idx += 1;
+                }
+                sequence::Unit::Sequence(unit) => {
+                    let count = unit.chars().count();
+                    let seq_adv = if visible {
+                        self.draw_sequence(kind, faux, size, (pen, baseline), unit, color, clip)
+                    } else {
+                        self.glyphs.sequence_advance(kind, faux, size, unit)
+                    };
+                    let adv = advances
+                        .get(char_idx..char_idx + count)
+                        .map_or(seq_adv, |slice| slice.iter().sum());
+                    pen += adv;
+                    char_idx += count;
+                }
+            }
+        }
+
+        pen
+    }
+
     /// 在笔位置 `(x, baseline)` 绘制 emoji 序列 `unit`，返回它的前进宽度（逻辑像素）。
     ///
     /// 序列由 emoji 字体合成；无法合成时逐个绘制其中的可见字符。
@@ -583,6 +652,7 @@ impl Frame<'_> {
                 slot: shaped.slot,
                 glyph,
                 advance: advance * size,
+                faux_bold: false,
             };
             let at = (pen + dx * size, baseline - dy * size);
             self.draw_glyph(kind, Faux::default(), size, at, base, resolved, color, clip);
@@ -690,6 +760,18 @@ impl Frame<'_> {
         self.glyphs.lookup_faux(kind, faux, size, c).advance
     }
 
+    /// 返回比例字体中相邻字符 `left`、`right` 按 `faux` 绘制时的字距调整（逻辑像素）。
+    pub fn kern_faux(
+        &mut self,
+        kind: FontKind,
+        faux: Faux,
+        size: f32,
+        left: char,
+        right: char,
+    ) -> f32 {
+        self.glyphs.kern_faux(kind, faux, size, left, right)
+    }
+
     /// 返回字体 `kind` 在字号 `size`（逻辑像素）下的度量，见 [`Renderer::metrics`]。
     pub fn metrics(&self, kind: FontKind, size: f32) -> Metrics {
         self.glyphs.metrics(kind, size)
@@ -706,7 +788,12 @@ impl Frame<'_> {
         size: f32,
         (x, baseline): (f32, f32),
         c: char,
-        Resolved { slot, glyph, .. }: Resolved,
+        Resolved {
+            slot,
+            glyph,
+            faux_bold,
+            ..
+        }: Resolved,
         color: Color,
         clip: Rect,
     ) {
@@ -737,7 +824,7 @@ impl Frame<'_> {
             // 需要斜体但实际使用的字体不是斜体：字体没有可用的斜体，或斜体中没有该字符
             // （例如注释中的中文使用后备字体）时均做斜切，使同一行注释中的文字倾斜一致。
             oblique: (kind.italic() || faux.italic) && !text::font::italic_slot(slot),
-            bold: faux.bold,
+            bold: faux_bold,
             dark: self.dark,
         };
         let Some(glyph) = self.glyphs.get(key, size * s, self.gamma) else {

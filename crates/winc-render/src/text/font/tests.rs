@@ -553,3 +553,33 @@ fn emoji_use_the_color_font_before_symbol_fonts() {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn real_bold_weight_resolves_for_latin_and_cjk_and_falls_back_when_missing() {
+    let mut fonts = Fonts::load(&[], &[], &[], 400).expect("系统里有字体");
+    // 1. 系统 UI 字体（SFNS.ttf 可变字体）应走真实粗体 `wght` 轴，不启用模拟描边。
+    let (reg_slot, _) = fonts.resolve(FontKind::Ui, 'A');
+    let (bold_slot, bold_glyph, faux_bold) = fonts.resolve_bold(FontKind::Ui, 'A');
+    assert_ne!(bold_glyph, 0);
+    assert_ne!(bold_slot, reg_slot, "SFNS 应解析到独立真粗体槽位");
+    assert!(!faux_bold, "真粗体不应启用 faux_bold");
+    assert_eq!(fonts.face(bold_slot).unwrap().embolden, 0.0);
+
+    // 2. 系统中文后备字体（苹方 PingFangSC-Semibold）应走真实粗体实例，不启用模拟描边。
+    let (cjk_reg, _) = fonts.resolve(FontKind::Ui, '中');
+    let (cjk_bold, cjk_glyph, cjk_faux) = fonts.resolve_bold(FontKind::Ui, '中');
+    assert_ne!(cjk_glyph, 0);
+    assert_ne!(cjk_bold, cjk_reg, "苹方应解析到真实粗体槽位");
+    assert!(!cjk_faux, "苹方真粗体不应启用 faux_bold");
+    assert_eq!(fonts.face(cjk_bold).unwrap().embolden, 0.0);
+
+    // 3. 无粗体变体的静态单文件字体（Monaco.ttf）应优雅回退到模拟加粗。
+    let monaco = FontSpec::Path("/System/Library/Fonts/Monaco.ttf".into());
+    let mut mono_only = Fonts::load(&[monaco], &[], &[], 400).expect("Monaco 是 macOS 自带字体");
+    let (m_reg, _) = mono_only.resolve(FontKind::Mono, 'a');
+    let (m_bold, m_glyph, m_faux) = mono_only.resolve_bold(FontKind::Mono, 'a');
+    assert_ne!(m_glyph, 0);
+    assert_eq!(m_bold, m_reg);
+    assert!(m_faux, "无真粗体时必须回退到模拟加粗");
+}

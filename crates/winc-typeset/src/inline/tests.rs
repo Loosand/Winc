@@ -10,6 +10,8 @@ fn atoms(text: &str) -> Vec<Atom> {
         out.push(Atom {
             kind: AtomKind::Char(c),
             width: 1.0,
+            trailing_gap: 0.0,
+            lead_shift: 0.0,
             run: 0,
             brk: prev.is_some_and(|p| can_break(p, c)),
             space: is_space(c),

@@ -168,6 +168,7 @@ impl Cx<'_, '_> {
                     span: Some(Span {
                         start: run.2,
                         advances: std::mem::take(&mut run.1).into(),
+                        lead_shift: 0.0,
                         source: run.5,
                         jumps: None,
                     }),
@@ -219,6 +220,7 @@ impl Cx<'_, '_> {
                 span: Some(Span {
                     start: self.chars,
                     advances: Arc::new([]),
+                    lead_shift: 0.0,
                     source,
                     jumps: None,
                 }),

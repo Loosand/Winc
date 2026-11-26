@@ -65,6 +65,8 @@ pub(crate) struct GlyphCache {
     glyphs: Generations<GlyphKey, Glyph>,
     /// （槽位，字形，字号×4）→ 前进宽度，逻辑像素。
     advances: FastMap<(u8, u16, u32), f32>,
+    /// （槽位，左字形，右字形）→ 字距调整（以 1 em 为单位，与字号无关）。
+    kerning: FastMap<(u8, u16, u16), f32>,
     /// swash 的整形上下文，复用以避免重复分配。
     shaper: ShapeContext,
     /// emoji 序列 → 整形结果，分新旧两代；序列无法由 emoji 字体合成时为 `None`。
@@ -73,6 +75,9 @@ pub(crate) struct GlyphCache {
     /// 旧一代中被查到的项移入新一代，无需重新整形。
     sequences: [FastMap<Box<str>, Option<Rc<Shaped>>>; 2],
 }
+
+/// 字距调整缓存的最大项数（项）：文档中常见的拉丁字偶通常只有数百对。
+const KERN_CACHE_ENTRIES: usize = 16_384;
 
 /// 整形结果缓存一代的最大项数（项）：文档中不同的 emoji 序列通常只有几十种，远少于该值。
 const SEQUENCE_ENTRIES: usize = 1024;
@@ -102,7 +107,7 @@ impl Shaped {
     }
 }
 
-/// 字符解析出的字体槽位、字形 id 和前进宽度，见 [`GlyphCache::lookup`]。
+/// 字符解析出的字体槽位、字形 id、前进宽度与是否需要模拟加粗，见 [`GlyphCache::lookup`]。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Resolved {
     /// 字体槽位（见 `Fonts`）。
@@ -111,6 +116,8 @@ pub(crate) struct Resolved {
     pub(crate) glyph: u16,
     /// 前进宽度（逻辑像素）。
     pub(crate) advance: f32,
+    /// 未命中真粗体槽位时为真，由光栅化阶段执行描边模拟加粗。
+    pub(crate) faux_bold: bool,
 }
 
 impl GlyphCache {
@@ -122,6 +129,7 @@ impl GlyphCache {
             scaler: ScaleContext::new(),
             glyphs: Generations::per_frame(GLYPH_CACHE_BYTES),
             advances: FastMap::default(),
+            kerning: FastMap::default(),
             shaper: ShapeContext::new(),
             sequences: Default::default(),
         }
@@ -132,6 +140,7 @@ impl GlyphCache {
         self.fonts = fonts;
         self.clear();
         self.advances.clear();
+        self.kerning.clear();
     }
 
     /// 槽位 `slot` 是否为 emoji 字体。
@@ -332,7 +341,8 @@ impl GlyphCache {
         self.lookup_faux(kind, Faux::default(), size, c)
     }
 
-    /// 与 [`Self::lookup`] 相同，但模拟粗体时前进宽度加上笔画加宽的量。
+    /// 与 [`Self::lookup`] 相同；请求粗体时优先解析真粗体槽位，仅在无真粗体回退模拟加粗时
+    /// 为前进宽度加上笔画加宽的量。
     pub(crate) fn lookup_faux(
         &mut self,
         kind: FontKind,
@@ -340,7 +350,12 @@ impl GlyphCache {
         size: f32,
         c: char,
     ) -> Resolved {
-        let (slot, glyph) = self.fonts.resolve(kind, c);
+        let (slot, glyph, faux_bold) = if faux.bold {
+            self.fonts.resolve_bold(kind, c)
+        } else {
+            let (slot, glyph) = self.fonts.resolve(kind, c);
+            (slot, glyph, false)
+        };
         let fonts = &self.fonts;
         let key = (slot, glyph, (size * 4.0) as u32);
 
@@ -359,12 +374,100 @@ impl GlyphCache {
         Resolved {
             slot,
             glyph,
-            advance: if faux.bold && !c.is_whitespace() {
+            advance: if faux_bold && !c.is_whitespace() {
                 advance + size * BOLD_RATIO
             } else {
                 advance
             },
+            faux_bold,
         }
+    }
+
+    /// 返回比例字体中相邻两个拉丁字符 `left`、`right` 的字距调整（逻辑像素，负值表示收紧）。
+    ///
+    /// 等宽字体、不同槽位或非拉丁字符对返回 `0.0`；结果按 `(slot, g1, g2)` 以 1 em 为单位跨字号缓存。
+    pub(crate) fn kern_faux(
+        &mut self,
+        kind: FontKind,
+        faux: Faux,
+        size: f32,
+        left: char,
+        right: char,
+    ) -> f32 {
+        if !matches!(kind, FontKind::Ui | FontKind::Math) {
+            return 0.0;
+        }
+        let is_latin = |c: char| {
+            c.is_ascii_graphic()
+                || (('\u{00C0}'..='\u{024F}').contains(&c) && !matches!(c, '×' | '÷'))
+        };
+        if !is_latin(left) || !is_latin(right) {
+            return 0.0;
+        }
+        let (s1, g1) = if faux.bold {
+            let (s, g, _) = self.fonts.resolve_bold(kind, left);
+            (s, g)
+        } else {
+            self.fonts.resolve(kind, left)
+        };
+        let (s2, g2) = if faux.bold {
+            let (s, g, _) = self.fonts.resolve_bold(kind, right);
+            (s, g)
+        } else {
+            self.fonts.resolve(kind, right)
+        };
+        if s1 != s2 || g1 == 0 || g2 == 0 {
+            return 0.0;
+        }
+        let key = (s1, g1, g2);
+        if let Some(&kern_em) = self.kerning.get(&key) {
+            return kern_em * size;
+        }
+        let kern_em = self.fonts.face(s1).map_or(0.0, |face| {
+            let font = face.font();
+            let base = font
+                .glyph_metrics(&face.coords)
+                .scale(1.0)
+                .advance_width(g1);
+            let mut shaper = self
+                .shaper
+                .builder(font)
+                .size(1.0)
+                .normalized_coords(&face.coords)
+                .features([("liga", 0), ("clig", 0), ("calt", 0), ("kern", 1)])
+                .build();
+            let mut pair = [0u8; 8];
+            let mut n = left.encode_utf8(&mut pair).len();
+            n += right.encode_utf8(&mut pair[n..]).len();
+            if let Ok(s) = std::str::from_utf8(&pair[..n]) {
+                shaper.add_str(s);
+            }
+            let mut shaped_glyphs: [(u16, f32); 2] = [(0, 0.0); 2];
+            let mut count = 0usize;
+            shaper.shape_with(|cluster| {
+                for g in cluster.glyphs {
+                    if count < 2 {
+                        shaped_glyphs[count] = (g.id, g.advance);
+                    }
+                    count += 1;
+                }
+            });
+            if count == 2 && shaped_glyphs[0].0 == g1 && shaped_glyphs[1].0 == g2 {
+                let delta = shaped_glyphs[0].1 - base;
+                if delta.abs() >= 1e-4 {
+                    delta.clamp(-0.35, 0.35)
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            }
+        });
+        if self.kerning.len() >= KERN_CACHE_ENTRIES {
+            self.kerning = FastMap::default();
+        }
+        self.kerning.insert(key, kern_em);
+        kern_em * size
     }
 
     /// 返回缓存中的字形，没有时先光栅化；没有可见像素的字形（如空白）返回 `None`。

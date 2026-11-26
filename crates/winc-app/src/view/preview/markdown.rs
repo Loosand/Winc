@@ -61,18 +61,33 @@ fn draw_plain(frame: &mut Frame<'_>, items: &[Item], (left, top): (f32, f32), cl
                 faux,
                 size,
                 color,
-                ..
+                span,
             } => {
-                frame.text_faux(
-                    *font,
-                    *faux,
-                    *size,
-                    left + x,
-                    top + baseline,
-                    text,
-                    *color,
-                    clip,
-                );
+                if let Some(span) = span {
+                    frame.text_faux_advances(
+                        *font,
+                        *faux,
+                        *size,
+                        left + x,
+                        top + baseline,
+                        text,
+                        &span.advances,
+                        span.lead_shift,
+                        *color,
+                        clip,
+                    );
+                } else {
+                    frame.text_faux(
+                        *font,
+                        *faux,
+                        *size,
+                        left + x,
+                        top + baseline,
+                        text,
+                        *color,
+                        clip,
+                    );
+                }
             }
             _ => {}
         }
@@ -933,20 +948,36 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
                                 mark(from + local(a), from + local(b), p.selection);
                             }
                         }
-                        frame.text_faux(
-                            *font,
-                            *faux,
-                            *size,
-                            left + x,
-                            top + baseline,
-                            text,
-                            if fading.contains(&k) {
-                                color.alpha(color.a * fade)
-                            } else {
-                                *color
-                            },
-                            area,
-                        );
+                        let draw_color = if fading.contains(&k) {
+                            color.alpha(color.a * fade)
+                        } else {
+                            *color
+                        };
+                        if let Some(span) = span {
+                            frame.text_faux_advances(
+                                *font,
+                                *faux,
+                                *size,
+                                left + x,
+                                top + baseline,
+                                text,
+                                &span.advances,
+                                span.lead_shift,
+                                draw_color,
+                                area,
+                            );
+                        } else {
+                            frame.text_faux(
+                                *font,
+                                *faux,
+                                *size,
+                                left + x,
+                                top + baseline,
+                                text,
+                                draw_color,
+                                area,
+                            );
+                        }
                         for (r, style) in span_overlays {
                             draw_mark_overlay(frame, r, style, area);
                         }
