@@ -49,9 +49,12 @@ mod properties;
 mod raw;
 mod table;
 
+use block::is_fence;
 pub use block::{LaidBlock, Scroller};
 pub use memo::Memo;
 pub use memo::key as memo_key;
+use raw::{LiveCell, RawState, blanks};
+pub use raw::{Raw, RawKind};
 
 /// Stable foreground and background for a select label in either theme.
 pub fn property_chip_colors(label: &str, dark: bool) -> (Color, Color) {
@@ -731,195 +734,6 @@ pub struct Cx<'a, 'f> {
     pub toggles: HashMap<u64, u32>,
 }
 
-/// 可编辑的预览中光标所在的叶子块：不排版，显示原文。
-#[derive(Clone, Hash)]
-pub struct Raw {
-    /// 所在顶层块现在的原文（从块的起点起，含解析之后的修改）。
-    pub block: Arc<str>,
-    /// 叶子块在 `block` 中的范围。
-    pub leaf: std::ops::Range<usize>,
-    /// 叶子块在解析结果中的终点（相对顶层块）。
-    ///
-    /// 块里记下的原文位置来自解析结果；输入之后、重新解析之前，`leaf` 的终点已按新增的字节
-    /// 后移，其后的块仍是旧的位置。判断块是否属于该叶子块时与这个终点比较，其后的块不会落入
-    /// 叶子块而被跳过。
-    pub parsed_end: usize,
-    /// 已经显示过：同一个叶子块里排出的其余块（HTML 块里的几段、表格的其余单元格）不再显示。
-    pub done: bool,
-    /// 光标在 `block` 中的位置：表格只把光标所在的单元格显示为原文。
-    pub caret: usize,
-    /// 叶子块的种类，决定原文的显示方式。
-    pub kind: RawKind,
-    /// 输入法正在组合的文字（仅限正文），排入光标所在的行，见 `reveal`。
-    pub preedit: Option<Arc<str>>,
-}
-
-/// 显示原文的叶子块的种类。
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum RawKind {
-    /// 段落、标题：按排版显示，只显示光标接触到的标记，见 `reveal`。
-    Prose,
-    /// 围栏代码块、公式（`$$`）：放入代码框按语言着色，围栏行只在光标位于其上时显示；
-    /// 公式和 mermaid 图的下方另外绘制渲染结果。
-    Fenced(Box<str>),
-    /// HTML 块：放入代码框按 HTML 着色，下方另外绘制渲染结果。
-    Html,
-    /// 其余块：使用等宽字体，按 Markdown 着色。
-    Plain,
-}
-
-impl Raw {
-    /// 光标位于 `block` 的 `caret` 处，所在的叶子块为 `leaf`，在解析结果中的终点为
-    /// `parsed_end`；`prose` 表示正文。
-    pub fn new(
-        block: Arc<str>,
-        leaf: std::ops::Range<usize>,
-        parsed_end: usize,
-        caret: usize,
-        prose: bool,
-        preedit: Option<Arc<str>>,
-    ) -> Raw {
-        let mut raw = Raw {
-            block,
-            parsed_end: parsed_end.max(leaf.start),
-            leaf,
-            done: false,
-            caret,
-            kind: RawKind::Plain,
-            preedit,
-        };
-        raw.kind = if prose { RawKind::Prose } else { raw.guess() };
-        raw
-    }
-
-    /// 按叶子块原文的第一行识别其种类（仅用于非正文的块）。
-    pub fn guess(&self) -> RawKind {
-        let text = self.block.get(self.leaf.clone()).unwrap_or_default();
-        let first = text.split('\n').next().unwrap_or_default();
-        let line = first.trim_start_matches(' ');
-        if first.len() - line.len() > 3 {
-            return RawKind::Plain;
-        }
-        if let Some(info) = ["```", "~~~"].iter().find_map(|f| line.strip_prefix(f)) {
-            let info = info.trim_start_matches(['`', '~']).trim();
-            let lang = info.split_whitespace().next().unwrap_or_default();
-            return RawKind::Fenced(lang.into());
-        }
-        if line.starts_with("$$") {
-            return RawKind::Fenced("latex".into());
-        }
-        if line.starts_with('<') {
-            return RawKind::Html;
-        }
-        RawKind::Plain
-    }
-}
-
-/// 可编辑的预览中光标所在的单元格：第几行（解析出的行，不含表头下面那一行）、第几列，和这一格
-/// 两个 `|` 之间的原文在顶层块中的范围。
-type LiveCell = (usize, usize, std::ops::Range<usize>);
-
-/// [`Cx::raw_state`] 的结果：块不在光标所在的叶子块里、显示原文、或者原文已经显示过。
-enum RawState {
-    Laid,
-    Show,
-    Skip,
-    /// 光标所在的段落、标题：按排版显示，只显示光标接触到的标记。
-    ///
-    /// 规则见 `winc_preview::markdown::reveal`。当编辑期间拆出多个块时逐块保持排版；
-    /// 光标位于段落之后的空行上时，这些空行（原文起点，相对顶层块）各排一行，供光标定位。
-    Reveal(Vec<Block>, Vec<usize>),
-    /// 光标所在的分隔线，见 [`Cx::raw_rule`]。
-    Rule,
-}
-
-/// `line` 是否为代码块或公式的围栏（三个以上的反引号或波浪号，或 `$$`）。
-fn is_fence(line: &str) -> bool {
-    let line = line.trim();
-    ["```", "~~~", "$$"].iter().any(|f| line.starts_with(f))
-}
-
-/// 返回光标位于叶子块内容之后的空行上时需要排版的空行（原文起点，相对顶层块）。
-///
-/// 范围从内容之后的第一行到光标所在的行；在块末尾按回车后，光标位于这些行上。
-fn blanks(raw: &Raw) -> Vec<usize> {
-    let text = raw.block.get(raw.leaf.clone()).unwrap_or_default();
-    let caret = raw.caret.saturating_sub(raw.leaf.start).min(text.len());
-    let content = text.trim_end().len();
-    match text[content..].find('\n').map(|n| content + n + 1) {
-        Some(first) if caret >= first => std::iter::once(first)
-            .chain(
-                text[first..caret]
-                    .match_indices('\n')
-                    .map(|(n, _)| first + n + 1),
-            )
-            .map(|at| raw.leaf.start + at)
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// 返回最后一个非空白行的行尾（不含 `\r`/`\n`，保留该行末尾的空格与制表符）；
-/// 若全是水平空白则保留到第一个换行符之前，使输入行尾空格时仍可正常排版并推动光标。
-fn content_end(text: &str) -> usize {
-    let trimmed = text.trim_end().len();
-    let end = match text[trimmed..].find('\n') {
-        Some(rel) => trimmed + rel,
-        None => text.len(),
-    };
-    text[..end].trim_end_matches('\r').len()
-}
-
-/// 返回光标所在的段落、标题按当前原文生成的块列表（见 `winc_preview::markdown::reveal`）、
-/// 光标位于其后的空行上时需要排版的空行（原文起点，相对顶层块），以及组字是否已排入该块。
-fn reveal(raw: &Raw) -> (Vec<Block>, Vec<usize>, bool) {
-    let before = &raw.block[..raw.leaf.start];
-    let prefix = before
-        .rsplit(['\n', '\r'])
-        .next()
-        .unwrap_or_default()
-        .trim_start_matches([' ', '\t']);
-    let before_quote = prefix.starts_with('>')
-        && prefix.bytes().all(|c| matches!(c, b'>' | b' ' | b'\t'))
-        && !raw
-            .block
-            .get(raw.leaf.clone())
-            .unwrap_or_default()
-            .trim()
-            .is_empty();
-    let start = raw.leaf.start - if before_quote { prefix.len() } else { 0 };
-    let text = raw.block.get(start..raw.leaf.end).unwrap_or_default();
-    let quote_body = text.trim_start_matches([' ', '\t', '>']);
-    // A callout opener displayed at its own source position must keep its line.
-    let alert = quote_body.lines().next().is_some_and(|line| {
-        [
-            "[!NOTE]",
-            "[!TIP]",
-            "[!IMPORTANT]",
-            "[!WARNING]",
-            "[!CAUTION]",
-        ]
-        .iter()
-        .any(|kind| line.trim_end().eq_ignore_ascii_case(kind))
-    });
-    let leading_quote = text.trim_start_matches([' ', '\t']).starts_with('>')
-        && !quote_body.trim().is_empty()
-        && !alert;
-    let caret = raw.caret.saturating_sub(start).min(text.len());
-    let content = content_end(text);
-    let blanks = blanks(raw);
-    let at = (caret <= content).then_some(caret);
-    let preedit = raw.preedit.as_deref().filter(|_| at.is_some());
-    let mut blocks =
-        winc_preview::markdown::reveal::reveal_blocks(&text[..content], at, preedit, leading_quote);
-    for block in &mut blocks {
-        if let Block::Paragraph(inline) | Block::Heading(_, inline) = block {
-            inline.source = start;
-        }
-    }
-    (blocks, blanks, preedit.is_some())
-}
-
 /// 块里文字继承的样式：颜色和嵌套深度。
 #[derive(Clone, Copy)]
 pub struct Env {
@@ -1272,7 +1086,7 @@ impl Cx<'_, '_> {
         let record = env.depth == 0
             && x == 0.0
             && y == 0.0
-            && items.len() >= patch::HUGE_LIST_ITEMS
+            && items.len() >= block::HUGE_LIST_ITEMS
             && out.items.is_empty();
         let mut entries = if record {
             Vec::with_capacity(items.len())
@@ -1337,15 +1151,15 @@ impl Cx<'_, '_> {
             if record {
                 let fallback_src = entries
                     .last()
-                    .map_or(0, |e: &patch::ListEntry| e.source_start);
-                entries.push(patch::ListEntry {
+                    .map_or(0, |e: &block::ListEntry| e.source_start);
+                entries.push(block::ListEntry {
                     items: item_start..out.items.len() as u32,
                     text_bytes: tb_start..self.text.len(),
                     chars: ch_start..self.chars,
                     top: item_top,
                     height: item_h,
-                    source_start: patch::first_block_source(&item.blocks).unwrap_or(fallback_src),
-                    content_hash: patch::list_item_content_hash(item),
+                    source_start: block::first_block_source(&item.blocks).unwrap_or(fallback_src),
+                    content_hash: block::list_item_content_hash(item),
                 });
             }
         }
@@ -1359,7 +1173,7 @@ impl Cx<'_, '_> {
                 .as_ref()
                 .filter(|r| r.done)
                 .map_or(0, |r| r.leaf.end as isize - r.parsed_end as isize);
-            out.patch = Some(Box::new(patch::PatchIndex::List(patch::ListPatch {
+            out.patch = Some(Box::new(block::PatchIndex::List(block::ListPatch {
                 start,
                 width,
                 base,
@@ -1514,7 +1328,7 @@ pub struct Out {
     /// 显示原文的块中渲染结果的第一项和上边缘（相对块的左上角）。
     pub preview: Option<(u32, f32)>,
     /// 超大单块的原位修补索引（小块为 `None`）。
-    pub(crate) patch: Option<Box<patch::PatchIndex>>,
+    pub(crate) patch: Option<Box<block::PatchIndex>>,
 }
 
 /// Vertical rhythm shared by prose, editable blank lines and empty lists.
@@ -1565,6 +1379,62 @@ impl Cx<'_, '_> {
         let id = memo::key(|h| (base, repeat, *n).hash(h));
         *n += 1;
         id
+    }
+
+    /// 排一个顶层块并返回完整的 [`LaidBlock`]；`raw` 为 `Some` 时对光标所在叶子块显示原文，
+    /// 若叶子块未命中常规路径则退回整块原文加渲染预览。
+    pub fn layout_block(
+        &mut self,
+        block: &Block,
+        width: f32,
+        env: Env,
+        raw: Option<&Raw>,
+    ) -> LaidBlock {
+        let mut out = Out::default();
+        self.text.clear();
+        self.chars = 0;
+        self.memo.take_touched();
+        self.raw = raw.cloned();
+        self.preedit = false;
+        self.cell = None;
+        let mut flow = self.block(block, 0.0, 0.0, width, env, &mut out);
+        // 光标所在的叶子块在块里没有找到（写在列表里的公式这类没有原文对照的块）：整个
+        // 顶层块显示原文。
+        if let Some(raw) = self.raw.as_mut().filter(|r| !r.done) {
+            raw.leaf = 0..raw.block.len();
+            raw.parsed_end = raw.block.len();
+            raw.kind = raw.guess();
+            out = Out::default();
+            self.text.clear();
+            self.chars = 0;
+            flow = self.raw_with_preview(block, 0.0, 0.0, width, env, &mut out);
+        }
+        self.raw = None;
+        LaidBlock::from_layout(
+            flow.height,
+            out,
+            self.text.as_str().into(),
+            self.chars,
+            self.memo.take_touched(),
+            self.preedit,
+        )
+    }
+
+    /// 排一个仅包含原文的可编辑块（如全空白文档的占位行），返回完整的 [`LaidBlock`]。
+    pub fn layout_raw(&mut self, raw: Raw, width: f32) -> LaidBlock {
+        self.raw = Some(raw);
+        let mut items = Vec::new();
+        self.memo.take_touched();
+        let flow = self.raw(0.0, 0.0, width, &mut items);
+        self.raw = None;
+        LaidBlock::new(
+            flow.height,
+            items,
+            Vec::new(),
+            "".into(),
+            0,
+            self.memo.take_touched(),
+        )
     }
 }
 

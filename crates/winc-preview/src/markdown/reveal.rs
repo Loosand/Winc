@@ -31,10 +31,8 @@ pub fn reveal(
     {
         return single;
     }
-    let insert = caret.zip(insert);
     let lines = Lines::strip(text, leading_quote);
-    let plain = lines.plain.trim_end_matches(['\n', '\r']);
-    Block::Paragraph(verbatim(plain, insert, |at| Some(lines.to_text(at))))
+    lines.verbatim_block(caret.zip(insert))
 }
 
 /// 编辑器核心 · 多块行内标记显隐：与 [`reveal`] 相同，但当实时编辑期间（例如回车拆段、
@@ -46,181 +44,8 @@ pub fn reveal_blocks(
     insert: Option<&str>,
     leading_quote: bool,
 ) -> Vec<Block> {
-    let insert = caret.zip(insert);
     let lines = Lines::strip(text, leading_quote);
-    let plain = &lines.plain;
-    // 去掉引用标记后没有内容（只输入了 `>`）：逐字显示原文，光标仍有位置可落。
-    if plain.trim().is_empty() && !text.trim().is_empty() {
-        let text = text.trim_end_matches(['\n', '\r']);
-        return vec![Block::Paragraph(verbatim(text, insert, Some))];
-    }
-    let parsed = parse(plain);
-    if parsed.blocks.is_empty() {
-        let text = plain.trim_end_matches(['\n', '\r']);
-        return vec![Block::Paragraph(verbatim(text, insert, |at| {
-            Some(lines.to_text(at))
-        }))];
-    }
-    if parsed.blocks.len() == 1 {
-        return match parsed.blocks.as_slice() {
-            [Block::Paragraph(inline)] => {
-                let base = parsed.ranges.first().map_or(0, |r| r.start) + inline.source;
-                vec![Block::Paragraph(reveal_slice(
-                    text,
-                    &lines,
-                    0..plain.len(),
-                    base,
-                    inline,
-                    caret,
-                    insert,
-                    leading_quote,
-                ))]
-            }
-            [Block::Heading(level, inline)] => {
-                let base = parsed.ranges.first().map_or(0, |r| r.start) + inline.source;
-                vec![Block::Heading(
-                    *level,
-                    reveal_slice(
-                        text,
-                        &lines,
-                        0..plain.len(),
-                        base,
-                        inline,
-                        caret,
-                        insert,
-                        leading_quote,
-                    ),
-                )]
-            }
-            _ => {
-                let text = plain.trim_end_matches(['\n', '\r']);
-                vec![Block::Paragraph(verbatim(text, insert, |at| {
-                    Some(lines.to_text(at))
-                }))]
-            }
-        };
-    }
-
-    // 多个块（常见于回车拆段而后台解析尚未追上）：只对光标所在的块显露标记，其余块保持排版。
-    let caret_plain = caret.map(|c| lines.to_plain(c));
-    let mut blocks = Vec::with_capacity(parsed.blocks.len());
-    for (block, range) in parsed.blocks.into_iter().zip(parsed.ranges) {
-        let line_limit = match plain[range.end..].find('\n') {
-            Some(rel) => range.end + rel,
-            None => plain.len(),
-        };
-        let slice_end = plain[..line_limit].trim_end_matches('\r').len();
-        let slice = range.start..slice_end.max(range.start);
-        let here = caret_plain.is_some_and(|c| slice.start <= c && c <= slice.end);
-        let block_caret = here.then_some(caret).flatten();
-        let block_insert = here.then_some(insert).flatten();
-        match block {
-            Block::Paragraph(inline) => {
-                let base = range.start + inline.source;
-                blocks.push(Block::Paragraph(reveal_slice(
-                    text,
-                    &lines,
-                    slice,
-                    base,
-                    &inline,
-                    block_caret,
-                    block_insert,
-                    leading_quote && range.start == 0,
-                )));
-            }
-            Block::Heading(level, inline) => {
-                let base = range.start + inline.source;
-                blocks.push(Block::Heading(
-                    level,
-                    reveal_slice(
-                        text,
-                        &lines,
-                        slice,
-                        base,
-                        &inline,
-                        block_caret,
-                        block_insert,
-                        leading_quote && range.start == 0,
-                    ),
-                ));
-            }
-            _ => {
-                let raw_part = plain[slice.clone()].trim_end_matches(['\n', '\r']);
-                let start = slice.start;
-                blocks.push(Block::Paragraph(verbatim(raw_part, block_insert, |at| {
-                    Some(lines.to_text(start + at))
-                })));
-            }
-        }
-    }
-    blocks
-}
-
-#[allow(clippy::too_many_arguments)]
-fn reveal_slice(
-    text: &str,
-    lines: &Lines,
-    slice: Range<usize>,
-    base: usize,
-    inline: &Inline,
-    caret: Option<usize>,
-    insert: Option<(usize, &str)>,
-    leading_quote: bool,
-) -> Inline {
-    let plain = &lines.plain;
-    let ranges = caret.map_or_else(Vec::new, |_| {
-        elements(&plain[slice.clone()])
-            .into_iter()
-            .map(|r| slice.start + r.start..slice.start + r.end)
-            .collect()
-    });
-    let elements = ElementIndex::new(&ranges);
-    let mut out = Out {
-        insert,
-        quote: caret.and_then(|at| quote_at(text, at, leading_quote)),
-        ..Out::default()
-    };
-    let caret = caret.map(|c| lines.to_plain(c));
-    let anchors = &inline.map.0;
-    // 已写入的文字和已处理的原文（相对 `plain`）的末尾位置。
-    let (mut t, mut s) = (0, slice.start);
-    let emit = |out: &mut Out, gap: Range<usize>, made: Range<usize>| {
-        let generated = &inline.text[made.clone()];
-        // 由原文生成的文字（emoji、脚注编号）之前的标记单独成为一处：光标接触时显示原文，
-        // 不显示生成的文字。
-        let own = !generated.trim().is_empty();
-        let shown = out.gap(plain, gap, &elements, caret, own, lines);
-        let image = generated.contains(super::IMAGE_MARK);
-        if shown && image && !out.text.ends_with('\n') {
-            // 显示图片的原文时，图片另起一行排在原文下方，使原文与图片都完整可见。
-            out.push('\n', Style::default(), None);
-        }
-        if !(shown && own) || image {
-            out.copy(inline, made, None, &elements, caret);
-        }
-    };
-    for a in anchors {
-        let (at, src, len) = (a.text as usize, base + a.source as usize, a.len as usize);
-        emit(&mut out, s..src.max(s), t..at.max(t));
-        t = t.max(at);
-        if len > 0 {
-            out.copy(inline, at..at + len, Some((src, lines)), &elements, caret);
-            t = at + len;
-            s = s.max(src + len);
-        }
-    }
-    emit(&mut out, s..slice.end.max(s), t..inline.text.len());
-    out.flush();
-    Inline {
-        text: out.text,
-        runs: out.runs,
-        links: inline.links.clone(),
-        images: inline.images.clone(),
-        align: inline.align,
-        map: out.map,
-        ids: inline.ids.clone(),
-        source: 0,
-    }
+    lines.reveal_blocks(text, caret, insert, leading_quote)
 }
 
 /// 在可编辑段落中补齐选区完整覆盖的隐藏标记，返回原文中的字节范围。
@@ -229,24 +54,7 @@ pub fn include_hidden_paragraph_markers(
     selection: Range<usize>,
     revealed_at: Option<usize>,
 ) -> Range<usize> {
-    let lines = Lines::strip(text, false);
-    let selected = lines.to_plain(selection.start)..lines.to_plain(selection.end);
-    let expanded = super::clipboard::include_hidden_markers(
-        &lines.plain,
-        selected.clone(),
-        revealed_at.map(|at| lines.to_plain(at)),
-    );
-    let start = if expanded.start < selected.start {
-        lines.to_text(expanded.start)
-    } else {
-        selection.start
-    };
-    let end = if expanded.end > selected.end {
-        lines.to_text(expanded.end)
-    } else {
-        selection.end
-    };
-    start..end
+    Lines::strip(text, false).include_hidden_markers(selection, revealed_at)
 }
 
 /// 带标记的行内元素在 `plain` 中的字节范围。
@@ -396,6 +204,209 @@ impl Lines {
         let (p, t) = self.starts[line];
         let next = self.starts.get(i).map_or(usize::MAX, |&(p, _)| p);
         (p + (at - t)).min(next)
+    }
+
+    /// 将去掉引用前缀后的文字按逐字段落返回。
+    fn verbatim_block(&self, insert: Option<(usize, &str)>) -> Block {
+        let plain = self.plain.trim_end_matches(['\n', '\r']);
+        Block::Paragraph(verbatim(plain, insert, |at| Some(self.to_text(at))))
+    }
+
+    /// 逐块保持富文本排版，仅对光标所在块显露接触到的语法标记。
+    fn reveal_blocks(
+        &self,
+        text: &str,
+        caret: Option<usize>,
+        insert: Option<&str>,
+        leading_quote: bool,
+    ) -> Vec<Block> {
+        let insert = caret.zip(insert);
+        let plain = &self.plain;
+        // 去掉引用标记后没有内容（只输入了 `>`）：逐字显示原文，光标仍有位置可落。
+        if plain.trim().is_empty() && !text.trim().is_empty() {
+            let text = text.trim_end_matches(['\n', '\r']);
+            return vec![Block::Paragraph(verbatim(text, insert, Some))];
+        }
+        let parsed = parse(plain);
+        if parsed.blocks.is_empty() {
+            return vec![self.verbatim_block(insert)];
+        }
+        if parsed.blocks.len() == 1 {
+            return match parsed.blocks.as_slice() {
+                [Block::Paragraph(inline)] => {
+                    let base = parsed.ranges.first().map_or(0, |r| r.start) + inline.source;
+                    vec![Block::Paragraph(self.reveal_slice(
+                        text,
+                        0..plain.len(),
+                        base,
+                        inline,
+                        caret,
+                        insert,
+                        leading_quote,
+                    ))]
+                }
+                [Block::Heading(level, inline)] => {
+                    let base = parsed.ranges.first().map_or(0, |r| r.start) + inline.source;
+                    vec![Block::Heading(
+                        *level,
+                        self.reveal_slice(
+                            text,
+                            0..plain.len(),
+                            base,
+                            inline,
+                            caret,
+                            insert,
+                            leading_quote,
+                        ),
+                    )]
+                }
+                _ => vec![self.verbatim_block(insert)],
+            };
+        }
+
+        // 多个块（常见于回车拆段而后台解析尚未追上）：只对光标所在的块显露标记，其余块保持排版。
+        let caret_plain = caret.map(|c| self.to_plain(c));
+        let mut blocks = Vec::with_capacity(parsed.blocks.len());
+        for (block, range) in parsed.blocks.into_iter().zip(parsed.ranges) {
+            let line_limit = match plain[range.end..].find('\n') {
+                Some(rel) => range.end + rel,
+                None => plain.len(),
+            };
+            let slice_end = plain[..line_limit].trim_end_matches('\r').len();
+            let slice = range.start..slice_end.max(range.start);
+            let here = caret_plain.is_some_and(|c| slice.start <= c && c <= slice.end);
+            let block_caret = here.then_some(caret).flatten();
+            let block_insert = here.then_some(insert).flatten();
+            match block {
+                Block::Paragraph(inline) => {
+                    let base = range.start + inline.source;
+                    blocks.push(Block::Paragraph(self.reveal_slice(
+                        text,
+                        slice,
+                        base,
+                        &inline,
+                        block_caret,
+                        block_insert,
+                        leading_quote && range.start == 0,
+                    )));
+                }
+                Block::Heading(level, inline) => {
+                    let base = range.start + inline.source;
+                    blocks.push(Block::Heading(
+                        level,
+                        self.reveal_slice(
+                            text,
+                            slice,
+                            base,
+                            &inline,
+                            block_caret,
+                            block_insert,
+                            leading_quote && range.start == 0,
+                        ),
+                    ));
+                }
+                _ => {
+                    let raw_part = plain[slice.clone()].trim_end_matches(['\n', '\r']);
+                    let start = slice.start;
+                    blocks.push(Block::Paragraph(verbatim(raw_part, block_insert, |at| {
+                        Some(self.to_text(start + at))
+                    })));
+                }
+            }
+        }
+        blocks
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reveal_slice(
+        &self,
+        text: &str,
+        slice: Range<usize>,
+        base: usize,
+        inline: &Inline,
+        caret: Option<usize>,
+        insert: Option<(usize, &str)>,
+        leading_quote: bool,
+    ) -> Inline {
+        let plain = &self.plain;
+        let ranges = caret.map_or_else(Vec::new, |_| {
+            elements(&plain[slice.clone()])
+                .into_iter()
+                .map(|r| slice.start + r.start..slice.start + r.end)
+                .collect()
+        });
+        let elements = ElementIndex::new(&ranges);
+        let mut out = Out {
+            insert,
+            quote: caret.and_then(|at| quote_at(text, at, leading_quote)),
+            ..Out::default()
+        };
+        let caret = caret.map(|c| self.to_plain(c));
+        let anchors = &inline.map.0;
+        // 已写入的文字和已处理的原文（相对 `plain`）的末尾位置。
+        let (mut t, mut s) = (0, slice.start);
+        let emit = |out: &mut Out, gap: Range<usize>, made: Range<usize>| {
+            let generated = &inline.text[made.clone()];
+            // 由原文生成的文字（emoji、脚注编号）之前的标记单独成为一处：光标接触时显示原文，
+            // 不显示生成的文字。
+            let own = !generated.trim().is_empty();
+            let shown = out.gap(plain, gap, &elements, caret, own, self);
+            let image = generated.contains(super::IMAGE_MARK);
+            if shown && image && !out.text.ends_with('\n') {
+                // 显示图片的原文时，图片另起一行排在原文下方，使原文与图片都完整可见。
+                out.push('\n', Style::default(), None);
+            }
+            if !(shown && own) || image {
+                out.copy(inline, made, None, &elements, caret);
+            }
+        };
+        for a in anchors {
+            let (at, src, len) = (a.text as usize, base + a.source as usize, a.len as usize);
+            emit(&mut out, s..src.max(s), t..at.max(t));
+            t = t.max(at);
+            if len > 0 {
+                out.copy(inline, at..at + len, Some((src, self)), &elements, caret);
+                t = at + len;
+                s = s.max(src + len);
+            }
+        }
+        emit(&mut out, s..slice.end.max(s), t..inline.text.len());
+        out.flush();
+        Inline {
+            text: out.text,
+            runs: out.runs,
+            links: inline.links.clone(),
+            images: inline.images.clone(),
+            align: inline.align,
+            map: out.map,
+            ids: inline.ids.clone(),
+            source: 0,
+        }
+    }
+
+    /// 补齐选区完整覆盖的隐藏标记并映射回原文偏移。
+    fn include_hidden_markers(
+        &self,
+        selection: Range<usize>,
+        revealed_at: Option<usize>,
+    ) -> Range<usize> {
+        let selected = self.to_plain(selection.start)..self.to_plain(selection.end);
+        let expanded = super::clipboard::include_hidden_markers(
+            &self.plain,
+            selected.clone(),
+            revealed_at.map(|at| self.to_plain(at)),
+        );
+        let start = if expanded.start < selected.start {
+            self.to_text(expanded.start)
+        } else {
+            selection.start
+        };
+        let end = if expanded.end > selected.end {
+            self.to_text(expanded.end)
+        } else {
+            selection.end
+        };
+        start..end
     }
 }
 

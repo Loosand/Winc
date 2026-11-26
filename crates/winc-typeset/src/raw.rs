@@ -2,6 +2,189 @@
 
 use super::*;
 
+/// 要显示原文的叶子块（可编辑的预览中光标所在的块）。
+#[derive(Clone, Hash)]
+pub struct Raw {
+    /// 所在顶层块现在的原文（从块的起点起，含解析之后的修改）。
+    pub block: Arc<str>,
+    /// 叶子块在 `block` 中的范围。
+    pub leaf: std::ops::Range<usize>,
+    /// 叶子块在解析结果中的终点（相对顶层块）。
+    ///
+    /// 块里记下的原文位置来自解析结果；输入之后、重新解析之前，`leaf` 的终点已按新增的字节
+    /// 后移，其后的块仍是旧的位置。判断块是否属于该叶子块时与这个终点比较，其后的块不会落入
+    /// 叶子块而被跳过。
+    pub parsed_end: usize,
+    /// 已经显示过：同一个叶子块里排出的其余块（HTML 块里的几段、表格的其余单元格）不再显示。
+    pub done: bool,
+    /// 光标在 `block` 中的位置：表格只把光标所在的单元格显示为原文。
+    pub caret: usize,
+    /// 叶子块的种类，决定原文的显示方式。
+    pub kind: RawKind,
+    /// 输入法正在组合的文字（仅限正文），排入光标所在的行，见 `reveal`。
+    pub preedit: Option<Arc<str>>,
+}
+
+/// 显示原文的叶子块的种类。
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum RawKind {
+    /// 段落、标题：按排版显示，只显示光标接触到的标记，见 `reveal`。
+    Prose,
+    /// 围栏代码块、公式（`$$`）：放入代码框按语言着色，围栏行只在光标位于其上时显示；
+    /// 公式和 mermaid 图的下方另外绘制渲染结果。
+    Fenced(Box<str>),
+    /// HTML 块：放入代码框按 HTML 着色，下方另外绘制渲染结果。
+    Html,
+    /// 其余块：使用等宽字体，按 Markdown 着色。
+    Plain,
+}
+
+impl Raw {
+    /// 光标位于 `block` 的 `caret` 处，所在的叶子块为 `leaf`，在解析结果中的终点为
+    /// `parsed_end`；`prose` 表示正文。
+    pub fn new(
+        block: Arc<str>,
+        leaf: std::ops::Range<usize>,
+        parsed_end: usize,
+        caret: usize,
+        prose: bool,
+        preedit: Option<Arc<str>>,
+    ) -> Raw {
+        let mut raw = Raw {
+            block,
+            parsed_end: parsed_end.max(leaf.start),
+            leaf,
+            done: false,
+            caret,
+            kind: RawKind::Plain,
+            preedit,
+        };
+        raw.kind = if prose { RawKind::Prose } else { raw.guess() };
+        raw
+    }
+
+    /// 按叶子块原文的第一行识别其种类（仅用于非正文的块）。
+    pub fn guess(&self) -> RawKind {
+        let text = self.block.get(self.leaf.clone()).unwrap_or_default();
+        let first = text.split('\n').next().unwrap_or_default();
+        let line = first.trim_start_matches(' ');
+        if first.len() - line.len() > 3 {
+            return RawKind::Plain;
+        }
+        if let Some(info) = ["```", "~~~"].iter().find_map(|f| line.strip_prefix(f)) {
+            let info = info.trim_start_matches(['`', '~']).trim();
+            let lang = info.split_whitespace().next().unwrap_or_default();
+            return RawKind::Fenced(lang.into());
+        }
+        if line.starts_with("$$") {
+            return RawKind::Fenced("latex".into());
+        }
+        if line.starts_with('<') {
+            return RawKind::Html;
+        }
+        RawKind::Plain
+    }
+}
+
+/// 可编辑的预览中光标所在的单元格：第几行（解析出的行，不含表头下面那一行）、第几列，和这一格
+/// 两个 `|` 之间的原文在顶层块中的范围。
+pub(super) type LiveCell = (usize, usize, std::ops::Range<usize>);
+
+/// [`Cx::raw_state`] 的结果：块不在光标所在的叶子块里、显示原文、或者原文已经显示过。
+pub(super) enum RawState {
+    Laid,
+    Show,
+    Skip,
+    /// 光标所在的段落、标题：按排版显示，只显示光标接触到的标记。
+    ///
+    /// 规则见 `winc_preview::markdown::reveal`。当编辑期间拆出多个块时逐块保持排版；
+    /// 光标位于段落之后的空行上时，这些空行（原文起点，相对顶层块）各排一行，供光标定位。
+    Reveal(Vec<Block>, Vec<usize>),
+    /// 光标所在的分隔线，见 [`Cx::raw_rule`]。
+    Rule,
+}
+
+/// 返回光标位于叶子块内容之后的空行上时需要排版的空行（原文起点，相对顶层块）。
+///
+/// 范围从内容之后的第一行到光标所在的行；在块末尾按回车后，光标位于这些行上。
+pub(super) fn blanks(raw: &Raw) -> Vec<usize> {
+    let text = raw.block.get(raw.leaf.clone()).unwrap_or_default();
+    let caret = raw.caret.saturating_sub(raw.leaf.start).min(text.len());
+    let content = text.trim_end().len();
+    match text[content..].find('\n').map(|n| content + n + 1) {
+        Some(first) if caret >= first => std::iter::once(first)
+            .chain(
+                text[first..caret]
+                    .match_indices('\n')
+                    .map(|(n, _)| first + n + 1),
+            )
+            .map(|at| raw.leaf.start + at)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 返回最后一个非空白行的行尾（不含 `\r`/`\n`，保留该行末尾的空格与制表符）；
+/// 若全是水平空白则保留到第一个换行符之前，使输入行尾空格时仍可正常排版并推动光标。
+fn content_end(text: &str) -> usize {
+    let trimmed = text.trim_end().len();
+    let end = match text[trimmed..].find('\n') {
+        Some(rel) => trimmed + rel,
+        None => text.len(),
+    };
+    text[..end].trim_end_matches('\r').len()
+}
+
+/// 返回光标所在的段落、标题按当前原文生成的块列表（见 `winc_preview::markdown::reveal`）、
+/// 光标位于其后的空行上时需要排版的空行（原文起点，相对顶层块），以及组字是否已排入该块。
+pub(super) fn reveal(raw: &Raw) -> (Vec<Block>, Vec<usize>, bool) {
+    let before = &raw.block[..raw.leaf.start];
+    let prefix = before
+        .rsplit(['\n', '\r'])
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches([' ', '\t']);
+    let before_quote = prefix.starts_with('>')
+        && prefix.bytes().all(|c| matches!(c, b'>' | b' ' | b'\t'))
+        && !raw
+            .block
+            .get(raw.leaf.clone())
+            .unwrap_or_default()
+            .trim()
+            .is_empty();
+    let start = raw.leaf.start - if before_quote { prefix.len() } else { 0 };
+    let text = raw.block.get(start..raw.leaf.end).unwrap_or_default();
+    let quote_body = text.trim_start_matches([' ', '\t', '>']);
+    // A callout opener displayed at its own source position must keep its line.
+    let alert = quote_body.lines().next().is_some_and(|line| {
+        [
+            "[!NOTE]",
+            "[!TIP]",
+            "[!IMPORTANT]",
+            "[!WARNING]",
+            "[!CAUTION]",
+        ]
+        .iter()
+        .any(|kind| line.trim_end().eq_ignore_ascii_case(kind))
+    });
+    let leading_quote = text.trim_start_matches([' ', '\t']).starts_with('>')
+        && !quote_body.trim().is_empty()
+        && !alert;
+    let caret = raw.caret.saturating_sub(start).min(text.len());
+    let content = content_end(text);
+    let blanks = blanks(raw);
+    let at = (caret <= content).then_some(caret);
+    let preedit = raw.preedit.as_deref().filter(|_| at.is_some());
+    let mut blocks =
+        winc_preview::markdown::reveal::reveal_blocks(&text[..content], at, preedit, leading_quote);
+    for block in &mut blocks {
+        if let Block::Paragraph(inline) | Block::Heading(_, inline) = block {
+            inline.source = start;
+        }
+    }
+    (blocks, blanks, preedit.is_some())
+}
+
 impl Cx<'_, '_> {
     /// `block` 是否在光标所在的叶子块里（按块里第一处有原文对照的位置判断）。
     pub(super) fn raw_state(&mut self, block: &Block) -> RawState {
@@ -346,7 +529,7 @@ impl Cx<'_, '_> {
         let record = record_patch
             && fenced
             && !matches!(lang, "mermaid" | "latex")
-            && count >= patch::HUGE_CODE_LINES
+            && count >= block::HUGE_CODE_LINES
             && blanks.is_empty();
         let mut line_spans = if record {
             Vec::with_capacity(count)
@@ -367,7 +550,7 @@ impl Cx<'_, '_> {
             let ch_start = self.chars;
             if fence && !here {
                 if record {
-                    line_spans.push(patch::CodeLineSpan {
+                    line_spans.push(block::CodeLineSpan {
                         items: item_start..item_start,
                         text_bytes: tb_start..tb_start,
                         chars: ch_start..ch_start,
@@ -402,7 +585,7 @@ impl Cx<'_, '_> {
             }
             top += piece.height;
             if record {
-                line_spans.push(patch::CodeLineSpan {
+                line_spans.push(block::CodeLineSpan {
                     items: item_start..out.items.len() as u32,
                     text_bytes: tb_start..self.text.len(),
                     chars: ch_start..self.chars,
@@ -426,7 +609,7 @@ impl Cx<'_, '_> {
         // 代码块在编辑时同样显示复制按钮，复制围栏之间的代码（直接按字节切片，避免拷贝整块行表）。
         let mut code_item = None;
         if fenced && !matches!(lang, "mermaid" | "latex") {
-            let body = patch::fenced_body(text);
+            let body = block::fenced_body(text);
             code_item = Some(out.items.len() as u32);
             out.items.push(Item::Code {
                 rect,
@@ -435,7 +618,7 @@ impl Cx<'_, '_> {
             });
         }
         if record {
-            out.patch = Some(Box::new(patch::PatchIndex::CodeBox(patch::CodeBoxPatch {
+            out.patch = Some(Box::new(block::PatchIndex::CodeBox(block::CodeBoxPatch {
                 lang: lang.into(),
                 width,
                 pad,

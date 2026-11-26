@@ -1250,23 +1250,37 @@ fn invariant_13_decoration_layer_anchors_and_tracks_edits() {
     let expected_range = expected_start..expected_start + target.len();
     let expected_ghost = now_text.find("的含义").unwrap() + "的含义".len();
 
-    let all = app.preview.markdown.decorations.all();
-    assert_eq!(all.len(), 2);
-    assert_eq!(all[0].range, expected_range, "批注锚点未随上方编辑精确平移");
+    let dec_mark = app
+        .preview
+        .markdown
+        .decorations
+        .get(DecorationId(1))
+        .expect("应存在批注装饰");
+    let dec_ghost = app
+        .preview
+        .markdown
+        .decorations
+        .get(DecorationId(2))
+        .expect("应存在行内挂件装饰");
+    assert_eq!(app.preview.markdown.decorations.len(), 2);
     assert_eq!(
-        all[1].range,
+        dec_mark.range, expected_range,
+        "批注锚点未随上方编辑精确平移"
+    );
+    assert_eq!(
+        dec_ghost.range,
         expected_ghost..expected_ghost,
         "AI 预览挂件锚点未随上方编辑精确平移"
     );
 
     let laid = app.preview.markdown.layout.as_ref().unwrap();
-    let rects = laid.mark_rects(all[0].range.clone());
+    let rects = laid.mark_rects(dec_mark.range.clone());
     assert!(
         !rects.is_empty() && rects[0].w > 20.0,
         "装饰投影矩形无效: {rects:?}"
     );
     assert!(
-        laid.inline_widget_point(all[1].range.start).is_some(),
+        laid.inline_widget_point(dec_ghost.range.start).is_some(),
         "行内挂件锚点坐标缺失"
     );
 
@@ -1304,9 +1318,8 @@ fn invariant_14_search_and_broken_links_route_through_decorations() {
         .preview
         .markdown
         .decorations
-        .all()
-        .iter()
-        .find(|d| d.layer == DecorationLayer::Diagnostic)
+        .in_layer(DecorationLayer::Diagnostic)
+        .next()
         .unwrap();
     let expected_bad = doc.find("坏链接").unwrap();
     assert_eq!(
@@ -1408,8 +1421,8 @@ fn invariant_15_block_widget_reserves_layout_slot_and_preserves_geometry() {
     assert_eq!(doc_text(&app), doc, "挂载块级虚拟挂件不得改写原文");
 
     let laid = app.preview.markdown.layout.as_ref().unwrap();
-    assert_eq!(laid.widgets().len(), 1);
-    let w = &laid.widgets()[0];
+    assert_eq!(laid.widget_count(), 1);
+    let w = laid.widget_by_id(DecorationId(101)).unwrap();
     assert_eq!(w.block, Some(1));
     assert!((w.rect.h - card_h).abs() < 0.01);
     let expected_shift = card_h + WIDGET_GAP;
@@ -1461,9 +1474,10 @@ fn invariant_15_block_widget_reserves_layout_slot_and_preserves_geometry() {
     paint(&mut app);
     let now = doc_text(&app);
     let laid = app.preview.markdown.layout.as_ref().unwrap();
-    assert_eq!(laid.widgets().len(), 1);
-    assert_eq!(laid.widgets()[0].source, now.find("第二段").unwrap());
-    assert_eq!(laid.widgets()[0].block, Some(1));
+    assert_eq!(laid.widget_count(), 1);
+    let w_after = laid.widget_by_id(DecorationId(101)).unwrap();
+    assert_eq!(w_after.source, now.find("第二段").unwrap());
+    assert_eq!(w_after.block, Some(1));
 
     // 移除卡片并撤销编辑后，整篇排版几何完全恢复到初始基线。
     app.preview
@@ -1473,7 +1487,7 @@ fn invariant_15_block_widget_reserves_layout_slot_and_preserves_geometry() {
     app.run(winc_editor::Command::Undo);
     paint(&mut app);
     let laid = app.preview.markdown.layout.as_ref().unwrap();
-    assert!(laid.widgets().is_empty());
+    assert!(!laid.has_widgets());
     assert!((laid.height - baseline_height).abs() < 0.5);
     assert!((laid.top(2) - baseline_top2).abs() < 0.5);
 

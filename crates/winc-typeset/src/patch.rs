@@ -6,315 +6,19 @@
 //! 后续单行/单项/单单元格输入时仅重排受影响的 1 处内容并原位平移其余项，
 //! 结果与整块重排完全一致。
 
-use std::ops::Range;
 use std::sync::Arc;
 
 use winc_preview::markdown::{Align, Block, Inline, Item as ListItem};
-use winc_render::{Color, Rect};
+use winc_render::Rect;
 
-use super::{
-    BODY_LINE, Cx, Env, Item, LIST_GAP, LaidBlock, Out, Para, Raw, RawKind, Row, SCROLL_BAR_ROOM,
-    TABLE_RADIUS, TABLE_TEXT, blanks, is_fence, rounded_frame,
+use super::block::{
+    CodeBoxPatch, CodeLineSpan, ListPatch, PatchIndex, TablePatch, fenced_body, first_block_source,
+    list_item_content_hash, table_row_content_hash,
 };
-
-/// 构建代码块原位修补索引的行数下限。
-pub(crate) const HUGE_CODE_LINES: usize = 128;
-/// 构建列表原位修补索引的项数下限。
-pub(crate) const HUGE_LIST_ITEMS: usize = 64;
-/// 构建表格原位修补索引的行数下限。
-pub(crate) const HUGE_TABLE_ROWS: usize = 64;
-
-/// 单个超大顶层块的原位修补索引。
-pub(crate) enum PatchIndex {
-    /// 围栏代码块（`raw_box` 编辑态）。
-    CodeBox(CodeBoxPatch),
-    /// 顶层长列表。
-    List(ListPatch),
-    /// 顶层长表格。
-    Table(TablePatch),
-}
-
-/// 围栏代码块单行的布局切片元数据。
-pub(crate) struct CodeLineSpan {
-    /// 该行在 [`LaidBlock::items`] 中的项区间。
-    pub(crate) items: Range<u32>,
-    /// 该行在 [`LaidBlock::text`] 中的字节区间。
-    pub(crate) text_bytes: Range<usize>,
-    /// 该行在 [`LaidBlock::text`] 中的字符区间。
-    pub(crate) chars: Range<usize>,
-    /// 该行在顶层块原文中的字节区间（不含末尾 `\n`）。
-    pub(crate) source_start: u32,
-    pub(crate) source_end: u32,
-    /// 该行在块内的上边缘与高度（逻辑像素）。
-    pub(crate) top: f32,
-    pub(crate) height: f32,
-    /// 排完该行后的词法高亮状态。
-    pub(crate) end_state: winc_syntax::LineState,
-    /// 该行是否为围栏行。
-    pub(crate) fence: bool,
-    /// 该行当前是否绘制（围栏行仅光标位于其上时绘制）。
-    pub(crate) shown: bool,
-}
-
-/// 围栏代码块原位修补索引。
-pub(crate) struct CodeBoxPatch {
-    pub(crate) lang: Box<str>,
-    pub(crate) width: f32,
-    pub(crate) pad: f32,
-    pub(crate) row: Row,
-    pub(crate) bg_item: u32,
-    pub(crate) code_item: Option<u32>,
-    pub(crate) lines: Vec<CodeLineSpan>,
-    pub(crate) raw_len: usize,
-    pub(crate) leaf_start: usize,
-}
-
-/// 长列表单项的布局切片元数据。
-pub(crate) struct ListEntry {
-    pub(crate) items: Range<u32>,
-    pub(crate) text_bytes: Range<usize>,
-    pub(crate) chars: Range<usize>,
-    pub(crate) top: f32,
-    pub(crate) height: f32,
-    pub(crate) source_start: usize,
-    /// 与原文位置无关的内容哈希，用于后台重解析完成后快速证明其余项内容未变。
-    pub(crate) content_hash: Option<u64>,
-}
-
-/// 长列表原位修补索引。
-pub(crate) struct ListPatch {
-    pub(crate) start: Option<u64>,
-    pub(crate) width: f32,
-    pub(crate) base: f32,
-    pub(crate) color: Color,
-    pub(crate) live_item: Option<usize>,
-    pub(crate) live_delta: isize,
-    pub(crate) entries: Vec<ListEntry>,
-}
-
-/// 长表格单行的布局切片元数据。
-pub(crate) struct TableRowEntry {
-    pub(crate) items: Range<u32>,
-    pub(crate) text_bytes: Range<usize>,
-    pub(crate) chars: Range<usize>,
-    pub(crate) top: f32,
-    pub(crate) height: f32,
-    pub(crate) source_start: usize,
-    /// 与原文位置无关的行内容哈希，用于后台重解析完成后快速证明其余行内容未变。
-    pub(crate) content_hash: u64,
-}
-
-/// 长表格原位修补索引。
-pub(crate) struct TablePatch {
-    pub(crate) head: bool,
-    pub(crate) aligns: Box<[Align]>,
-    pub(crate) width: f32,
-    pub(crate) base: f32,
-    pub(crate) color: Color,
-    pub(crate) widths: Vec<f32>,
-    pub(crate) total: f32,
-    pub(crate) pad_x: f32,
-    pub(crate) pad_y: f32,
-    pub(crate) live_cell: Option<(usize, usize)>,
-    pub(crate) live_delta: isize,
-    pub(crate) col_bounds: Arc<crate::memo::TableCols>,
-    pub(crate) row_entries: Vec<TableRowEntry>,
-    pub(crate) lines_start: u32,
-}
-
-impl PatchIndex {
-    /// 按原文字节偏移（相对顶层块）返回可能包含该偏移的局部项范围，用于加速超大块光标定位。
-    pub(crate) fn source_item_window(&self, source: usize) -> Option<Range<usize>> {
-        match self {
-            PatchIndex::CodeBox(p) => {
-                if p.lines.is_empty() {
-                    return None;
-                }
-                let k = p
-                    .lines
-                    .partition_point(|l| l.source_start as usize <= source)
-                    .saturating_sub(1);
-                let lo = k.saturating_sub(1);
-                let hi = (k + 1).min(p.lines.len() - 1);
-                let start = p.lines[lo].items.start as usize;
-                let end = p.lines[hi].items.end as usize;
-                (start <= end).then_some(start..end)
-            }
-            PatchIndex::List(p) => {
-                if p.entries.is_empty() {
-                    return None;
-                }
-                let live = p.live_item;
-                let delta = p.live_delta;
-                let entry_src = |i: usize| {
-                    let s = p.entries[i].source_start;
-                    if live.is_some_and(|l| i > l) && delta != 0 {
-                        s.saturating_add_signed(delta)
-                    } else {
-                        s
-                    }
-                };
-                // 用二分找第一个 `entry_src(i) > source` 的位置。
-                let mut lo = 0usize;
-                let mut hi = p.entries.len();
-                while lo < hi {
-                    let mid = lo + (hi - lo) / 2;
-                    if entry_src(mid) <= source {
-                        lo = mid + 1;
-                    } else {
-                        hi = mid;
-                    }
-                }
-                let k = lo.saturating_sub(1);
-                let start = p.entries[k.saturating_sub(1)].items.start as usize;
-                let end = p.entries[(k + 1).min(p.entries.len() - 1)].items.end as usize;
-                (start <= end).then_some(start..end)
-            }
-            PatchIndex::Table(p) => {
-                if p.row_entries.is_empty() {
-                    return None;
-                }
-                let live_row = p.live_cell.map(|(r, _)| r);
-                let delta = p.live_delta;
-                let row_src = |i: usize| {
-                    let s = p.row_entries[i].source_start;
-                    if live_row.is_some_and(|lr| i > lr) && delta != 0 {
-                        s.saturating_add_signed(delta)
-                    } else {
-                        s
-                    }
-                };
-                let mut lo = 0usize;
-                let mut hi = p.row_entries.len();
-                while lo < hi {
-                    let mid = lo + (hi - lo) / 2;
-                    if row_src(mid) <= source {
-                        lo = mid + 1;
-                    } else {
-                        hi = mid;
-                    }
-                }
-                let k = lo.saturating_sub(1);
-                let start = p.row_entries[k.saturating_sub(1)].items.start as usize;
-                let end = p.row_entries[(k + 1).min(p.row_entries.len() - 1)]
-                    .items
-                    .end as usize;
-                (start <= end).then_some(start..end)
-            }
-        }
-    }
-}
-
-/// 返回块列表中首个可定位的原文偏移（相对顶层块）。
-pub(crate) fn first_block_source(blocks: &[Block]) -> Option<usize> {
-    for b in blocks {
-        match b {
-            Block::Paragraph(inline) | Block::Heading(_, inline) if !inline.map.is_empty() => {
-                return Some(inline.source);
-            }
-            Block::Code { map, .. } => {
-                if let Some(s) = map.source(0) {
-                    return Some(s);
-                }
-            }
-            Block::Rule(Some(s)) => return Some(*s),
-            Block::Table(_, rows, _) => {
-                if let Some(c) = rows.iter().flatten().find(|c| !c.map.is_empty()) {
-                    return Some(c.source);
-                }
-            }
-            Block::Math(_, s) => return Some(*s),
-            Block::Quote(_, inner)
-            | Block::Footnote(_, inner)
-            | Block::Details { blocks: inner, .. } => {
-                if let Some(s) = first_block_source(inner) {
-                    return Some(s);
-                }
-            }
-            Block::List(_, items) => {
-                for it in items {
-                    if let Some(s) = first_block_source(&it.blocks) {
-                        return Some(s);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// 对 [`Inline`] 的可视内容（不含原文偏移与源码映射）计算轻量 FNV-1a 哈希。
-fn hash_inline_content(inline: &Inline, h: &mut u64) {
-    const PRIME: u64 = 1_099_511_628_211;
-    let mix = |h: &mut u64, v: u64| {
-        *h ^= v;
-        *h = h.wrapping_mul(PRIME);
-    };
-    mix(h, inline.text.len() as u64);
-    for &b in inline.text.as_bytes() {
-        mix(h, u64::from(b));
-    }
-    mix(h, inline.runs.len() as u64);
-    for r in &inline.runs {
-        mix(h, r.end as u64);
-        mix(h, u64::from(r.style.flags));
-        mix(h, u64::from(r.style.link));
-    }
-    mix(h, inline.links.len() as u64);
-    mix(h, inline.images.len() as u64);
-}
-
-/// 计算单条列表项与原文偏移无关的内容哈希（仅针对常见段落/标题项，嵌套复杂块返回 `None`）。
-pub(crate) fn list_item_content_hash(item: &ListItem) -> Option<u64> {
-    let mut h = 14_695_981_039_346_656_037u64;
-    h ^= u64::from(item.bare);
-    h = h.wrapping_mul(1_099_511_628_211);
-    h ^= match item.task {
-        None => 0,
-        Some(false) => 1,
-        Some(true) => 2,
-    };
-    h = h.wrapping_mul(1_099_511_628_211);
-    for b in &item.blocks {
-        match b {
-            Block::Paragraph(inline) => {
-                h ^= 11;
-                hash_inline_content(inline, &mut h);
-            }
-            Block::Heading(lvl, inline) => {
-                h ^= 20 + u64::from(*lvl);
-                hash_inline_content(inline, &mut h);
-            }
-            _ => return None,
-        }
-    }
-    Some(h)
-}
-
-/// 计算单行表格与原文偏移无关的内容哈希。
-pub(crate) fn table_row_content_hash(row: &[Inline]) -> u64 {
-    let mut h = 14_695_981_039_346_656_037u64;
-    for cell in row {
-        hash_inline_content(cell, &mut h);
-    }
-    h
-}
-
-/// 返回围栏代码块正文（去掉首行围栏与可选末行围栏，零分配切片）。
-pub(crate) fn fenced_body(text: &str) -> &str {
-    match text.find('\n') {
-        Some(nl) => {
-            let rest = &text[nl + 1..];
-            match rest.rfind('\n') {
-                Some(last_nl) if is_fence(&rest[last_nl + 1..]) => &rest[..last_nl],
-                None if is_fence(rest) => "",
-                _ => rest,
-            }
-        }
-        None => "",
-    }
-}
+use super::{
+    BODY_LINE, Cx, Env, Item, LIST_GAP, LaidBlock, Out, Para, Raw, RawKind, TABLE_RADIUS,
+    TABLE_TEXT, blanks, is_fence, rounded_frame,
+};
 
 /// 把新排出的项中的字符偏移统一加上 `char_offset`。
 fn offset_item_chars(items: &mut [Item], char_offset: usize) {
@@ -335,15 +39,6 @@ fn offset_item_chars(items: &mut [Item], char_offset: usize) {
     }
 }
 
-/// 把 `old_tb` 替换为 `replacement`，返回新的 `Box<str>`。
-fn splice_text(text: &str, old_tb: Range<usize>, replacement: &str) -> Box<str> {
-    let mut out = String::with_capacity(text.len() - old_tb.len() + replacement.len());
-    out.push_str(&text[..old_tb.start]);
-    out.push_str(replacement);
-    out.push_str(&text[old_tb.end..]);
-    out.into_boxed_str()
-}
-
 impl Cx<'_, '_> {
     /// 尝试对超大单块执行原位修补；成功时返回 `true`（直接修改 `laid`），
     /// 不满足原位修补条件时返回 `false` 交由 [`Cx::layout_block`] 完整重排。
@@ -359,38 +54,32 @@ impl Cx<'_, '_> {
         let Some(raw) = raw else {
             return false;
         };
-        if laid.is_shed() || laid.patch.is_none() {
-            return false;
-        }
-        // 取出修补索引以便同时持有 `&mut laid` 的其余字段，结束后归还。
-        let Some(mut patch) = laid.patch.take() else {
-            return false;
-        };
-        self.text.clear();
-        self.chars = 0;
-        self.raw = None;
-        self.cell = None;
-        self.preedit = false;
-        self.memo.take_touched();
+        laid.patch_with(|laid, patch| {
+            self.text.clear();
+            self.chars = 0;
+            self.raw = None;
+            self.cell = None;
+            self.preedit = false;
+            self.memo.take_touched();
 
-        let ok = match (&mut *patch, block) {
-            (PatchIndex::CodeBox(p), Block::Code { .. }) => {
-                self.patch_code_box(laid, p, raw, width)
-            }
-            (PatchIndex::List(p), Block::List(start, items)) => {
-                self.patch_list(laid, p, same_parsed, *start, items, width, env, raw)
-            }
-            (PatchIndex::Table(p), Block::Table(aligns, rows, head)) => {
-                self.patch_table(laid, p, same_parsed, aligns, rows, *head, width, env, raw)
-            }
-            _ => false,
-        };
+            let ok = match (patch, block) {
+                (PatchIndex::CodeBox(p), Block::Code { .. }) => {
+                    self.patch_code_box(laid, p, raw, width)
+                }
+                (PatchIndex::List(p), Block::List(start, items)) => {
+                    self.patch_list(laid, p, same_parsed, *start, items, width, env, raw)
+                }
+                (PatchIndex::Table(p), Block::Table(aligns, rows, head)) => {
+                    self.patch_table(laid, p, same_parsed, aligns, rows, *head, width, env, raw)
+                }
+                _ => false,
+            };
 
-        self.raw = None;
-        self.cell = None;
-        self.memo.take_touched();
-        laid.patch = Some(patch);
-        ok
+            self.raw = None;
+            self.cell = None;
+            self.memo.take_touched();
+            ok
+        })
     }
 
     /// 围栏代码块单行编辑原位修补。
@@ -585,23 +274,26 @@ impl Cx<'_, '_> {
                 item.shift_in_place(dy, dc, ds, true);
             }
         }
-        if dy != 0.0 {
-            if let Some(Item::Fill { rect, .. }) = laid.items.get_mut(p.bg_item as usize) {
-                rect.h += dy;
-            }
-            laid.height += dy;
+        if dy != 0.0
+            && let Some(Item::Fill { rect, .. }) = laid.items.get_mut(p.bg_item as usize)
+        {
+            rect.h += dy;
         }
         if let Some(Item::Code { rect, text, .. }) = laid.items.get_mut(new_code_idx) {
             rect.h += dy;
             *text = new_body.into();
         }
         p.code_item = Some(new_code_idx as u32);
-        laid.text = splice_text(&laid.text, old_tb.clone(), &self.text);
-        laid.chars = (laid.chars as isize + dc) as usize;
-
-        if !same_shape {
-            laid.patch_spatial_index(old_items_range.clone(), new_len, dy);
-        }
+        laid.commit_patch(
+            old_items_range.clone(),
+            new_len,
+            old_tb.clone(),
+            &self.text,
+            dc,
+            dy,
+            None,
+            same_shape,
+        );
 
         let base_item = old_items_range.start as u32;
         let base_tb = old_tb.start;
@@ -803,14 +495,16 @@ impl Cx<'_, '_> {
                 it.shift_in_place(dy, dc, ds, false);
             }
         }
-        laid.text = splice_text(&laid.text, old_tb.clone(), &self.text);
-        laid.chars = (laid.chars as isize + dc) as usize;
-        laid.height += dy;
-        laid.preedit = self.preedit;
-
-        if !same_shape {
-            laid.patch_spatial_index(old_items_range.clone(), new_items_len, dy);
-        }
+        laid.commit_patch(
+            old_items_range.clone(),
+            new_items_len,
+            old_tb.clone(),
+            &self.text,
+            dc,
+            dy,
+            Some(self.preedit),
+            same_shape,
+        );
 
         let entry = &mut p.entries[k];
         entry.items = old_items_range.start as u32..new_end as u32;
@@ -1024,12 +718,12 @@ impl Cx<'_, '_> {
             }
         }
         if dy != 0.0 || widths_changed {
-            let new_table_h = laid.height + dy
-                - if new_total > width + 0.5 {
-                    SCROLL_BAR_ROOM
-                } else {
-                    0.0
-                };
+            let new_table_h = p
+                .row_entries
+                .last()
+                .map_or(0.0, |entry| entry.top + entry.height)
+                + dy
+                + 1.0;
             if let Some(frame_item) = laid.items.get_mut(frame_idx) {
                 *frame_item = Item::path(
                     rounded_frame(Rect::new(0.0, 0.0, new_total, new_table_h), TABLE_RADIUS),
@@ -1061,14 +755,16 @@ impl Cx<'_, '_> {
             scroller.rect.h += dy;
             scroller.content = new_total;
         }
-        laid.text = splice_text(&laid.text, old_tb.clone(), &self.text);
-        laid.chars = (laid.chars as isize + dc) as usize;
-        laid.height += dy;
-        laid.preedit = self.preedit;
-
-        if !same_shape {
-            laid.patch_spatial_index(old_items_range.clone(), new_len, dy);
-        }
+        laid.commit_patch(
+            old_items_range.clone(),
+            new_len,
+            old_tb.clone(),
+            &self.text,
+            dc,
+            dy,
+            Some(self.preedit),
+            same_shape,
+        );
 
         let entry = &mut p.row_entries[lr];
         entry.items = old_items_range.start as u32..new_end as u32;

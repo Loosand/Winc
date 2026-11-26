@@ -11,7 +11,7 @@ use ropey::Rope;
 use winc_core::{Change, EditKind, LineEnding, Selection, Transaction};
 use winc_preview::markdown::enter::{self, Fence};
 
-use crate::layout::LiveLeaf;
+use crate::mapping::LiveLeaf;
 use crate::mapping::line_text;
 
 /// 单条输入规则产出的两段式原子事务：先提交原始输入，再提交可独立撤销的结构转换。

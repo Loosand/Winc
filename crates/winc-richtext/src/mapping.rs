@@ -12,7 +12,51 @@ use ropey::{Rope, RopeSlice};
 use winc_core::{Change, Selection};
 use winc_preview::markdown::{self, LeafRange, Markdown};
 
-use crate::layout::LiveLeaf;
+/// 可编辑的预览中显示原文的块的缓存键；各字段均不变时沿用上一次的排版。
+pub type LiveKey = (usize, Range<usize>, u64, Option<usize>, String);
+
+/// 可编辑的预览中光标所在的叶子块（见 [`winc_preview::markdown::Markdown::leaves`]），该块显示原文。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveLeaf {
+    /// 所在顶层块序号。
+    pub block: usize,
+    /// 所在顶层块在原文中的字节范围。
+    pub range: Range<usize>,
+    /// 当前叶子块在原文中的字节范围。
+    pub leaf: Range<usize>,
+    /// 上一版解析记录的叶子块末尾字节偏移。
+    pub parsed_end: usize,
+    /// 当前文档版本号。
+    pub revision: u64,
+    /// 是否为正文叶子块（段落、标题、块间空行）。
+    pub prose: bool,
+    /// 是否为表格叶子块。
+    pub table: bool,
+    /// 光标当前行是否为叶子块内的空白行。
+    pub blank: bool,
+    /// 光标在原文中的字节偏移。
+    pub at: usize,
+    /// 非正文块中光标位于首行或末行时的行号。
+    pub edge: Option<usize>,
+}
+
+impl LiveLeaf {
+    /// 构造本叶子块的缓存键；`preedit` 是输入法正在组合的文字，在正文中排入光标所在的行，
+    /// 因此其变化同样需要重排。
+    pub fn key(&self, preedit: &str) -> LiveKey {
+        (
+            self.block,
+            self.leaf.clone(),
+            self.revision,
+            (self.table || self.prose).then_some(self.at).or(self.edge),
+            if self.prose || self.table {
+                preedit.to_owned()
+            } else {
+                String::new()
+            },
+        )
+    }
+}
 
 /// 位置映射时的边界倾向：当偏移落在插入点或被删除区间内时的落点规则。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -51,7 +51,7 @@ impl Cx<'_, '_> {
         let widths = column_widths(&min, &max, width);
         let total: f32 = widths.iter().sum::<f32>() + 1.0;
         let record = record_patch
-            && rows.len() >= patch::HUGE_TABLE_ROWS
+            && rows.len() >= block::HUGE_TABLE_ROWS
             && out.items.is_empty()
             && col_bounds.is_some();
         let mut row_entries = if record {
@@ -89,19 +89,19 @@ impl Cx<'_, '_> {
             if record {
                 let fallback_src = row_entries
                     .last()
-                    .map_or(0, |e: &patch::TableRowEntry| e.source_start);
+                    .map_or(0, |e: &block::TableRowEntry| e.source_start);
                 let src = row
                     .iter()
                     .find(|cell| !cell.map.is_empty())
                     .map_or(fallback_src, |cell| cell.source);
-                row_entries.push(patch::TableRowEntry {
+                row_entries.push(block::TableRowEntry {
                     items: item_start..out.items.len() as u32,
                     text_bytes: tb_start..self.text.len(),
                     chars: ch_start..self.chars,
                     top,
                     height: row_h,
                     source_start: src,
-                    content_hash: patch::table_row_content_hash(row),
+                    content_hash: block::table_row_content_hash(row),
                 });
             }
             top += row_h;
@@ -141,7 +141,7 @@ impl Cx<'_, '_> {
             });
         }
         if record && let Some(col_bounds) = col_bounds {
-            out.patch = Some(Box::new(patch::PatchIndex::Table(patch::TablePatch {
+            out.patch = Some(Box::new(block::PatchIndex::Table(block::TablePatch {
                 head,
                 aligns: aligns.into(),
                 width,

@@ -16,7 +16,7 @@ use winc_preview::markdown::{
     paragraph::{self, Kind as ParagraphKind},
 };
 
-use crate::layout::LiveLeaf;
+use crate::mapping::LiveLeaf;
 use crate::mapping::{
     Fenced, SourceBridge, fenced_lines, is_url, leaf_at_or_before, line_end, line_text,
 };

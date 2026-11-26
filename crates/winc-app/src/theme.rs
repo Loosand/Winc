@@ -480,6 +480,28 @@ impl Palette {
             ansi: t.ansi,
         }
     }
+
+    /// 返回查找匹配高亮装饰的稳定配色指纹，供装饰层增量缓存判定主题是否变化。
+    pub fn search_decoration_fingerprint(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        for c in [self.search_match, self.search_current] {
+            for ch in [c.r, c.g, c.b, c.a] {
+                ch.to_bits().hash(&mut h);
+            }
+        }
+        h.finish()
+    }
+
+    /// 根据是否为当前聚焦匹配项，返回查找高亮装饰应使用的背景色。
+    pub fn search_decoration_color(&self, is_current: bool) -> Color {
+        if is_current {
+            self.search_current
+        } else {
+            self.search_match
+        }
+    }
 }
 
 /// 徽章文字最多占用的显示列数（显示列）。

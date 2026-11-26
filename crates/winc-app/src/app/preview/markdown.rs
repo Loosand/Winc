@@ -445,24 +445,19 @@ impl App {
             matches.first().hash(&mut h);
             matches.last().hash(&mut h);
             current.hash(&mut h);
-            self.palette.search_match.r.to_bits().hash(&mut h);
-            self.palette.search_current.r.to_bits().hash(&mut h);
+            self.palette.search_decoration_fingerprint().hash(&mut h);
             let key = Some((doc_id, doc_rev, h.finish()));
             if self.preview.markdown.search_deco_key != key {
                 let mut built = Vec::with_capacity(matches.len());
                 if let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) {
                     let len = rope.len_chars();
-                    let match_color = self.palette.search_match;
-                    let current_color = self.palette.search_current;
                     for (idx, &(a, b)) in matches.iter().enumerate() {
                         let start = rope.char_to_byte(a.min(len));
                         let end = rope.char_to_byte(b.min(len));
                         if start < end {
-                            let color = if current == Some((a, b)) {
-                                current_color
-                            } else {
-                                match_color
-                            };
+                            let color = self
+                                .palette
+                                .search_decoration_color(current == Some((a, b)));
                             built.push(winc_richtext::Decoration::mark(
                                 winc_richtext::DecorationId(SEARCH_DECO_BASE + idx as u64),
                                 winc_richtext::DecorationLayer::Search,
@@ -653,7 +648,8 @@ impl App {
             if let (Some(prev_arc), Some(prev_rev)) = (md.parsed.as_mut(), md.checked)
                 && let Some((old_edit, new_edit)) = doc.byte_edit_since(prev_rev)
             {
-                Arc::make_mut(prev_arc).reparse_local_in_place(
+                markdown::reparse_local_in_place(
+                    Arc::make_mut(prev_arc),
                     old_edit,
                     new_edit,
                     rope.len_bytes(),

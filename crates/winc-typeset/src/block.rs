@@ -244,67 +244,325 @@ impl Cx<'_, '_> {
             keep_spaces: false,
         }
     }
-
-    /// 排一个顶层块并返回完整的 [`LaidBlock`]；`raw` 为 `Some` 时对光标所在叶子块显示原文，
-    /// 若叶子块未命中常规路径则退回整块原文加渲染预览。
-    pub fn layout_block(
-        &mut self,
-        block: &Block,
-        width: f32,
-        env: Env,
-        raw: Option<&Raw>,
-    ) -> LaidBlock {
-        let mut out = Out::default();
-        self.text.clear();
-        self.chars = 0;
-        self.memo.take_touched();
-        self.raw = raw.cloned();
-        self.preedit = false;
-        self.cell = None;
-        let mut flow = self.block(block, 0.0, 0.0, width, env, &mut out);
-        // 光标所在的叶子块在块里没有找到（写在列表里的公式这类没有原文对照的块）：整个
-        // 顶层块显示原文。
-        if let Some(raw) = self.raw.as_mut().filter(|r| !r.done) {
-            raw.leaf = 0..raw.block.len();
-            raw.parsed_end = raw.block.len();
-            raw.kind = raw.guess();
-            out = Out::default();
-            self.text.clear();
-            self.chars = 0;
-            flow = self.raw_with_preview(block, 0.0, 0.0, width, env, &mut out);
-        }
-        self.raw = None;
-        LaidBlock::from_layout(
-            flow.height,
-            out,
-            self.text.as_str().into(),
-            self.chars,
-            self.memo.take_touched(),
-            self.preedit,
-        )
-    }
-
-    /// 排一个仅包含原文的可编辑块（如全空白文档的占位行），返回完整的 [`LaidBlock`]。
-    pub fn layout_raw(&mut self, raw: Raw, width: f32) -> LaidBlock {
-        self.raw = Some(raw);
-        let mut items = Vec::new();
-        self.memo.take_touched();
-        let flow = self.raw(0.0, 0.0, width, &mut items);
-        self.raw = None;
-        LaidBlock::new(
-            flow.height,
-            items,
-            Vec::new(),
-            "".into(),
-            0,
-            self.memo.take_touched(),
-        )
-    }
 }
 
 /// 高项与矮项的分界（逻辑像素，经验值）：高度超过该值的项算「高的」，每次绘制都检查一遍；
 /// 矮的项按上边缘二分查找。
 const TALL: f32 = 120.0;
+
+/// 构建代码块原位修补索引的行数下限。
+pub(crate) const HUGE_CODE_LINES: usize = 128;
+/// 构建列表原位修补索引的项数下限。
+pub(crate) const HUGE_LIST_ITEMS: usize = 64;
+/// 构建表格原位修补索引的行数下限。
+pub(crate) const HUGE_TABLE_ROWS: usize = 64;
+
+/// 单个超大顶层块的原位修补索引。
+pub(crate) enum PatchIndex {
+    /// 围栏代码块（`raw_box` 编辑态）。
+    CodeBox(CodeBoxPatch),
+    /// 顶层长列表。
+    List(ListPatch),
+    /// 顶层长表格。
+    Table(TablePatch),
+}
+
+/// 围栏代码块单行的布局切片元数据。
+pub(crate) struct CodeLineSpan {
+    /// 该行在 [`LaidBlock::items`] 中的项区间。
+    pub(crate) items: std::ops::Range<u32>,
+    /// 该行在 [`LaidBlock::text`] 中的字节区间。
+    pub(crate) text_bytes: std::ops::Range<usize>,
+    /// 该行在 [`LaidBlock::text`] 中的字符区间。
+    pub(crate) chars: std::ops::Range<usize>,
+    /// 该行在顶层块原文中的字节区间（不含末尾 `\n`）。
+    pub(crate) source_start: u32,
+    pub(crate) source_end: u32,
+    /// 该行在块内的上边缘与高度（逻辑像素）。
+    pub(crate) top: f32,
+    pub(crate) height: f32,
+    /// 排完该行后的词法高亮状态。
+    pub(crate) end_state: winc_syntax::LineState,
+    /// 该行是否为围栏行。
+    pub(crate) fence: bool,
+    /// 该行当前是否绘制（围栏行仅光标位于其上时绘制）。
+    pub(crate) shown: bool,
+}
+
+/// 围栏代码块原位修补索引。
+pub(crate) struct CodeBoxPatch {
+    pub(crate) lang: Box<str>,
+    pub(crate) width: f32,
+    pub(crate) pad: f32,
+    pub(crate) row: Row,
+    pub(crate) bg_item: u32,
+    pub(crate) code_item: Option<u32>,
+    pub(crate) lines: Vec<CodeLineSpan>,
+    pub(crate) raw_len: usize,
+    pub(crate) leaf_start: usize,
+}
+
+/// 长列表单项的布局切片元数据。
+pub(crate) struct ListEntry {
+    pub(crate) items: std::ops::Range<u32>,
+    pub(crate) text_bytes: std::ops::Range<usize>,
+    pub(crate) chars: std::ops::Range<usize>,
+    pub(crate) top: f32,
+    pub(crate) height: f32,
+    pub(crate) source_start: usize,
+    /// 与原文位置无关的内容哈希，用于后台重解析完成后快速证明其余项内容未变。
+    pub(crate) content_hash: Option<u64>,
+}
+
+/// 长列表原位修补索引。
+pub(crate) struct ListPatch {
+    pub(crate) start: Option<u64>,
+    pub(crate) width: f32,
+    pub(crate) base: f32,
+    pub(crate) color: Color,
+    pub(crate) live_item: Option<usize>,
+    pub(crate) live_delta: isize,
+    pub(crate) entries: Vec<ListEntry>,
+}
+
+/// 长表格单行的布局切片元数据。
+pub(crate) struct TableRowEntry {
+    pub(crate) items: std::ops::Range<u32>,
+    pub(crate) text_bytes: std::ops::Range<usize>,
+    pub(crate) chars: std::ops::Range<usize>,
+    pub(crate) top: f32,
+    pub(crate) height: f32,
+    pub(crate) source_start: usize,
+    /// 与原文位置无关的行内容哈希，用于后台重解析完成后快速证明其余行内容未变。
+    pub(crate) content_hash: u64,
+}
+
+/// 长表格原位修补索引。
+pub(crate) struct TablePatch {
+    pub(crate) head: bool,
+    pub(crate) aligns: Box<[Align]>,
+    pub(crate) width: f32,
+    pub(crate) base: f32,
+    pub(crate) color: Color,
+    pub(crate) widths: Vec<f32>,
+    pub(crate) total: f32,
+    pub(crate) pad_x: f32,
+    pub(crate) pad_y: f32,
+    pub(crate) live_cell: Option<(usize, usize)>,
+    pub(crate) live_delta: isize,
+    pub(crate) col_bounds: Arc<crate::memo::TableCols>,
+    pub(crate) row_entries: Vec<TableRowEntry>,
+    pub(crate) lines_start: u32,
+}
+
+impl PatchIndex {
+    /// 按原文字节偏移（相对顶层块）返回可能包含该偏移的局部项范围，用于加速超大块光标定位。
+    pub(crate) fn source_item_window(&self, source: usize) -> Option<std::ops::Range<usize>> {
+        match self {
+            PatchIndex::CodeBox(p) => {
+                if p.lines.is_empty() {
+                    return None;
+                }
+                let k = p
+                    .lines
+                    .partition_point(|l| l.source_start as usize <= source)
+                    .saturating_sub(1);
+                let lo = k.saturating_sub(1);
+                let hi = (k + 1).min(p.lines.len() - 1);
+                let start = p.lines[lo].items.start as usize;
+                let end = p.lines[hi].items.end as usize;
+                (start <= end).then_some(start..end)
+            }
+            PatchIndex::List(p) => {
+                if p.entries.is_empty() {
+                    return None;
+                }
+                let live = p.live_item;
+                let delta = p.live_delta;
+                let entry_src = |i: usize| {
+                    let s = p.entries[i].source_start;
+                    if live.is_some_and(|l| i > l) && delta != 0 {
+                        s.saturating_add_signed(delta)
+                    } else {
+                        s
+                    }
+                };
+                // 用二分找第一个 `entry_src(i) > source` 的位置。
+                let mut lo = 0usize;
+                let mut hi = p.entries.len();
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    if entry_src(mid) <= source {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let k = lo.saturating_sub(1);
+                let start = p.entries[k.saturating_sub(1)].items.start as usize;
+                let end = p.entries[(k + 1).min(p.entries.len() - 1)].items.end as usize;
+                (start <= end).then_some(start..end)
+            }
+            PatchIndex::Table(p) => {
+                if p.row_entries.is_empty() {
+                    return None;
+                }
+                let live_row = p.live_cell.map(|(r, _)| r);
+                let delta = p.live_delta;
+                let row_src = |i: usize| {
+                    let s = p.row_entries[i].source_start;
+                    if live_row.is_some_and(|lr| i > lr) && delta != 0 {
+                        s.saturating_add_signed(delta)
+                    } else {
+                        s
+                    }
+                };
+                let mut lo = 0usize;
+                let mut hi = p.row_entries.len();
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    if row_src(mid) <= source {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let k = lo.saturating_sub(1);
+                let start = p.row_entries[k.saturating_sub(1)].items.start as usize;
+                let end = p.row_entries[(k + 1).min(p.row_entries.len() - 1)]
+                    .items
+                    .end as usize;
+                (start <= end).then_some(start..end)
+            }
+        }
+    }
+}
+
+/// 返回块列表中首个可定位的原文偏移（相对顶层块）。
+pub(crate) fn first_block_source(blocks: &[Block]) -> Option<usize> {
+    for b in blocks {
+        match b {
+            Block::Paragraph(inline) | Block::Heading(_, inline) if !inline.map.is_empty() => {
+                return Some(inline.source);
+            }
+            Block::Code { map, .. } => {
+                if let Some(s) = map.source(0) {
+                    return Some(s);
+                }
+            }
+            Block::Rule(Some(s)) => return Some(*s),
+            Block::Table(_, rows, _) => {
+                if let Some(c) = rows.iter().flatten().find(|c| !c.map.is_empty()) {
+                    return Some(c.source);
+                }
+            }
+            Block::Math(_, s) => return Some(*s),
+            Block::Quote(_, inner)
+            | Block::Footnote(_, inner)
+            | Block::Details { blocks: inner, .. } => {
+                if let Some(s) = first_block_source(inner) {
+                    return Some(s);
+                }
+            }
+            Block::List(_, items) => {
+                for it in items {
+                    if let Some(s) = first_block_source(&it.blocks) {
+                        return Some(s);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 对 [`Inline`] 的可视内容（不含原文偏移与源码映射）计算轻量 FNV-1a 哈希。
+fn hash_inline_content(inline: &Inline, h: &mut u64) {
+    const PRIME: u64 = 1_099_511_628_211;
+    let mix = |h: &mut u64, v: u64| {
+        *h ^= v;
+        *h = h.wrapping_mul(PRIME);
+    };
+    mix(h, inline.text.len() as u64);
+    for &b in inline.text.as_bytes() {
+        mix(h, u64::from(b));
+    }
+    mix(h, inline.runs.len() as u64);
+    for r in &inline.runs {
+        mix(h, r.end as u64);
+        mix(h, u64::from(r.style.flags));
+        mix(h, u64::from(r.style.link));
+    }
+    mix(h, inline.links.len() as u64);
+    mix(h, inline.images.len() as u64);
+}
+
+/// 计算单条列表项与原文偏移无关的内容哈希（仅针对常见段落/标题项，嵌套复杂块返回 `None`）。
+pub(crate) fn list_item_content_hash(item: &ListItem) -> Option<u64> {
+    let mut h = 14_695_981_039_346_656_037u64;
+    h ^= u64::from(item.bare);
+    h = h.wrapping_mul(1_099_511_628_211);
+    h ^= match item.task {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    };
+    h = h.wrapping_mul(1_099_511_628_211);
+    for b in &item.blocks {
+        match b {
+            Block::Paragraph(inline) => {
+                h ^= 11;
+                hash_inline_content(inline, &mut h);
+            }
+            Block::Heading(lvl, inline) => {
+                h ^= 20 + u64::from(*lvl);
+                hash_inline_content(inline, &mut h);
+            }
+            _ => return None,
+        }
+    }
+    Some(h)
+}
+
+/// 计算单行表格与原文偏移无关的内容哈希。
+pub(crate) fn table_row_content_hash(row: &[Inline]) -> u64 {
+    let mut h = 14_695_981_039_346_656_037u64;
+    for cell in row {
+        hash_inline_content(cell, &mut h);
+    }
+    h
+}
+
+/// `line` 是否为代码块或公式的围栏（三个以上的反引号或波浪号，或 `$$`）。
+pub(crate) fn is_fence(line: &str) -> bool {
+    let line = line.trim();
+    ["```", "~~~", "$$"].iter().any(|f| line.starts_with(f))
+}
+
+/// 返回围栏代码块正文（去掉首行围栏与可选末行围栏，零分配切片）。
+pub(crate) fn fenced_body(text: &str) -> &str {
+    match text.find('\n') {
+        Some(nl) => {
+            let rest = &text[nl + 1..];
+            match rest.rfind('\n') {
+                Some(last_nl) if is_fence(&rest[last_nl + 1..]) => &rest[..last_nl],
+                None if is_fence(rest) => "",
+                _ => rest,
+            }
+        }
+        None => "",
+    }
+}
+
+/// 把 `old_tb` 替换为 `replacement`，返回新的 `Box<str>`。
+fn splice_text(text: &str, old_tb: std::ops::Range<usize>, replacement: &str) -> Box<str> {
+    let mut out = String::with_capacity(text.len() - old_tb.len() + replacement.len());
+    out.push_str(&text[..old_tb.start]);
+    out.push_str(replacement);
+    out.push_str(&text[old_tb.end..]);
+    out.into_boxed_str()
+}
 
 /// 一个排好版的顶层块：要画的项，坐标相对块的左上角。
 #[derive(Default)]
@@ -340,7 +598,7 @@ pub struct LaidBlock {
     /// 要画的项已经释放时留下的内容（见 [`LaidBlock::shed`]）；项都在时为 `None`。
     shed: Option<Box<Shed>>,
     /// 超大单块的原位修补索引（小块与已卸载块为 `None`）。
-    pub(crate) patch: Option<Box<crate::patch::PatchIndex>>,
+    patch: Option<Box<PatchIndex>>,
 }
 
 /// 释放了要画的项的块留下的内容：重排时判断是否受影响，以及按链接定位。
@@ -689,6 +947,49 @@ impl LaidBlock {
                 let pos = self.short.partition_point(|&(t, _)| t <= top);
                 self.short.insert(pos, (top, i as u32));
             }
+        }
+    }
+
+    /// 若当前块未卸载且带有原位修补索引，则临时取出索引交给闭包 `f` 执行局部修补，
+    /// 结束后自动归还索引并返回修补是否成功。
+    pub(crate) fn patch_with(
+        &mut self,
+        f: impl FnOnce(&mut Self, &mut PatchIndex) -> bool,
+    ) -> bool {
+        if self.is_shed() {
+            return false;
+        }
+        let Some(mut patch) = self.patch.take() else {
+            return false;
+        };
+        let ok = f(self, &mut patch);
+        self.patch = Some(patch);
+        ok
+    }
+
+    /// 原子提交一次超大块原位修补的文字、字符数、高度、预编辑标记与空间索引更新。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn commit_patch(
+        &mut self,
+        old_items: std::ops::Range<usize>,
+        new_items_len: usize,
+        old_text_bytes: std::ops::Range<usize>,
+        replacement_text: &str,
+        char_delta: isize,
+        height_delta: f32,
+        preedit: Option<bool>,
+        same_shape: bool,
+    ) {
+        self.text = splice_text(&self.text, old_text_bytes, replacement_text);
+        self.chars = (self.chars as isize + char_delta) as usize;
+        if height_delta != 0.0 {
+            self.height += height_delta;
+        }
+        if let Some(preedit) = preedit {
+            self.preedit = preedit;
+        }
+        if !same_shape {
+            self.patch_spatial_index(old_items, new_items_len, height_delta);
         }
     }
 

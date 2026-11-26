@@ -29,12 +29,12 @@ pub use decorations::{
 pub use input_rules::{FenceEnterRule, InputRulePlan};
 pub use layout::{
     BASE_RATIO, Before, COPY, DETAILS, EXPAND, Fading, Key, LAYOUT_BUDGET, Laid, LaidWidget, Later,
-    LayoutInput, Leaving, LiveKey as LayoutLiveKey, LiveLeaf, MAX_WIDTH, Memo, Moves, NEAR_BLOCKS,
-    Near, PAD, PAD_NARROW, Point, SHED_BLOCKS, TABLE, TASK, WIDE_WIDTH, WIDGET_GAP, interpolate,
-    line_box,
+    LayoutInput, Leaving, MAX_WIDTH, Memo, Moves, NEAR_BLOCKS, Near, PAD, PAD_NARROW, Point,
+    SHED_BLOCKS, TABLE, TASK, WIDE_WIDTH, WIDGET_GAP, interpolate, line_box,
 };
 pub use mapping::{
-    Assoc, ChangeMap, ChangeSeq, Fenced, SourceBridge, fenced_lines, in_fence, is_image_url,
-    is_url, leaf_at_or_before, line_end, line_text, paragraph_lines,
+    Assoc, ChangeMap, ChangeSeq, Fenced, LiveKey as LayoutLiveKey, LiveLeaf, SourceBridge,
+    fenced_lines, in_fence, is_image_url, is_url, leaf_at_or_before, line_end, line_text,
+    paragraph_lines,
 };
 pub use session::{LiveState, row_affinity, vertical_move_target, visible_position};

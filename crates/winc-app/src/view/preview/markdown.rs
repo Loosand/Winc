@@ -132,12 +132,9 @@ fn draw_decoration_gaps(
     origin_y: f32,
     clip: Rect,
 ) {
-    use winc_richtext::{DecorationKind, MarkStyle};
-    for dec in decorations.all() {
-        let DecorationKind::Mark { style } = dec.kind else {
-            continue;
-        };
-        for rect in laid.blank_selection_rects(dec.range.start, dec.range.end) {
+    use winc_richtext::MarkStyle;
+    for (range, style) in decorations.marks() {
+        for rect in laid.blank_selection_rects(range.start, range.end) {
             let r = Rect::new(left + rect.x, origin_y + rect.y, rect.w, rect.h);
             if r.bottom() <= clip.y || r.y >= clip.bottom() {
                 continue;
@@ -162,11 +159,9 @@ fn draw_decoration_widgets(
     clip: Rect,
     base: f32,
 ) {
-    use winc_richtext::{DecorationKind, DecorationLayer};
-    for dec in decorations.all() {
-        if let DecorationKind::InlineWidget { text, style } = &dec.kind
-            && let Some((x, y, h)) = laid.inline_widget_point(dec.range.start)
-        {
+    use winc_richtext::DecorationLayer;
+    for (at, text, style) in decorations.inline_widgets() {
+        if let Some((x, y, h)) = laid.inline_widget_point(at) {
             let sy = origin_y + laid.content_y(y);
             if sy + h <= clip.y || sy >= clip.bottom() {
                 continue;
@@ -193,16 +188,7 @@ fn draw_decoration_widgets(
             );
         }
     }
-    for widget in laid.widgets() {
-        let r = Rect::new(
-            left + widget.rect.x,
-            origin_y + widget.rect.y,
-            widget.rect.w,
-            widget.rect.h,
-        );
-        if r.bottom() <= clip.y || r.y >= clip.bottom() || r.h <= 0.0 {
-            continue;
-        }
+    for (widget, r) in laid.visible_widgets(left, origin_y, clip) {
         let tone = match widget.layer {
             DecorationLayer::AiPreview => p.accent,
             DecorationLayer::Diagnostic => p.error,
@@ -248,11 +234,14 @@ fn draw_broken_links(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         let max = (app.preview.markdown.height - area.h).max(0.0);
         let scroll = app.preview.markdown.scroll().min(max);
         let origin_y = laid.origin_y(area.y, scroll);
-        for dec in app.preview.markdown.decorations.all() {
-            if dec.layer == winc_richtext::DecorationLayer::Diagnostic {
-                for rect in laid.mark_rects(dec.range.clone()) {
-                    covered.push(Rect::new(left + rect.x, origin_y + rect.y, rect.w, rect.h));
-                }
+        for dec in app
+            .preview
+            .markdown
+            .decorations
+            .in_layer(winc_richtext::DecorationLayer::Diagnostic)
+        {
+            for rect in laid.mark_rects(dec.range.clone()) {
+                covered.push(Rect::new(left + rect.x, origin_y + rect.y, rect.w, rect.h));
             }
         }
     }
@@ -1130,7 +1119,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
             bars.push((i, s, fixed(&scroller.rect), laid.hscroll_of(i, s)));
         }
     }
-    if (!md.decorations.is_empty() || !laid.widgets().is_empty())
+    if (!md.decorations.is_empty() || laid.has_widgets())
         && motion.as_ref().is_none_or(|m| !m.moving())
     {
         draw_decoration_widgets(

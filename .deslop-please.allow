@@ -424,6 +424,8 @@ shallow-module winc_editor::workspace::tree
 shallow-module winc_emoji
 shallow-module winc_pty::host
 shallow-module winc_render::draw::canvas
+shallow-module winc_richtext
+shallow-module winc_richtext::layout
 shallow-module winc_syntax::lang
 shallow-module winc_typeset::diagram
 wide-directory crates/

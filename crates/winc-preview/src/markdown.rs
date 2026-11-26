@@ -72,9 +72,9 @@ pub struct Markdown {
     /// 原文的字节数：与当前文档的长度相比，得出解析之后又改了多少。
     pub len: usize,
     /// 原文是否包含非脚注的链接引用定义（`[id]: url`），用于决定是否可安全局部增量重解析。
-    has_link_defs: bool,
+    pub has_link_defs: bool,
     /// 原文是否包含已展开的 `[TOC]` 目录块，标题变化时需整篇重解析以刷新目录。
-    has_toc: bool,
+    pub has_toc: bool,
 }
 
 impl Markdown {
@@ -1524,7 +1524,7 @@ impl Builder<'_> {
             ranges: self.ranges,
             leaves,
             len: source.len(),
-            has_link_defs: incremental::has_link_ref_defs(source),
+            has_link_defs: has_link_ref_defs(source),
             has_toc,
         }
     }
@@ -1791,7 +1791,19 @@ pub mod format;
 pub mod from_html;
 mod front;
 mod html;
+/// 粗判原文是否包含非脚注的链接引用定义（`[id]: url`）。
+fn has_link_ref_defs(source: &str) -> bool {
+    for line in source.lines() {
+        let trimmed = line.trim_start_matches([' ', '\t']);
+        if trimmed.starts_with('[') && !trimmed.starts_with("[^") && trimmed.contains("]:") {
+            return true;
+        }
+    }
+    false
+}
+
 mod incremental;
+pub use incremental::{reparse_local, reparse_local_in_place};
 mod mark;
 pub mod properties;
 mod shrink;

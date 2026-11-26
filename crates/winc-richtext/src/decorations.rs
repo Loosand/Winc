@@ -242,9 +242,30 @@ impl DecorationSet {
         h.finish().max(1)
     }
 
-    /// 返回按起点排好序的全部装饰。
-    pub fn all(&self) -> &[Decoration] {
-        &self.items
+    /// 按标识查找单条装饰。
+    pub fn get(&self, id: DecorationId) -> Option<&Decoration> {
+        self.items.iter().find(|d| d.id == id)
+    }
+
+    /// 枚举全部区间标记装饰（`DecorationKind::Mark`）及其原文范围与样式。
+    pub fn marks(&self) -> impl Iterator<Item = (&Range<usize>, MarkStyle)> {
+        self.items.iter().filter_map(|d| match d.kind {
+            DecorationKind::Mark { style } => Some((&d.range, style)),
+            _ => None,
+        })
+    }
+
+    /// 枚举全部行内虚拟挂件（`DecorationKind::InlineWidget`）的锚点、文字与样式。
+    pub fn inline_widgets(&self) -> impl Iterator<Item = (usize, &str, WidgetStyle)> {
+        self.items.iter().filter_map(|d| match &d.kind {
+            DecorationKind::InlineWidget { text, style } => Some((d.range.start, &**text, *style)),
+            _ => None,
+        })
+    }
+
+    /// 枚举指定语义层 `layer` 下的全部装饰。
+    pub fn in_layer(&self, layer: DecorationLayer) -> impl Iterator<Item = &Decoration> {
+        self.items.iter().filter(move |d| d.layer == layer)
     }
 
     /// 插入或替换同 [`DecorationId`] 的装饰。
@@ -411,23 +432,22 @@ mod tests {
 
         // 在装饰之前插入 5 字节：全部向右平移 5 字节。
         set.map(&ChangeMap::single(0, 0, 5));
-        assert_eq!(set.all()[0].range, 15..25);
-        assert_eq!(set.all()[1].range, 30..30);
-        assert_eq!(set.all()[2].range, 35..35);
+        assert_eq!(set.get(DecorationId(1)).unwrap().range, 15..25);
+        assert_eq!(set.get(DecorationId(2)).unwrap().range, 30..30);
+        assert_eq!(set.get(DecorationId(3)).unwrap().range, 35..35);
         assert_ne!(set.block_widget_fingerprint(), fp_initial);
 
         // 在第一条批注内部插入 3 字节：批注区间自动扩张。
         set.map(&ChangeMap::single(18, 0, 3));
-        assert_eq!(set.all()[0].range, 15..28);
-        assert_eq!(set.all()[1].range, 33..33);
+        assert_eq!(set.get(DecorationId(1)).unwrap().range, 15..28);
+        assert_eq!(set.get(DecorationId(2)).unwrap().range, 33..33);
 
         // 完整删除第一条批注覆盖的文本：该批注自动清理，点挂件向左平移。
         set.map(&ChangeMap::single(14, 15, 0));
         assert_eq!(set.len(), 2);
-        assert_eq!(set.all()[0].id, DecorationId(2));
-        assert_eq!(set.all()[0].range, 18..18);
-        assert_eq!(set.all()[1].id, DecorationId(3));
-        assert_eq!(set.all()[1].range, 23..23);
+        assert!(set.get(DecorationId(1)).is_none());
+        assert_eq!(set.get(DecorationId(2)).unwrap().range, 18..18);
+        assert_eq!(set.get(DecorationId(3)).unwrap().range, 23..23);
 
         // 按区间查询命中正确子集。
         let hit: Vec<_> = set.in_range(15..20).map(|d| d.id).collect();
@@ -442,7 +462,12 @@ mod tests {
         ));
         set.clear_layer(DecorationLayer::AiPreview);
         assert_eq!(set.len(), 1);
-        assert_eq!(set.all()[0].id, DecorationId(4));
+        assert_eq!(
+            set.in_layer(DecorationLayer::Diagnostic)
+                .map(|d| d.id)
+                .collect::<Vec<_>>(),
+            vec![DecorationId(4)]
+        );
         assert_eq!(set.block_widget_fingerprint(), 0);
     }
 }
