@@ -1,6 +1,42 @@
 //! 声明式通用基础控件：按钮、勾选框、彩色标签徽章、方向箭头、对话框头尾栏与输入框占位槽。
 //!
 //! 全部控件仅依赖注入的语义化 [`Theme`] 与底层 CPU 渲染器，不内置具体主题色，也不依赖宿主图标表。
+//!
+//! # 示例
+//!
+//! ```
+//! use winc_cpui::widgets::{ButtonKind, Theme, action_button};
+//! use winc_cpui::{TextBasis, render};
+//! use winc_render::{Color, FontKind, Rect, Renderer};
+//!
+//! let theme = Theme {
+//!     text: Color::hex(0x1e1e1e),
+//!     text_muted: Color::hex(0x666666),
+//!     text_dim: Color::hex(0x999999),
+//!     accent: Color::hex(0x2563eb),
+//!     accent_fill: Color::hex(0x2563eb),
+//!     text_on_accent: Color::hex(0xffffff),
+//!     error: Color::hex(0xdc2626),
+//!     hover: Color::hex(0xe5e7eb),
+//!     selected_inactive: Color::hex(0xd1d5db),
+//!     control_height: 28.0,
+//!     icon_button_size: 28.0,
+//!     dialog_button_width: 84.0,
+//!     row_radius: 6.0,
+//!     panel_pad: 20.0,
+//! };
+//!
+//! let mut renderer = Renderer::offscreen(200.0, 60.0, 1.0, Color::hex(0xffffff), None, None)
+//!     .expect("offscreen renderer initializes");
+//! let m = renderer.metrics(FontKind::Ui, 13.0);
+//! let basis = TextBasis { ui_size: 13.0, x_height: m.x_height, cap_height: m.cap_height };
+//! let mut hits = winc_cpui::HitMap::new();
+//! renderer.draw(|frame| {
+//!     let btn = action_button(&theme, 13.0, "保存", ButtonKind::Primary, false, "save");
+//!     hits = render(frame, basis, Rect::new(0.0, 0.0, 200.0, 60.0), btn);
+//! });
+//! assert!(hits.rect_of(&"save").is_some());
+//! ```
 
 use std::borrow::Cow;
 
@@ -58,6 +94,7 @@ pub enum ButtonKind {
 }
 
 /// 底部操作按钮的状态配置（供 [`dialog_footer`] 组合使用）。
+#[derive(Debug, Clone)]
 pub struct ButtonSpec<'a, A> {
     /// 按钮文字。
     pub label: Cow<'a, str>,

@@ -2,6 +2,25 @@
 //!
 //! 所有函数均为纯几何计算，不持有窗口或组件状态，可供补全列表、右键菜单、子菜单、属性浮层与
 //! 工具提示共用。
+//!
+//! # 示例
+//!
+//! ```
+//! use winc_cpui::popover::{PopoverOptions, place_below_or_above};
+//! use winc_render::Rect;
+//!
+//! let viewport = Rect::new(0.0, 0.0, 400.0, 300.0);
+//! let opts = PopoverOptions {
+//!     margin: 8.0,
+//!     gap: 4.0,
+//!     ..PopoverOptions::default()
+//! };
+//!
+//! // 光标靠近底边时自动翻转至上方。
+//! let caret = Rect::new(120.0, 240.0, 2.0, 18.0);
+//! let card = place_below_or_above(caret, viewport, (180.0, 100.0), opts);
+//! assert_eq!(card, Rect::new(120.0, 136.0, 180.0, 100.0));
+//! ```
 
 use winc_render::Rect;
 

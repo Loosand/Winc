@@ -22,7 +22,7 @@ pub enum TextAlign {
 }
 
 /// 浮动卡片外框参数：柔和阴影与 1 像素细边框。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CardFrame {
     /// 卡片阴影色。
     pub shadow: Color,

@@ -1,7 +1,24 @@
 //! 滚动区域与滚动条的无状态几何计算原语。
 //!
 //! CPUI 不托管滚动偏移状态：应用以普通数值持有当前偏移，通过 [`ScrollMetrics`] 计算边界、
-//! 滚轮步进与条目可见性，并通过 [`ScrollbarSpec`] 换算滑块矩形与拖动偏移。
+//! 滚轮步进与条目可见性，通过 [`ScrollbarSpec`] 换算滑块矩形与拖动偏移，并通过
+//! [`VisibleWindow`] / [`virtual_list`] 实现 $O(\text{visible})$ 的长列表可视范围渲染。
+//!
+//! # 示例
+//!
+//! ```
+//! use winc_cpui::scroll::{ScrollMetrics, VisibleWindow};
+//!
+//! let metrics = ScrollMetrics::new(120.0, 24_000.0, 240.0);
+//! assert_eq!(metrics.scroll_by(60.0), 300.0);
+//!
+//! // 1,000 行等高列表仅计算视口覆盖的条目区间。
+//! let window = VisibleWindow::fixed(1_000, 24.0, 120.0, 250.0);
+//! let (range, offset, total_height) = window.bounds();
+//! assert_eq!(range, 10..16);
+//! assert!((offset - 10.0).abs() < 0.01);
+//! assert_eq!(total_height, 24_000.0);
+//! ```
 
 use std::ops::Range;
 

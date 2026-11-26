@@ -10,7 +10,7 @@ use crate::node::{CardFrame, Node, NodeKind, PaintStyle, TextAlign, TextSpec};
 use crate::wrap::wrap_text;
 
 /// 界面字体垂直视觉居中的参考度量。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextBasis {
     /// 界面正文字号（逻辑像素）。
     pub ui_size: f32,
