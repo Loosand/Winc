@@ -39,17 +39,6 @@ pub(in crate::app) fn task_commands(config: &Config, task: Task) -> &BTreeMap<St
     }
 }
 
-/// 返回设置 `config` 中 `task`（格式化或修复）的各语言命令的可变引用。
-pub(in crate::app) fn task_commands_mut(
-    config: &mut Config,
-    task: Task,
-) -> &mut BTreeMap<String, String> {
-    match task {
-        Task::Format => &mut config.format_commands,
-        Task::Fix => &mut config.fix_commands,
-    }
-}
-
 /// 返回设置 `config` 中保存时执行 `task` 的开关（「保存时格式化」或「保存时修复问题」）；
 /// 没有写时为 `None`。
 fn save_switch(config: &Config, task: Task) -> Option<bool> {
@@ -762,9 +751,6 @@ impl App {
                     message,
                     NoticeAction::Install { tools, dir },
                 );
-            }
-            FormatError::Unset(_) => {
-                self.notify_with(NoticeKind::Error, message, NoticeAction::FormatSettings)
             }
             _ => self.notify(NoticeKind::Error, message),
         }

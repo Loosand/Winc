@@ -15,9 +15,8 @@ use crate::app::Focus;
 use crate::icons::Direction;
 use crate::layout::{
     ProductParts, Setting, SettingControl, SettingRow, SettingsLayout, SettingsPage, SettingsPart,
-    StepperParts, THEME_CHOICES, settings_thumb, theme_segment, theme_thumb, theme_tile,
+    StepperParts, THEME_CHOICES, settings_thumb, theme_segment,
 };
-use crate::theme::themes;
 use winc_config::ThemeChoice;
 use winc_i18n::t;
 
@@ -243,7 +242,6 @@ fn draw_nav_row(
             p.text_muted,
             layout.nav,
         ),
-        SettingsPage::Format => icons::format(frame, icon, p.text_muted, layout.nav),
         SettingsPage::Git => icons::git(frame, icon, 1.0, p.text_muted, layout.nav),
         SettingsPage::Terminal => icons::console(frame, icon, p.text_muted, layout.nav),
         SettingsPage::Modules => icons::modules(frame, icon, p.text_muted, layout.nav),
@@ -403,22 +401,12 @@ fn draw_row(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
     };
     let tall = row.row.h >= SETTINGS_ROW_TALL;
     match row.setting.control() {
-        // 主题的缩略图排满整行，名称是上面的组标题。
-        SettingControl::ThemeList | SettingControl::Product => {}
+        SettingControl::Product => {}
         _ if tall => {
             let (top, bottom) = two_lines(row.row);
             ui_text(frame, app, x, top, row.setting.label(), p.text, clip);
             let bottom = Rect::new(x, bottom.y, room, bottom.h);
             match row.setting {
-                // 正在编辑命令时，原有的状态和警告不再显示，改为提示如何确认。
-                Setting::FormatCommand(_) | Setting::FixCommand(_) if editing => {
-                    let hint = t!("settings-command-edit-hint");
-                    let hint = ellipsize(frame, hint, app.fonts.ui_small, room);
-                    ui_text_small(frame, app, x, bottom, &hint, p.text_muted, clip);
-                }
-                Setting::FormatCommand(_) | Setting::FixCommand(_) => {
-                    draw_tool_detail(app, frame, row.setting, bottom)
-                }
                 // Git 模块开着但用不了：说明换成原因。
                 Setting::GitModule
                     if app.git_enabled()
@@ -470,84 +458,102 @@ fn draw_row(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
 
     match row.setting.control() {
         SettingControl::Font => draw_field(app, frame, row, clip),
+        SettingControl::Number => draw_number_field(app, frame, row, clip),
         // 「Git 程序」是填写的路径，没有可选的菜单：始终画成输入框。
         SettingControl::Command if editing || row.setting == Setting::GitPath => {
             draw_field(app, frame, row, clip)
         }
         SettingControl::Command => {
-            let (text, dim) = match app.settings.tool_row(row.setting) {
-                Some(r) => (r.tool.clone(), r.unset),
-                None if row.setting == Setting::TerminalShell => match app.configured_shell() {
-                    Some(shell) => (shell.name, false),
-                    None => (t!("settings-terminal-shell-default").to_owned(), false),
-                },
-                None => (t!("format-tool-auto").to_owned(), false),
+            let text = match app.configured_shell() {
+                Some(shell) => shell.name,
+                None => t!("settings-terminal-shell-default").to_owned(),
             };
             let hovered = app.settings.hover == Some(SettingsPart::Field(row.setting));
-            super::controls::popup_value(app, frame, row.control, &text, dim, hovered, clip);
+            super::controls::popup_value(app, frame, row.control, &text, false, hovered, clip);
             None
         }
         SettingControl::Choice => {
-            let (text, dim) = if row.setting == Setting::Language {
-                let choice = app.config.language.unwrap_or_default();
-                (crate::layout::locale_label(choice).to_owned(), false)
-            } else if row.setting == Setting::RenderWhitespace {
-                let choice = app.config.render_whitespace.unwrap_or_default();
-                (crate::layout::whitespace_label(choice).to_owned(), false)
-            } else if row.setting == Setting::AutoSave {
-                let choice = app.config.auto_save.unwrap_or_default();
-                (crate::layout::auto_save_label(choice).to_owned(), false)
-            } else if row.setting == Setting::DropFolder {
-                let choice = app.config.drop_folder.unwrap_or_default();
-                (crate::layout::drop_folder_label(choice).to_owned(), false)
-            } else if row.setting == Setting::GitOpenWorktree {
-                let choice = app.config.git_open_worktree.unwrap_or_default();
-                (crate::layout::open_worktree_label(choice).to_owned(), false)
-            } else if row.setting == Setting::VimClipboard {
-                let choice = app.config.vim_clipboard.unwrap_or_default();
-                (crate::layout::vim_clipboard_label(choice).to_owned(), false)
-            } else if row.setting == Setting::Zoom {
-                (format!("{}%", app.config.ui_zoom.unwrap_or(100)), false)
-            } else if row.setting == Setting::TextWidth {
-                let choice = app.config.markdown_text_width.unwrap_or_default();
-                (crate::layout::text_width_label(choice).to_owned(), false)
-            } else if row.setting == Setting::BackgroundFit {
-                let choice = app.config.ui_background_fit.unwrap_or_default();
-                (
-                    crate::layout::background_fit_label(choice).to_owned(),
+            let (text, dim) = match row.setting {
+                Setting::LightTheme | Setting::DarkTheme => {
+                    (t!("settings-theme-default").to_owned(), false)
+                }
+                Setting::BodyFont => {
+                    let label = app
+                        .config
+                        .markdown_body_font
+                        .as_deref()
+                        .and_then(|s| winc_config::font_list(Some(s)).first().copied())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| t!("settings-follow-theme").to_owned());
+                    (label, false)
+                }
+                Setting::CodeFont => {
+                    let label = app
+                        .config
+                        .editor_font
+                        .as_deref()
+                        .and_then(|s| winc_config::font_list(Some(s)).first().copied())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| t!("settings-follow-theme").to_owned());
+                    (label, false)
+                }
+                Setting::LineHeight => (
+                    crate::layout::line_height_label(app.config.markdown_line_height),
                     false,
-                )
-            } else if row.setting == Setting::BackgroundImage {
-                let name = (app.config.ui_background_image.as_deref())
-                    .map(|path| winc_editor::display_name(std::path::Path::new(path)).into_owned());
-                let none = name.is_none();
-                (
-                    name.unwrap_or_else(|| t!("settings-background-none").to_owned()),
-                    none,
-                )
-            } else if row.setting == Setting::TerminalPosition {
-                let text = if app.terminal_right() {
-                    t!("settings-terminal-position-right")
-                } else {
-                    t!("settings-terminal-position-bottom")
-                };
-                (text.to_owned(), false)
-            } else if row.setting == Setting::TerminalTabPosition {
-                let text = if app.config.terminal_vertical_tabs == Some(true) {
-                    t!("settings-terminal-tab-position-right")
-                } else {
-                    t!("settings-terminal-tab-position-top")
-                };
-                (text.to_owned(), false)
-            } else if row.setting == Setting::TerminalOptionAsMeta {
-                let choice = (app.config.option_as_meta).unwrap_or(winc_config::OptionAsMeta::Left);
-                (
-                    crate::layout::option_as_meta_label(choice).to_owned(),
+                ),
+                Setting::ContentWidth => (
+                    crate::layout::content_width_label(app.config.markdown_content_width),
                     false,
-                )
-            } else {
-                let none = || t!("settings-skip-on-save-none").to_owned();
-                (app.skipped_on_save().unwrap_or_else(none), false)
+                ),
+                Setting::ParagraphSpacing => (
+                    crate::layout::paragraph_spacing_label(app.config.markdown_paragraph_spacing),
+                    false,
+                ),
+                Setting::RenderWhitespace => {
+                    let choice = app.config.render_whitespace.unwrap_or_default();
+                    (crate::layout::whitespace_label(choice).to_owned(), false)
+                }
+                Setting::AutoSave => {
+                    let choice = app.config.auto_save.unwrap_or_default();
+                    (crate::layout::auto_save_label(choice).to_owned(), false)
+                }
+                Setting::DropFolder => {
+                    let choice = app.config.drop_folder.unwrap_or_default();
+                    (crate::layout::drop_folder_label(choice).to_owned(), false)
+                }
+                Setting::GitOpenWorktree => {
+                    let choice = app.config.git_open_worktree.unwrap_or_default();
+                    (crate::layout::open_worktree_label(choice).to_owned(), false)
+                }
+                Setting::VimClipboard => {
+                    let choice = app.config.vim_clipboard.unwrap_or_default();
+                    (crate::layout::vim_clipboard_label(choice).to_owned(), false)
+                }
+                Setting::TerminalPosition => {
+                    let text = if app.terminal_right() {
+                        t!("settings-terminal-position-right")
+                    } else {
+                        t!("settings-terminal-position-bottom")
+                    };
+                    (text.to_owned(), false)
+                }
+                Setting::TerminalTabPosition => {
+                    let text = if app.config.terminal_vertical_tabs == Some(true) {
+                        t!("settings-terminal-tab-position-right")
+                    } else {
+                        t!("settings-terminal-tab-position-top")
+                    };
+                    (text.to_owned(), false)
+                }
+                Setting::TerminalOptionAsMeta => {
+                    let choice =
+                        (app.config.option_as_meta).unwrap_or(winc_config::OptionAsMeta::Left);
+                    (
+                        crate::layout::option_as_meta_label(choice).to_owned(),
+                        false,
+                    )
+                }
+                _ => (String::new(), false),
             };
             super::controls::popup_value(app, frame, row.control, &text, dim, hovered, clip);
             None
@@ -597,10 +603,6 @@ fn draw_row(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
         }
         SettingControl::Themes => {
             draw_mode(app, frame, row, clip);
-            None
-        }
-        SettingControl::ThemeList => {
-            draw_theme_grid(app, frame, row, clip);
             None
         }
     }
@@ -671,52 +673,45 @@ fn two_lines(row: Rect) -> (Rect, Rect) {
     (top, bottom)
 }
 
-/// 绘制一种语言名称下方的说明行：工具是如何确定的（指定了命令时为命令本身），其后是警告，
-/// 可安装的工具再跟一个「安装方法…」链接。
-///
-/// 空间不足时先截短前面的说明文本。
-fn draw_tool_detail(app: &mut App, frame: &mut Frame<'_>, setting: Setting, line: Rect) {
+/// 绘制紧凑数字输入框（如「编辑器字体大小」）：平时为圆角胶囊底色加居中数字，
+/// 点击进入编辑后显示强调色外框与光标。
+fn draw_number_field(
+    app: &mut App,
+    frame: &mut Frame<'_>,
+    row: &SettingRow,
+    clip: Rect,
+) -> Option<Rect> {
     let p = app.palette;
-    let Some(row) = app.settings.tool_row(setting).cloned() else {
-        return;
-    };
-    let size = app.fonts.ui_small;
-    let link = t!("format-install-link");
-    // 说明、警告、链接之间的间距（逻辑像素）。
-    const GAP: f32 = 10.0;
+    let rect = row.control;
+    let radius = rect.h / 2.0;
+    let editing = matches!(&app.settings.editing, Some((s, _)) if *s == row.setting);
+    let hovered = app.settings.hover == Some(SettingsPart::Field(row.setting));
 
-    let link_w = if row.install.is_empty() {
-        0.0
+    if editing {
+        frame.rect_clipped(rect.inset(-1.5, -1.5), p.accent, radius + 1.5, clip);
+        frame.rect_clipped(rect, p.editor_bg, radius, clip);
+        let area = rect.inset(10.0, 0.0);
+        let focused = app.focus == Focus::Setting;
+        let (setting, mut field) = app.settings.editing.take().expect("刚刚判断过在编辑");
+        let caret = draw_bar_field(app, frame, area, &mut field, "16", focused);
+        app.settings.editing = Some((setting, field));
+        return caret;
+    }
+
+    let bg = if hovered {
+        p.selected_inactive
     } else {
-        GAP + frame.measure(FontKind::Ui, size, link)
+        p.hover
     };
-    let warning_w = row
-        .warning
-        .as_ref()
-        .map_or(0.0, |w| GAP + 16.0 + frame.measure(FontKind::Ui, size, w));
-    let room = (line.w - warning_w - link_w).max(0.0);
-    let detail = ellipsize(frame, &row.detail, size, room);
-    let mut x = ui_text_small(frame, app, line.x, line, &detail, p.text_muted, line);
-
-    if let Some(warning) = &row.warning {
-        x += GAP;
-        let icon = (x + 6.0, icon_center_y(app, line, size) - 0.5);
-        icons::warning(frame, icon, p.warning, line);
-        x = ui_text_small(frame, app, x + 16.0, line, warning, p.warning, line);
-    }
-    if !row.install.is_empty() {
-        x += GAP;
-        let end = ui_text_small(frame, app, x, line, link, p.accent, line);
-        let hit = Rect::new(x - 2.0, line.y, end - x + 4.0, line.h);
-        if app.settings.hover == Some(SettingsPart::Install(setting)) {
-            let underline = Rect::new(x, (line.bottom() - 4.0).round(), end - x, 1.0);
-            frame.rect_clipped(underline, p.accent, 0.0, line);
-        }
-        app.hits.install_links.push((setting, hit));
-    }
+    frame.rect_clipped(rect, bg, radius, clip);
+    let (value, _, _) = app.setting_value(row.setting);
+    let w = frame.measure(FontKind::Ui, app.fonts.ui, &value);
+    let x = (rect.x + (rect.w - w) / 2.0).round();
+    caps_label(frame, app, app.fonts.ui, (x, rect), &value, p.text, clip);
+    None
 }
 
-/// 绘制字体名和正在输入的格式化命令：平时是右对齐的一段文本（未设置时显示「系统默认」），
+/// 绘制字体名和正在输入的命令：平时是右对齐的一段文本（未设置时显示「系统默认」），
 /// 悬停时铺输入框底色，点击后变成输入框，外圈为强调色（字体名无效时为错误色）。
 ///
 /// 正在编辑时返回光标矩形，否则返回 `None`。
@@ -729,14 +724,10 @@ fn draw_field(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect
     let on_menu = font && app.settings.hover == Some(SettingsPart::FontMenu(row.setting));
     let hovered = hovered || on_menu;
     let (configured, placeholder) = match row.setting {
-        Setting::UiFont => (app.config.ui_font.clone(), t!("settings-font-default")),
         Setting::TerminalFont => (
             app.config.terminal_font.clone(),
             t!("settings-terminal-font-default"),
         ),
-        Setting::FormatCommand(_) | Setting::FixCommand(_) => {
-            (None, t!("settings-command-placeholder"))
-        }
         Setting::TerminalShell => (None, t!("settings-terminal-shell-placeholder")),
         Setting::GitPath => (app.config.git_path.clone(), t!("settings-git-path-auto")),
         _ => (app.config.editor_font.clone(), t!("settings-font-default")),
@@ -922,194 +913,4 @@ fn draw_mode(app: &App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) {
         let x = (segment.x + (segment.w - w) / 2.0).round();
         ui_text_small(frame, app, x, segment, label, color, clip);
     }
-}
-
-/// 绘制浅色或深色主题的格子：每个主题一张小窗口缩略图（用它自己的配色绘制），下方是名称。
-///
-/// 选定的格子外圈是 2 像素的强调色，和缩略图之间隔一圈组底色；悬停的外圈是一道淡边。
-fn draw_theme_grid(app: &App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) {
-    let p = app.palette;
-    let dark = row.setting == Setting::DarkTheme;
-    let chosen = app.theme_slot(dark);
-    for (i, theme) in themes(dark).iter().enumerate() {
-        let tile = theme_tile(row.control, i);
-        let thumb = theme_thumb(tile);
-        let selected = chosen == i;
-        let hovered = app.settings.hover == Some(SettingsPart::NamedTheme(dark, i));
-        let ring = if selected {
-            Some(p.accent)
-        } else if hovered {
-            Some(p.text_dim)
-        } else {
-            None
-        };
-        if let Some(ring) = ring {
-            frame.rect_clipped(thumb.inset(-3.0, -3.0), ring, THUMB_RADIUS + 3.0, clip);
-            frame.rect_clipped(
-                thumb.inset(-1.0, -1.0),
-                p.group_bg,
-                THUMB_RADIUS + 1.0,
-                clip,
-            );
-        }
-        mini_window(frame, theme.palette, thumb, clip);
-        // 缩略图自带一圈很淡的边，和组底色相近的缩略图（深色放在深色上）也有清楚的轮廓。
-        outline(frame, p.popup_border, thumb, THUMB_RADIUS, clip);
-
-        let name = Rect::new(tile.x, thumb.bottom() + 4.0, tile.w, tile.h - thumb.h - 4.0);
-        let color = if selected { p.text } else { p.text_muted };
-        let w = frame.measure(FontKind::Ui, app.fonts.ui_small, theme.name());
-        let x = (name.x + (name.w - w) / 2.0).round();
-        ui_text_small(frame, app, x, name, theme.name(), color, clip);
-    }
-}
-
-/// 主题缩略图的圆角半径（逻辑像素）。
-const THUMB_RADIUS: f32 = 6.0;
-
-/// 绘制一个示意用的小窗口，用来预览一套配色：按主窗口的布局等比缩小，窗框底色上左边一张
-/// 侧栏卡片、右边一张编辑区卡片；侧栏是几行文件名（一行选中），编辑区顶上一个当前标签，
-/// 下面几行行号和带语法颜色的代码，其中一行是当前行、一行是新增的（铺差异的底色）。
-fn mini_window(frame: &mut Frame<'_>, p: &Palette, rect: Rect, clip: Rect) {
-    // 一行文字的粗细和行距按缩略图的高度定：缩略图按 66 逻辑像素高设计，`unit` 是一个设计单位
-    // 的高度。
-    let unit = rect.h / 66.0;
-    let bar = (2.0 * unit).max(1.5);
-    let pitch = 6.5 * unit;
-    let pad = (4.0 * unit).round();
-    let radius = 3.0 * unit;
-    let line = |frame: &mut Frame<'_>, x: f32, y: f32, w: f32, color: Color| {
-        frame.rect_clipped(Rect::new(x, y, w, bar), color, bar / 2.0, clip);
-    };
-
-    frame.rect_clipped(rect, p.frame_bg, THUMB_RADIUS, clip);
-    let top = (8.0 * unit).round();
-    let inner = Rect::new(
-        rect.x + pad,
-        rect.y + top,
-        rect.w - pad * 2.0,
-        rect.h - top - pad,
-    );
-    let side_w = (inner.w * 0.3).round();
-    let side = Rect::new(inner.x, inner.y, side_w, inner.h);
-    let editor = Rect::new(
-        side.right() + pad,
-        inner.y,
-        inner.right() - side.right() - pad,
-        inner.h,
-    );
-    frame.rect_clipped(side, p.sidebar_bg, radius, clip);
-    frame.rect_clipped(editor, p.editor_bg, radius, clip);
-
-    // 窗框顶上左边三个小圆点（窗口按钮的位置），用最淡的字色。
-    for i in 0..3 {
-        let d = 2.5 * unit;
-        let dot = Rect::new(
-            rect.x + pad + 1.0 + i as f32 * 4.5 * unit,
-            rect.y + 3.0 * unit,
-            d,
-            d,
-        );
-        frame.rect_clipped(dot, p.text_dim.alpha(0.6), d / 2.0, clip);
-    }
-
-    // 文件树：第三行是选中的行，一行是改动的文件（Git 的修改色）。
-    let rows: [(f32, Color); 6] = [
-        (0.55, p.text_muted),
-        (0.7, p.text_muted),
-        (0.6, p.text),
-        (0.75, p.git_modified),
-        (0.5, p.text_muted),
-        (0.65, p.git_added),
-    ];
-    for (i, (w, color)) in rows.into_iter().enumerate() {
-        let y = side.y + 5.0 * unit + i as f32 * pitch;
-        if i == 2 {
-            let back = Rect::new(side.x + 2.0, y - 2.0 * unit, side.w - 4.0, bar + 4.0 * unit);
-            frame.rect_clipped(back, p.selected, 1.5 * unit, clip);
-        }
-        let indent = if i == 0 { 0.0 } else { 3.0 * unit };
-        line(
-            frame,
-            side.x + 4.0 * unit + indent,
-            y,
-            (side.w - 10.0 * unit) * w,
-            color,
-        );
-    }
-
-    // 标签栏：一个当前标签（主题的底色和细边）。
-    let tab = Rect::new(
-        editor.x + 3.0 * unit,
-        editor.y + 3.0 * unit,
-        (editor.w * 0.34).round(),
-        7.0 * unit,
-    );
-    frame.rect_clipped(tab, p.tab_edge, 2.0 * unit, clip);
-    frame.rect_clipped(tab.inset(0.5, 0.5), p.tab_fill, 2.0 * unit, clip);
-    line(
-        frame,
-        tab.x + 3.0 * unit,
-        tab.y + (tab.h - bar) / 2.0,
-        tab.w - 6.0 * unit,
-        p.text,
-    );
-
-    // 代码：行号一列，右边是几行有语法颜色的代码。第三行是当前行，第五行是新增的行。
-    let gutter = editor.x + 4.0 * unit;
-    let x0 = editor.x + 12.0 * unit;
-    let room = editor.right() - 4.0 * unit - x0;
-    let code: [(f32, &[(Color, f32)]); 6] = [
-        (0.0, &[(p.syntax_comment, 0.55)]),
-        (
-            0.0,
-            &[
-                (p.syntax_keyword, 0.14),
-                (p.syntax_function, 0.28),
-                (p.syntax_text, 0.08),
-            ],
-        ),
-        (
-            0.1,
-            &[
-                (p.syntax_keyword, 0.1),
-                (p.syntax_text, 0.12),
-                (p.syntax_string, 0.32),
-            ],
-        ),
-        (0.1, &[(p.syntax_property, 0.16), (p.syntax_builtin, 0.2)]),
-        (0.1, &[(p.syntax_function, 0.2), (p.syntax_number, 0.08)]),
-        (0.0, &[(p.syntax_text, 0.06)]),
-    ];
-    for (i, (indent, parts)) in code.into_iter().enumerate() {
-        let y = tab.bottom() + 5.0 * unit + i as f32 * pitch;
-        let band = Rect::new(editor.x, y - 2.0 * unit, editor.w, bar + 4.0 * unit);
-        let number = if i == 2 {
-            frame.rect_clipped(band, p.current_line, 0.0, clip);
-            p.gutter_text_current
-        } else if i == 4 {
-            frame.rect_clipped(band, p.diff_added.line, 0.0, clip);
-            let mark = Rect::new(gutter + 4.0 * unit, band.y, 1.0 * unit, band.h);
-            frame.rect_clipped(mark, p.diff_added.mark, 0.0, clip);
-            p.gutter_text
-        } else {
-            p.gutter_text
-        };
-        line(frame, gutter, y, 3.0 * unit, number);
-        let mut x = x0 + indent * room;
-        for &(color, w) in parts {
-            let w = (w * room).round();
-            line(frame, x, y, w, color);
-            x += w + 2.0 * unit;
-        }
-    }
-}
-
-/// 绘制圆角矩形外沿 1 逻辑像素的细边。
-///
-/// 矩形内部已经绘制了内容，不能先铺边色再铺底色，因此用四条直线和四段圆弧描边。
-fn outline(frame: &mut Frame<'_>, color: Color, rect: Rect, radius: f32, clip: Rect) {
-    let inner = rect.inset(0.5, 0.5);
-    let shapes = icons::rounded_outline(inner.x, inner.y, inner.w, inner.h, radius - 0.5);
-    frame.stroke(&shapes, 1.0, color, clip);
 }

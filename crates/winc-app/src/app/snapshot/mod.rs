@@ -15,7 +15,7 @@ use crate::app::workspace::picker::PickerMotion;
 use crate::layout::{
     PanelButton, PickerParts, RowAction, Scrollbar, SearchParts, Setting, SettingsPage,
     SettingsPart, SidebarView, StepperParts, THEME_CHOICES, TREE_NAME_MIN, hscrollbar_thumb,
-    row_actions, scrollbar_thumb, theme_tile,
+    row_actions, scrollbar_thumb,
 };
 
 mod animation;
@@ -291,14 +291,6 @@ fn settings_point(app: &App, part: SettingsPart) -> (f32, f32) {
                 .unwrap();
             crate::layout::theme_segment(control, i)
         }
-        SettingsPart::NamedTheme(dark, i) => {
-            let setting = if dark {
-                Setting::DarkTheme
-            } else {
-                Setting::LightTheme
-            };
-            theme_tile(layout.row(setting).unwrap().control, i)
-        }
         SettingsPart::KeySearch => app.keys_layout().header.search,
         SettingsPart::Record => app.keys_layout().header.record,
         SettingsPart::Keymap => app.keys_layout().header.value,
@@ -321,11 +313,6 @@ fn settings_point(app: &App, part: SettingsPart) -> (f32, f32) {
         | SettingsPart::KeyCancel => {
             let found = app.hits.keys_parts.iter().find(|(_, p)| *p == part);
             found.expect("先绘制一帧").0
-        }
-        // 链接的位置在绘制时才确定，调用前需要先绘制一帧。
-        SettingsPart::Install(id) => {
-            let links = &app.hits.install_links;
-            links.iter().find(|(l, _)| *l == id).unwrap().1
         }
     };
     (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)

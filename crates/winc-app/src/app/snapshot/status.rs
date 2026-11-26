@@ -30,7 +30,7 @@ fn all_pages_use_the_window_margin_by_default() {
         );
     };
 
-    assert!(!app.switch_on(Setting::StatusBar));
+    assert!(!app.status_bar_shown());
     check(&mut app);
     app.open_path(&dir);
     assert!(app.library_shown());
@@ -44,7 +44,7 @@ fn all_pages_use_the_window_margin_by_default() {
     check(&mut app);
 
     app.config.status_bar = Some(true);
-    assert!(app.switch_on(Setting::StatusBar));
+    assert!(app.status_bar_shown());
     paint(&mut app);
     assert_eq!(app.layout.status.h, STATUS_HEIGHT);
     std::fs::remove_dir_all(dir).unwrap();

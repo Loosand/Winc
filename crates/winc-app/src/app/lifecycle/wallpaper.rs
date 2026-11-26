@@ -311,6 +311,7 @@ impl App {
 
     /// 设置 Markdown 预览正文的最大宽度，并写回配置。
     pub(in crate::app) fn set_text_width(&mut self, width: winc_config::TextWidth) {
+        self.config.markdown_content_width = None;
         self.config.markdown_text_width = Some(width);
         self.save_config();
         self.request_redraw();

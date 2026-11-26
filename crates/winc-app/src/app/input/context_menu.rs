@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use winc_editor::encoding::CHOICES;
 
 use winc_core::{Indent, LineEnding};
-use winc_editor::format::{Auto, PRESETS, Task};
+use winc_editor::format::PRESETS;
 use winc_editor::{DocumentId, EntryKind};
 use winc_i18n::t;
 #[cfg(any(target_os = "macos", test))]
@@ -265,6 +265,22 @@ pub enum MenuCommand {
     BackgroundFit(usize),
     /// [`TextWidth::ALL`](winc_config::TextWidth::ALL) 中的序号（从 0 起）。
     TextWidth(usize),
+    /// 设置外观页中浅色/深色主题菜单的「默认」。
+    ThemeDefault,
+    /// 设置外观页中「正文字体」菜单的「自动（跟随主题）」。
+    BodyFontDefault,
+    /// 设置外观页中「正文字体」菜单的一项，参数为 [`winc_render::installed_fonts`] 中的序号。
+    BodyFont(usize),
+    /// 设置外观页中「代码字体」菜单的「自动（跟随主题）」。
+    CodeFontDefault,
+    /// 设置外观页中「代码字体」菜单的一项，参数为 [`winc_render::installed_fonts`] 中的序号。
+    CodeFont(usize),
+    /// 设置外观页中「行高」菜单的一项：`None` 为自动（跟随主题），`Some(i)` 为预设序号。
+    LineHeight(Option<usize>),
+    /// 设置外观页中「内容宽度」菜单的一项：`None` 为自动（跟随主题），`Some(i)` 为预设序号。
+    ContentWidth(Option<usize>),
+    /// 设置外观页中「段落间距」菜单的一项：`None` 为自动（跟随主题），`Some(i)` 为预设序号。
+    ParagraphSpacing(Option<usize>),
     /// 设置中终端「位置」菜单的一项：`true` 为右侧，`false` 为底部。
     TerminalPosition(bool),
     /// 设置中终端「标签位置」菜单的一项：`true` 为右侧，`false` 为顶部。
@@ -750,7 +766,19 @@ impl MenuCommand {
                 .get(i)
                 .map_or("", |&choice| crate::layout::locale_label(choice)),
             MenuCommand::FontDefault => t!("settings-font-default"),
-            MenuCommand::Font(i) | MenuCommand::FallbackFont(i) => winc_render::installed_fonts()
+            MenuCommand::ThemeDefault => t!("settings-theme-default"),
+            MenuCommand::BodyFontDefault
+            | MenuCommand::CodeFontDefault
+            | MenuCommand::LineHeight(None)
+            | MenuCommand::ContentWidth(None)
+            | MenuCommand::ParagraphSpacing(None) => t!("settings-follow-theme"),
+            MenuCommand::LineHeight(Some(_))
+            | MenuCommand::ContentWidth(Some(_))
+            | MenuCommand::ParagraphSpacing(Some(_)) => "",
+            MenuCommand::Font(i)
+            | MenuCommand::FallbackFont(i)
+            | MenuCommand::BodyFont(i)
+            | MenuCommand::CodeFont(i) => winc_render::installed_fonts()
                 .get(i)
                 .map_or("", |family| family.name.as_str()),
             MenuCommand::NewWindow => t!("cmd-new-window"),
@@ -930,10 +958,6 @@ pub enum MenuTarget {
     Diff(DocumentId, bool),
     /// 侧栏顶部的项目名。
     Project,
-    /// 设置的格式化页中格式化工具（修复工具）一组下面的「添加语言…」。
-    AddLanguage(Task),
-    /// 设置的格式化页中的「排除的语言」。
-    SkipOnSave,
     /// 设置的外观页中的「语言」。
     Locale,
     /// 设置的编辑器页中的「空白符」。
@@ -952,6 +976,20 @@ pub enum MenuTarget {
     BackgroundImage,
     /// 设置的外观页中的「背景显示方式」。
     BackgroundFit,
+    /// 设置外观页中的「浅色主题」。
+    LightTheme,
+    /// 设置外观页中的「深色主题」。
+    DarkTheme,
+    /// 设置外观页中的「正文字体」。
+    BodyFont,
+    /// 设置外观页中的「代码字体」。
+    CodeFont,
+    /// 设置外观页中的「行高」。
+    LineHeight,
+    /// 设置外观页中的「内容宽度」。
+    ContentWidth,
+    /// 设置外观页中的「段落间距」。
+    ParagraphSpacing,
     /// 设置中「Markdown 预览正文宽度」的选项菜单。
     TextWidth,
     /// 设置的终端页中的「默认 Shell」。
@@ -964,8 +1002,6 @@ pub enum MenuTarget {
     OptionAsMeta,
     /// 设置中字体一行的下拉按钮。
     Font(Setting),
-    /// 设置的格式化页中一种语言的格式化（修复）工具。
-    Tool(Task, &'static str),
     /// 状态栏中一个文档的缩进。
     Indent(DocumentId),
     /// 状态栏中一个文档的行尾。

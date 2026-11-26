@@ -104,12 +104,13 @@ fn settings_font_name_is_checked_and_can_be_abandoned() {
         ))
     );
 
-    // 配置中原本就是用不了的字体（例如手动改了配置文件）：打开设置、换到该页时在该行写明原因。
+    // 配置中原本就是用不了的字体（例如手动改了配置文件）：打开设置时外观页的「代码字体」立即写明原因，
+    // 换到编辑器页时同样在「字体」行写明原因。
     app.settings_cancel_field();
     app.close_settings();
     app.config.editor_font = Some(path.clone());
     app.open_settings();
-    assert_eq!(app.settings.error, None, "第一页上没有编辑器字体");
+    assert!(matches!(&app.settings.error, Some((Setting::CodeFont, _))));
     app.settings_show_page(SettingsPage::Editor);
     assert!(matches!(
         &app.settings.error,
@@ -186,9 +187,8 @@ fn a_font_can_be_chosen_from_the_menu() {
     app.overlays.context_menu = None;
     paint(&mut app);
 
-    // 编辑器字体直接列出已安装的常用编程字体和当前的字体，界面字体直接列出常用界面字体，其余
-    // 字体在子菜单里。
-    use crate::app::input::context_menu::{COMMON_FONTS, COMMON_UI_FONTS, MenuEntry, font_menu};
+    // 编辑器字体直接列出已安装的常用编程字体和当前的字体，其余字体在子菜单里。
+    use crate::app::input::context_menu::{COMMON_FONTS, MenuEntry, font_menu};
     let fonts = winc_render::installed_fonts();
     let listed = |setting, current| {
         (font_menu(setting, current).iter())
@@ -201,7 +201,6 @@ fn a_font_can_be_chosen_from_the_menu() {
             .count()
     };
     let common = count(COMMON_FONTS);
-    assert_eq!(listed(Setting::UiFont, None), count(COMMON_UI_FONTS));
     assert_eq!(listed(Setting::EditorFont, None), common);
     if let Some(family) = fonts
         .iter()
@@ -272,91 +271,198 @@ fn a_font_can_be_chosen_from_the_menu() {
 }
 
 #[test]
-fn the_language_and_ui_font_controls_line_up() {
-    let dir = search_folder("settings-language-width");
-    let mut app = app_with(&dir, false);
-    app.open_settings();
-    app.settings_show_page(Setting::Language.page());
-    let layout = app.settings_layout();
-    let control = |setting| layout.row(setting).unwrap().control;
-    let (language, font) = (control(Setting::Language), control(Setting::UiFont));
-    assert_eq!((language.x, language.w), (font.x, font.w));
-    assert_eq!(Setting::Language.description(), None);
-    // 与模式分段控件同宽、右缘对齐；菜单的值的底色向右多出内边距。
-    let theme = control(Setting::Theme);
-    let pad = crate::theme::SETTINGS_GLYPH_PAD;
-    assert_eq!((language.x - pad, language.w), (theme.x, theme.w));
+fn appearance_page_has_theme_fonts_and_typography_sections() {
+    use crate::app::input::context_menu::{MenuCommand, MenuEntry, MenuTarget};
+    use crate::layout::SettingsPart;
 
-    // 语言菜单比控件短，打开后与控件同宽并对齐。
-    app.settings_open_menu(Setting::Language);
+    let dir = sample_folder("settings-appearance-redesign");
+    let md_path = dir.join("doc.md");
+    std::fs::write(
+        &md_path,
+        "# 标题\n\n这是一段正文，用来验证外观设置修改后的排版效果。\n\n第二段正文，以及 `code`。\n",
+    )
+    .unwrap();
+    let mut app = app_with(&md_path, false);
     paint(&mut app);
-    let popup = app
-        .overlays
-        .context_menu
-        .as_ref()
-        .unwrap()
-        .popup
-        .as_ref()
-        .unwrap();
-    let menu = popup.levels[0].rect;
-    assert_eq!((menu.x, menu.w), (language.x, language.w));
+
+    // 「格式化」设置页已移除。
+    assert!(
+        SettingsPage::ALL
+            .iter()
+            .all(|page| page.title() != "格式化")
+    );
+
+    app.open_settings();
+    paint(&mut app);
+
+    let layout = app.settings_layout();
+    assert_eq!(layout.page, SettingsPage::Appearance);
+
+    // 三个区块：主题、字体、排版；关闭「使用自定义字体大小」时，不显示「编辑器字体大小」。
+    let rows: Vec<Setting> = layout.rows.iter().map(|r| r.setting).collect();
+    assert_eq!(
+        rows,
+        [
+            Setting::Theme,
+            Setting::LightTheme,
+            Setting::DarkTheme,
+            Setting::BodyFont,
+            Setting::CodeFont,
+            Setting::CustomFontSize,
+            Setting::LineHeight,
+            Setting::ContentWidth,
+            Setting::ParagraphSpacing,
+        ]
+    );
+    assert!(layout.row(Setting::MarkdownFontSize).is_none());
+    assert_eq!(
+        Setting::ContentWidth.description().as_deref(),
+        Some("只影响编辑窗口，不影响导出的文件。")
+    );
+
+    // 浅色主题与深色主题下拉菜单目前仅含官方「默认」选项且默认勾选。
+    for (setting, target) in [
+        (Setting::LightTheme, MenuTarget::LightTheme),
+        (Setting::DarkTheme, MenuTarget::DarkTheme),
+    ] {
+        app.settings_open_menu(setting);
+        let menu = app.overlays.context_menu.as_ref().unwrap();
+        assert_eq!(menu.target, target);
+        assert_eq!(
+            menu.entries,
+            [MenuEntry::Item(MenuCommand::ThemeDefault, true)]
+        );
+        assert!(app.menu_checked(MenuCommand::ThemeDefault));
+        app.overlays.context_menu = None;
+    }
+
+    // 字体下拉菜单：正文字体列出全部本机字体，代码字体列出本机等宽字体，首项均为「自动（跟随主题）」。
+    let installed = winc_render::installed_fonts();
+    app.settings_open_menu(Setting::BodyFont);
+    let body_menu = app.overlays.context_menu.as_ref().unwrap();
+    assert_eq!(body_menu.target, MenuTarget::BodyFont);
+    assert!(matches!(
+        body_menu.entries.first(),
+        Some(MenuEntry::Item(MenuCommand::BodyFontDefault, true))
+    ));
+    assert!(app.menu_checked(MenuCommand::BodyFontDefault));
+    assert_eq!(body_menu.entries.len(), 1 + installed.len());
+
+    let rev_before = app.font_rev;
+    if let Some((idx, fam)) = installed.iter().enumerate().next() {
+        app.run_menu_command(MenuCommand::BodyFont(idx));
+        assert_eq!(
+            app.config.markdown_body_font.as_deref(),
+            Some(fam.name.as_str())
+        );
+        assert!(app.font_rev > rev_before);
+        // 界面字号和界面字体保持系统默认。
+        assert_eq!(app.fonts.ui, crate::theme::UI_FONT);
+    }
+    app.settings_open_menu(Setting::BodyFont);
+    app.run_menu_command(MenuCommand::BodyFontDefault);
+    assert_eq!(app.config.markdown_body_font, None);
+
+    app.settings_open_menu(Setting::CodeFont);
+    let code_menu = app.overlays.context_menu.as_ref().unwrap();
+    assert_eq!(code_menu.target, MenuTarget::CodeFont);
+    assert!(matches!(
+        code_menu.entries.first(),
+        Some(MenuEntry::Item(MenuCommand::CodeFontDefault, true))
+    ));
+    let mono_count = installed.iter().filter(|f| f.monospace).count();
+    assert_eq!(code_menu.entries.len(), 1 + mono_count);
+    if let Some((idx, fam)) = installed.iter().enumerate().find(|(_, f)| f.monospace) {
+        let rev_before = app.font_rev;
+        app.run_menu_command(MenuCommand::CodeFont(idx));
+        assert_eq!(app.config.editor_font.as_deref(), Some(fam.name.as_str()));
+        assert!(app.font_rev > rev_before);
+    }
+    app.settings_open_menu(Setting::CodeFont);
+    app.run_menu_command(MenuCommand::CodeFontDefault);
+    assert_eq!(app.config.editor_font, None);
+
+    // 打开「使用自定义字体大小」后出现「编辑器字体大小」数字输入项。
+    assert!(!app.switch_on(Setting::CustomFontSize));
+    app.settings_toggle(Setting::CustomFontSize);
+    assert!(app.switch_on(Setting::CustomFontSize));
+    assert_eq!(app.config.markdown_custom_font_size, Some(true));
+    assert!(
+        app.settings_layout()
+            .row(Setting::MarkdownFontSize)
+            .is_some()
+    );
+    assert_eq!(app.markdown_base_size(), Config::MARKDOWN_FONT_SIZE);
+
+    // 编辑「编辑器字体大小」并回车提交，超出范围时自动钳制。
+    click_part(&mut app, SettingsPart::Field(Setting::MarkdownFontSize));
+    assert_eq!(app.focus, Focus::Setting);
+    app.edit_field(|f| {
+        f.select_all();
+        f.insert("20")
+    });
+    app.settings_commit_field();
+    assert_eq!(app.config.markdown_font_size, Some(20.0));
+    assert_eq!(app.markdown_base_size(), 20.0);
+
+    // 超过上限 36 时钳制到 36。
+    app.settings_start_editing(Setting::MarkdownFontSize);
+    app.edit_field(|f| {
+        f.select_all();
+        f.insert("99")
+    });
+    app.settings_commit_field();
+    assert_eq!(app.config.markdown_font_size, Some(36.0));
+    assert_eq!(app.markdown_base_size(), 36.0);
+
+    // 排版下拉菜单：行高、内容宽度、段落间距，修改后实时驱动 Markdown 排版键。
+    app.settings_open_menu(Setting::LineHeight);
+    assert!(app.menu_checked(MenuCommand::LineHeight(None)));
+    app.run_menu_command(MenuCommand::LineHeight(Some(3))); // 1.7
+    assert_eq!(app.config.markdown_line_height, Some(1.7));
+    assert_eq!(app.markdown_line_height(), 1.7);
+
+    app.settings_open_menu(Setting::ContentWidth);
+    assert!(app.menu_checked(MenuCommand::ContentWidth(None)));
+    app.run_menu_command(MenuCommand::ContentWidth(Some(2))); // 800 px
+    assert_eq!(app.config.markdown_content_width, Some(800));
+    assert_eq!(app.markdown_content_width(), 800.0);
+
+    app.settings_open_menu(Setting::ParagraphSpacing);
+    assert!(app.menu_checked(MenuCommand::ParagraphSpacing(None)));
+    app.run_menu_command(MenuCommand::ParagraphSpacing(Some(3))); // 1.25 em
+    assert_eq!(app.config.markdown_paragraph_spacing, Some(1.25));
+    assert_eq!(app.markdown_paragraph_gap(), 1.25);
+
+    app.close_settings();
+    app.set_preview_mode(winc_editor::PreviewMode::Preview);
+    for _ in 0..4 {
+        app.wait_for_markdown();
+        paint(&mut app);
+    }
+    let laid = app.preview.markdown.layout.as_ref().unwrap();
+    assert_eq!(laid.key.base, 36.0);
+    assert_eq!(laid.key.line_height, 1.7);
+    assert_eq!(laid.key.paragraph_gap, 1.25);
+    assert_eq!(laid.key.fonts, app.font_rev);
+
+    // 全部切回「自动（跟随主题）」恢复默认值。
+    app.open_settings();
+    app.settings_open_menu(Setting::LineHeight);
+    app.run_menu_command(MenuCommand::LineHeight(None));
+    app.settings_open_menu(Setting::ContentWidth);
+    app.run_menu_command(MenuCommand::ContentWidth(None));
+    app.settings_open_menu(Setting::ParagraphSpacing);
+    app.run_menu_command(MenuCommand::ParagraphSpacing(None));
+    app.settings_toggle(Setting::CustomFontSize);
+    assert_eq!(app.config.markdown_line_height, None);
+    assert_eq!(app.config.markdown_content_width, None);
+    assert_eq!(app.config.markdown_paragraph_spacing, None);
+    assert_eq!(app.config.markdown_custom_font_size, Some(false));
+    assert_eq!(app.markdown_line_height(), winc_typeset::BODY_LINE);
+    assert_eq!(app.markdown_paragraph_gap(), winc_typeset::PARAGRAPH_GAP);
 
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn the_font_weight_steps_by_hundreds_within_its_range() {
-    let dir = sample_folder("settings-font-weight");
-    let mut app = app_with(&dir.join("short.rs"), false);
-    assert_eq!(Setting::FontWeight.page(), SettingsPage::Appearance);
-    assert_eq!(app.setting_value(Setting::FontWeight).0, "400");
-
-    app.settings_adjust(Setting::FontWeight, true);
-    assert_eq!(app.config.ui_font_weight, Some(500));
-    // 回到 400 时从配置中去掉该项。
-    app.settings_adjust(Setting::FontWeight, false);
-    assert_eq!(app.config.ui_font_weight, None);
-
-    // 不在档位上的值移到该方向上最近的一档。
-    app.config.ui_font_weight = Some(450);
-    app.settings_adjust(Setting::FontWeight, true);
-    assert_eq!(app.config.ui_font_weight, Some(500));
-    app.config.ui_font_weight = Some(450);
-    app.settings_adjust(Setting::FontWeight, false);
-    assert_eq!(app.config.ui_font_weight, None);
-
-    // 到上下限后不再变化。
-    app.config.ui_font_weight = Some(900);
-    app.settings_adjust(Setting::FontWeight, true);
-    assert_eq!(app.config.ui_font_weight, Some(900));
-    assert_eq!(
-        app.setting_value(Setting::FontWeight),
-        ("900".to_owned(), false, true)
-    );
-    app.config.ui_font_weight = Some(100);
-    app.settings_adjust(Setting::FontWeight, false);
-    assert_eq!(app.config.ui_font_weight, Some(100));
-    assert_eq!(
-        app.setting_value(Setting::FontWeight),
-        ("100".to_owned(), true, false)
-    );
-
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-/// 各档字重的截图：`cargo test -p winc-app shoot_font_weights -- --ignored`。
-#[test]
-#[ignore = "截图，手动运行"]
-fn shoot_font_weights() {
-    let dir = sample_folder("settings-font-weights");
-    let mut app = app_with(&dir.join("short.rs"), false);
-    app.run(Command::Insert("// 字重 weight 0123 fn main() {}\n".into()));
-    for weight in [300, 400, 500, 600, 700] {
-        app.config.ui_font_weight = Some(weight);
-        app.apply_fonts().unwrap();
-        shoot(&mut app, &format!("font-weight-{weight}"));
-    }
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// 背景图片：配置后在后台生成铺满窗口（按逻辑像素）的图层，底色之下透出图片；不透明度、配色
@@ -377,8 +483,6 @@ fn the_background_image_shows_under_the_base_colors() {
     // 状态文件所在的目录即缓存所在的目录。
     app.store.state_path = Some(dir.join("state.json"));
     let cache = dir.join("wallpaper.cache");
-    assert_eq!(Setting::BackgroundImage.page(), SettingsPage::Appearance);
-    assert_eq!(app.setting_value(Setting::BackgroundOpacity).0, "15");
 
     let pixel = |app: &mut App, (x, y): (f32, f32)| {
         paint(app);
@@ -426,7 +530,7 @@ fn the_background_image_shows_under_the_base_colors() {
         *px = [0, 255, 0, 255];
     }
     std::fs::write(&cache, &bytes).unwrap();
-    app.settings_adjust(Setting::BackgroundOpacity, true);
+    app.config.ui_background_opacity = Some(20.0);
     let green = sample(&mut app);
     assert!(green.1 > green.0 && green.1 > green.2, "{green:?}");
     // 换回原来的像素，后面的检查不受影响。
@@ -434,25 +538,18 @@ fn the_background_image_shows_under_the_base_colors() {
         *px = [255, 0, 0, 255];
     }
     std::fs::write(&cache, &bytes).unwrap();
-    app.settings_adjust(Setting::BackgroundOpacity, false);
+    app.config.ui_background_opacity = Some(15.0);
     assert_eq!(sample(&mut app), mixed(plain, 0.15));
 
     // 调高不透明度：重新生成。
-    app.settings_adjust(Setting::BackgroundOpacity, true);
-    assert_eq!(app.config.ui_background_opacity, Some(20.0));
+    app.config.ui_background_opacity = Some(20.0);
     assert_eq!(sample(&mut app), mixed(plain, 0.2));
 
     // 范围是 0 到 100：调到 0 时按没有背景图处理，图层释放；调回来后重新生成。
-    app.config.ui_background_opacity = Some(5.0);
-    app.settings_adjust(Setting::BackgroundOpacity, false);
-    app.settings_adjust(Setting::BackgroundOpacity, false);
-    assert_eq!(app.config.ui_background_opacity, Some(0.0));
+    app.config.ui_background_opacity = Some(0.0);
     assert_eq!(sample(&mut app), plain);
     assert_eq!(app.frame.renderer.as_ref().unwrap().wallpaper_size(), None);
-    app.config.ui_background_opacity = Some(95.0);
-    app.settings_adjust(Setting::BackgroundOpacity, true);
-    app.settings_adjust(Setting::BackgroundOpacity, true);
-    assert_eq!(app.config.ui_background_opacity, Some(100.0));
+    app.config.ui_background_opacity = Some(100.0);
     assert_eq!(sample(&mut app), (255, 0, 0));
     // 不透明度超过一半：图层按物理像素生成，这里即图片原来的大小。
     let size = |app: &App| app.frame.renderer.as_ref().unwrap().wallpaper_size();
@@ -462,7 +559,6 @@ fn the_background_image_shows_under_the_base_colors() {
 
     // 显示方式。适应：图片按高度缩小并居中，取样处在图片之外，只有底色。
     use winc_config::BackgroundFit;
-    assert_eq!(Setting::BackgroundFit.page(), SettingsPage::Appearance);
     app.set_background_fit(BackgroundFit::Fit);
     assert_eq!(sample(&mut app), plain);
     assert_eq!(size(&app), Some((1093, 820)));

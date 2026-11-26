@@ -19,7 +19,7 @@ pub use writing::BetaSetting;
 /// 设置的一个分类，对应左侧分类栏中的一项和右侧的一页。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsPage {
-    /// 外观：主题、界面字体和字号。
+    /// 外观：主题、正文字体与代码字体、字号和排版。
     #[default]
     Appearance,
     /// 编辑器：编辑区字体和字号、Tab 宽度、保存与滚动相关的选项。
@@ -28,8 +28,6 @@ pub enum SettingsPage {
     Writing,
     /// Markdown 语法、公式、代码块和显示。
     Markdown,
-    /// 格式化：保存时的格式化和修复，以及各语言的工具命令。
-    Format,
     /// Git：Git 模块的选项；模块关闭时不列出。
     Git,
     /// 终端：默认 shell、面板位置、字体、字号和终端行为。
@@ -51,12 +49,11 @@ pub struct Modules {
 
 impl SettingsPage {
     /// 全部分类，顺序与分类栏从上到下的顺序一致。
-    pub const ALL: [SettingsPage; 10] = [
+    pub const ALL: [SettingsPage; 9] = [
         SettingsPage::Appearance,
         SettingsPage::Editor,
         SettingsPage::Writing,
         SettingsPage::Markdown,
-        SettingsPage::Format,
         SettingsPage::Git,
         SettingsPage::Terminal,
         SettingsPage::Modules,
@@ -80,7 +77,6 @@ impl SettingsPage {
             SettingsPage::Editor => t!("settings-page-editor"),
             SettingsPage::Writing => t!("settings-page-writing"),
             SettingsPage::Markdown => t!("settings-page-markdown"),
-            SettingsPage::Format => t!("settings-page-format"),
             SettingsPage::Git => t!("settings-page-git"),
             SettingsPage::Terminal => t!("settings-page-terminal"),
             SettingsPage::Modules => t!("settings-page-modules"),
@@ -90,38 +86,34 @@ impl SettingsPage {
     }
 
     /// 返回这一页的各组设置项，组内的项从上到下排列。
-    ///
-    /// 格式化页中每种语言占一行，`languages` 是要列出的语言。
-    pub fn sections(self, languages: &ToolLanguages) -> Vec<Section> {
+    pub fn sections(self, custom_font_size: bool) -> Vec<Section> {
         let plain = |items: Vec<Setting>| Section { title: None, items };
         match self {
             SettingsPage::Appearance => {
-                // 系统标题栏只在其他平台列出：macOS 上标题栏总是和内容融为一体。平滑滚动只在
-                // macOS 上列出：其他平台上滚轮本来就一格一格立即滚动。
-                let mut window = vec![Setting::StatusBar, Setting::Animations];
-                if cfg!(target_os = "macos") {
-                    window.push(Setting::SmoothScrolling);
-                }
-                window.push(Setting::RestoreWindow);
-                if !cfg!(target_os = "macos") {
-                    window.push(Setting::SystemTitleBar);
+                let mut fonts = vec![
+                    Setting::BodyFont,
+                    Setting::CodeFont,
+                    Setting::CustomFontSize,
+                ];
+                if custom_font_size {
+                    fonts.push(Setting::MarkdownFontSize);
                 }
                 vec![
-                    plain(vec![Setting::Theme, Setting::Language, Setting::Zoom]),
-                    plain(vec![Setting::UiFont, Setting::UiSize, Setting::FontWeight]),
-                    plain(window),
-                    plain(vec![
-                        Setting::BackgroundImage,
-                        Setting::BackgroundFit,
-                        Setting::BackgroundOpacity,
-                    ]),
                     Section {
-                        title: Some(t!("settings-light-theme")),
-                        items: vec![Setting::LightTheme],
+                        title: Some(t!("settings-section-theme")),
+                        items: vec![Setting::Theme, Setting::LightTheme, Setting::DarkTheme],
                     },
                     Section {
-                        title: Some(t!("settings-dark-theme")),
-                        items: vec![Setting::DarkTheme],
+                        title: Some(t!("settings-section-fonts")),
+                        items: fonts,
+                    },
+                    Section {
+                        title: Some(t!("settings-section-typography")),
+                        items: vec![
+                            Setting::LineHeight,
+                            Setting::ContentWidth,
+                            Setting::ParagraphSpacing,
+                        ],
                     },
                 ]
             }
@@ -195,35 +187,6 @@ impl SettingsPage {
                 Setting::TerminalModule,
                 Setting::RemoteModule,
             ])],
-            SettingsPage::Format => {
-                let mut sections = vec![
-                    plain(vec![
-                        Setting::FormatOnSave,
-                        Setting::FixOnSave,
-                        Setting::SkipOnSave,
-                    ]),
-                    Section {
-                        title: Some(t!("settings-section-format-tools")),
-                        items: languages
-                            .format
-                            .iter()
-                            .map(|&id| Setting::FormatCommand(id))
-                            .chain([Setting::AddLanguage])
-                            .collect(),
-                    },
-                ];
-                // 没有列出的语言时只有「添加语言…」，直接跟在组标题下面。
-                sections.push(Section {
-                    title: Some(t!("settings-section-fix-tools")),
-                    items: languages
-                        .fix
-                        .iter()
-                        .map(|&id| Setting::FixCommand(id))
-                        .chain([Setting::AddFixLanguage])
-                        .collect(),
-                });
-                sections
-            }
             SettingsPage::Keys => Vec::new(),
             SettingsPage::About => vec![
                 plain(vec![Setting::Version]),
@@ -247,18 +210,46 @@ impl SettingsPage {
     pub fn first(self) -> Setting {
         match self {
             SettingsPage::Keys => Setting::KeySearch,
-            page => page.sections(&ToolLanguages::default())[0].items[0],
+            page => page.sections(false)[0].items[0],
         }
     }
 }
 
-/// 格式化页列出的语言（语言 id）：格式化工具一组，修复工具一组。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ToolLanguages {
-    /// 「格式化工具」一组列出的语言 id。
-    pub format: Vec<&'static str>,
-    /// 「修复工具」一组列出的语言 id。
-    pub fix: Vec<&'static str>,
+/// 外观页「行高」的可选预设值（倍数）。
+pub const LINE_HEIGHT_OPTIONS: [f32; 6] = [1.4, 1.5, 1.6, 1.7, 1.8, 2.0];
+/// 外观页「内容宽度」的可选预设值（逻辑像素）。
+pub const CONTENT_WIDTH_OPTIONS: [u16; 6] = [640, 720, 800, 900, 1000, 1200];
+/// 外观页「段落间距」的可选预设值（em）。
+pub const PARAGRAPH_SPACING_OPTIONS: [f32; 5] = [0.5, 0.75, 1.0, 1.25, 1.5];
+
+/// 格式化行高选项的显示文本。
+pub fn line_height_label(value: Option<f32>) -> String {
+    match value {
+        None => t!("settings-follow-theme").to_owned(),
+        Some(v) => format_number(v),
+    }
+}
+
+/// 格式化内容宽度选项的显示文本。
+pub fn content_width_label(value: Option<u16>) -> String {
+    match value {
+        None => t!("settings-follow-theme").to_owned(),
+        Some(px) => format!("{px} px"),
+    }
+}
+
+/// 格式化段落间距选项的显示文本。
+pub fn paragraph_spacing_label(value: Option<f32>) -> String {
+    match value {
+        None => t!("settings-follow-theme").to_owned(),
+        Some(em) => format!("{} em", format_number(em)),
+    }
+}
+
+fn format_number(value: f32) -> String {
+    let text = format!("{value:.2}");
+    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+    trimmed.to_owned()
 }
 
 /// 一页中的一组设置项，共用一块底色，可以带标题。
@@ -273,15 +264,27 @@ pub struct Section {
 /// 一个设置项。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Setting {
-    /// 主题。
+    /// 外观（自动、浅色、深色）。
     #[default]
     Theme,
     /// 浅色外观时用的主题。
     LightTheme,
     /// 深色外观时用的主题。
     DarkTheme,
-    /// 界面语言。
-    Language,
+    /// 正文字体（Markdown 正文）。
+    BodyFont,
+    /// 代码字体（Markdown 代码块、行内代码与源码）。
+    CodeFont,
+    /// 是否使用自定义字体大小。
+    CustomFontSize,
+    /// 编辑器字体大小（仅在开启自定义字体大小时显示）。
+    MarkdownFontSize,
+    /// 正文行高。
+    LineHeight,
+    /// 编辑窗口内容宽度。
+    ContentWidth,
+    /// 段落间距。
+    ParagraphSpacing,
     /// 编辑区字体。
     EditorFont,
     /// 编辑区字号。
@@ -320,28 +323,12 @@ pub enum Setting {
     DiffInline,
     /// 何时显示空格和制表符。
     RenderWhitespace,
-    /// 显示状态栏。
-    StatusBar,
-    /// 记住窗口大小和位置。
-    RestoreWindow,
-    /// 播放界面的过渡动画。
-    Animations,
-    /// 鼠标滚轮平滑滚动（`editor.smoothScrolling`）。
-    SmoothScrolling,
-    /// 窗口的背景图片（`ui.backgroundImage`）。
-    BackgroundImage,
-    /// 背景图片的显示方式（`ui.backgroundFit`）。
-    BackgroundFit,
-    /// 背景图片的不透明度（`ui.backgroundOpacity`）。
-    BackgroundOpacity,
     /// 文件树把连续的单子目录合并显示为一行。
     CompactFolders,
     /// 预览标签：在文件树中单击文件时在预览标签中打开。
     PreviewOnClick,
     /// Markdown 预览联网加载网址的图片。
     RemoteImages,
-    /// Markdown 预览正文的最大宽度（`markdown.textWidth`）。
-    TextWidth,
     /// Markdown 预览显示行号（`markdown.lineNumbers`）。
     MarkdownLineNumbers,
     /// Markdown 文件的源代码也使用写作快捷键（`markdown.shortcuts`）。
@@ -372,30 +359,6 @@ pub enum Setting {
     Community,
     /// 「关于」页的开源许可：许可证名称，链接到许可证全文。
     License,
-    /// 界面字体。
-    UiFont,
-    /// 界面字号。
-    UiSize,
-    /// 全部文字的字重。
-    FontWeight,
-    /// 界面缩放（`ui.zoom`）：整个窗口按同一比例放大或缩小。
-    Zoom,
-    /// 用系统的标题栏和边框，而不是由应用在顶栏中绘制窗口按钮（macOS 以外的平台）。
-    SystemTitleBar,
-    /// 保存时格式化。
-    FormatOnSave,
-    /// 保存时修复问题。
-    FixOnSave,
-    /// 保存时跳过的语言。
-    SkipOnSave,
-    /// 某种语言（语言 id）的格式化命令。
-    FormatCommand(&'static str),
-    /// 某种语言（语言 id）的修复命令。
-    FixCommand(&'static str),
-    /// 格式化工具一组下面的「添加语言…」。
-    AddLanguage,
-    /// 修复工具一组下面的「添加语言…」。
-    AddFixLanguage,
     /// 新建终端时运行的 shell（`terminal.shell`）。
     TerminalShell,
     /// 终端面板的位置：编辑区下方或右侧。
@@ -457,8 +420,8 @@ impl Setting {
 
     /// 返回搜索 `query` 时列出的设置项，顺序与搜索结果中从上到下的顺序相同（见
     /// [`search_sections`]）；键盘上下移动按此顺序进行。
-    pub fn found(query: &str, languages: &ToolLanguages, modules: Modules) -> Vec<Setting> {
-        (search_sections(query, languages, modules).into_iter())
+    pub fn found(query: &str, custom_font_size: bool, modules: Modules) -> Vec<Setting> {
+        (search_sections(query, custom_font_size, modules).into_iter())
             .flat_map(|section| section.items)
             .collect()
     }
@@ -467,13 +430,13 @@ impl Setting {
     /// 每页从上到下。
     ///
     /// 键盘上下移动按此顺序进行，越过一页的首尾时切换到相邻页。
-    pub fn all(languages: &ToolLanguages, modules: Modules) -> Vec<Setting> {
+    pub fn all(custom_font_size: bool, modules: Modules) -> Vec<Setting> {
         SettingsPage::listed(modules)
             .flat_map(|page| match page {
                 // 「快捷键」页没有设置项，移动到该页即选中该页的搜索框。
                 SettingsPage::Keys => vec![Setting::KeySearch],
                 page => page
-                    .sections(languages)
+                    .sections(custom_font_size)
                     .into_iter()
                     .flat_map(|section| section.items)
                     .collect(),
@@ -485,21 +448,15 @@ impl Setting {
     pub fn page(self) -> SettingsPage {
         match self {
             Setting::Theme
-            | Setting::Language
             | Setting::LightTheme
             | Setting::DarkTheme
-            | Setting::UiFont
-            | Setting::UiSize
-            | Setting::FontWeight
-            | Setting::Zoom
-            | Setting::SystemTitleBar
-            | Setting::StatusBar
-            | Setting::RestoreWindow
-            | Setting::Animations
-            | Setting::SmoothScrolling
-            | Setting::BackgroundImage
-            | Setting::BackgroundFit
-            | Setting::BackgroundOpacity => SettingsPage::Appearance,
+            | Setting::BodyFont
+            | Setting::CodeFont
+            | Setting::CustomFontSize
+            | Setting::MarkdownFontSize
+            | Setting::LineHeight
+            | Setting::ContentWidth
+            | Setting::ParagraphSpacing => SettingsPage::Appearance,
             Setting::EditorFont
             | Setting::EditorSize
             | Setting::TabWidth
@@ -525,9 +482,7 @@ impl Setting {
             | Setting::MarkdownFocus
             | Setting::MarkdownTypewriter
             | Setting::MarkdownSelectionToolbar => SettingsPage::Writing,
-            Setting::RemoteImages | Setting::TextWidth | Setting::MarkdownLineNumbers => {
-                SettingsPage::Markdown
-            }
+            Setting::RemoteImages | Setting::MarkdownLineNumbers => SettingsPage::Markdown,
             Setting::Beta(option) if option.is_markdown() => SettingsPage::Markdown,
             Setting::Beta(_) => SettingsPage::Writing,
             Setting::Version
@@ -539,13 +494,6 @@ impl Setting {
             | Setting::Repository
             | Setting::Community
             | Setting::License => SettingsPage::About,
-            Setting::FormatOnSave
-            | Setting::FixOnSave
-            | Setting::SkipOnSave
-            | Setting::FormatCommand(_)
-            | Setting::FixCommand(_)
-            | Setting::AddLanguage
-            | Setting::AddFixLanguage => SettingsPage::Format,
             Setting::TerminalShell
             | Setting::TerminalPosition
             | Setting::TerminalTabPosition
@@ -577,14 +525,15 @@ impl Setting {
     pub fn label(self) -> &'static str {
         match self {
             Setting::Theme => t!("settings-theme"),
-            Setting::Language => t!("settings-language"),
             Setting::LightTheme => t!("settings-light-theme"),
             Setting::DarkTheme => t!("settings-dark-theme"),
-            Setting::UiFont => t!("settings-ui-font"),
-            Setting::UiSize => t!("settings-ui-size"),
-            Setting::FontWeight => t!("settings-font-weight"),
-            Setting::Zoom => t!("settings-ui-zoom"),
-            Setting::SystemTitleBar => t!("settings-system-title-bar"),
+            Setting::BodyFont => t!("settings-body-font"),
+            Setting::CodeFont => t!("settings-code-font"),
+            Setting::CustomFontSize => t!("settings-custom-font-size"),
+            Setting::MarkdownFontSize => t!("settings-markdown-font-size"),
+            Setting::LineHeight => t!("settings-line-height"),
+            Setting::ContentWidth => t!("settings-content-width"),
+            Setting::ParagraphSpacing => t!("settings-paragraph-spacing"),
             Setting::EditorFont => t!("settings-editor-font"),
             Setting::EditorSize => t!("settings-editor-size"),
             Setting::TabWidth => t!("settings-tab-width"),
@@ -604,18 +553,10 @@ impl Setting {
             Setting::LineNumbers => t!("settings-line-numbers"),
             Setting::DiffInline => t!("settings-diff-inline"),
             Setting::RenderWhitespace => t!("settings-render-whitespace"),
-            Setting::StatusBar => t!("settings-status-bar"),
-            Setting::RestoreWindow => t!("settings-restore-window"),
-            Setting::Animations => t!("settings-animations"),
-            Setting::SmoothScrolling => t!("settings-smooth-scrolling"),
-            Setting::BackgroundImage => t!("settings-background-image"),
-            Setting::BackgroundFit => t!("settings-background-fit"),
-            Setting::BackgroundOpacity => t!("settings-background-opacity"),
             Setting::Outline => t!("settings-outline"),
             Setting::CompactFolders => t!("settings-compact-folders"),
             Setting::PreviewOnClick => t!("settings-preview-on-click"),
             Setting::RemoteImages => t!("settings-remote-images"),
-            Setting::TextWidth => t!("settings-text-width"),
             Setting::MarkdownLineNumbers => t!("settings-markdown-line-numbers"),
             Setting::MarkdownShortcuts => t!("settings-markdown-shortcuts"),
             Setting::MarkdownFocus => t!("settings-markdown-focus"),
@@ -630,13 +571,6 @@ impl Setting {
             Setting::License => t!("settings-license"),
             Setting::Updates => t!("settings-updates"),
             Setting::ReleaseNotes => t!("settings-release-notes"),
-            Setting::FormatOnSave => t!("settings-format-on-save"),
-            Setting::FixOnSave => t!("settings-fix-on-save"),
-            Setting::SkipOnSave => t!("settings-skip-on-save"),
-            Setting::FormatCommand(id) | Setting::FixCommand(id) => {
-                winc_syntax::find(id).map_or(id, |l| l.name)
-            }
-            Setting::AddLanguage | Setting::AddFixLanguage => t!("settings-add-language"),
             Setting::TerminalShell => t!("settings-terminal-shell"),
             Setting::TerminalPosition => t!("settings-terminal-position"),
             Setting::TerminalTabPosition => t!("settings-terminal-tab-position"),
@@ -666,8 +600,7 @@ impl Setting {
 
     /// 返回名称下方的说明文字；没有说明时返回 `None`。
     ///
-    /// 格式化命令的说明随状态变化，不在此处给出。终端模块的说明含开关终端的快捷键，按当前系统和
-    /// 键位表给出。
+    /// 终端模块的说明含开关终端的快捷键，按当前系统和键位表给出。
     pub fn description(self) -> Option<Cow<'static, str>> {
         if self == Setting::TerminalModule {
             let text = match crate::keymap::shortcut(crate::keymap::Action::ToggleTerminal) {
@@ -677,7 +610,7 @@ impl Setting {
             return Some(text);
         }
         let text = match self {
-            Setting::SystemTitleBar => Some(t!("settings-system-title-bar-desc")),
+            Setting::ContentWidth => Some(t!("settings-content-width-desc")),
             Setting::AutoSave => Some(t!("settings-auto-save-desc")),
             Setting::HotExit => Some(t!("settings-hot-exit-desc")),
             Setting::ConfirmClose => Some(t!("settings-confirm-close-desc")),
@@ -697,15 +630,7 @@ impl Setting {
             Setting::LineNumbers => Some(t!("settings-line-numbers-desc")),
             Setting::DiffInline => Some(t!("settings-diff-inline-desc")),
             Setting::RenderWhitespace => Some(t!("settings-render-whitespace-desc")),
-            Setting::StatusBar => Some(t!("settings-status-bar-desc")),
-            Setting::RestoreWindow => Some(t!("settings-restore-window-desc")),
-            Setting::Animations => Some(t!("settings-animations-desc")),
-            Setting::SmoothScrolling => Some(t!("settings-smooth-scrolling-desc")),
-            Setting::BackgroundImage => Some(t!("settings-background-image-desc")),
-            Setting::BackgroundFit => Some(t!("settings-background-fit-desc")),
-            Setting::BackgroundOpacity => Some(t!("settings-background-opacity-desc")),
             Setting::RemoteImages => Some(t!("settings-remote-images-desc")),
-            Setting::TextWidth => Some(t!("settings-text-width-desc")),
             Setting::MarkdownLineNumbers => Some(t!("settings-markdown-line-numbers-desc")),
             Setting::MarkdownShortcuts => Some(t!("settings-markdown-shortcuts-desc")),
             Setting::MarkdownFocus => Some(t!("settings-markdown-focus-desc")),
@@ -717,9 +642,6 @@ impl Setting {
             Setting::CheckUpdates => Some(t!("settings-check-updates-desc")),
             // 绘制时换成当前的更新状态（`UpdateState`）。
             Setting::Updates => Some(t!("settings-updates-off")),
-            Setting::FormatOnSave => Some(t!("settings-format-on-save-desc")),
-            Setting::FixOnSave => Some(t!("settings-fix-on-save-desc")),
-            Setting::SkipOnSave => Some(t!("settings-skip-on-save-desc")),
             Setting::GitModule => Some(t!("settings-git-module-desc")),
             Setting::RemoteModule => Some(t!("settings-remote-module-desc")),
             Setting::GitConfirmPush => Some(t!("settings-git-confirm-push-desc")),
@@ -750,16 +672,13 @@ impl Setting {
     /// 返回设置项右侧的控件种类。
     pub fn control(self) -> SettingControl {
         match self {
-            Setting::EditorFont | Setting::UiFont | Setting::TerminalFont => SettingControl::Font,
-            Setting::EditorSize
-            | Setting::UiSize
-            | Setting::FontWeight
-            | Setting::BackgroundOpacity
-            | Setting::TerminalSize
-            | Setting::TabWidth => SettingControl::Stepper,
+            Setting::EditorFont | Setting::TerminalFont => SettingControl::Font,
+            Setting::EditorSize | Setting::TerminalSize | Setting::TabWidth => {
+                SettingControl::Stepper
+            }
+            Setting::MarkdownFontSize => SettingControl::Number,
             Setting::Theme => SettingControl::Themes,
-            Setting::LightTheme | Setting::DarkTheme => SettingControl::ThemeList,
-            Setting::SystemTitleBar
+            Setting::CustomFontSize
             | Setting::HotExit
             | Setting::ConfirmClose
             | Setting::RestoreFolder
@@ -775,10 +694,6 @@ impl Setting {
             | Setting::Outline
             | Setting::LineNumbers
             | Setting::DiffInline
-            | Setting::StatusBar
-            | Setting::RestoreWindow
-            | Setting::Animations
-            | Setting::SmoothScrolling
             | Setting::RemoteImages
             | Setting::MarkdownLineNumbers
             | Setting::MarkdownShortcuts
@@ -786,8 +701,6 @@ impl Setting {
             | Setting::MarkdownTypewriter
             | Setting::MarkdownSelectionToolbar
             | Setting::CheckUpdates
-            | Setting::FormatOnSave
-            | Setting::FixOnSave
             | Setting::GitModule
             | Setting::GitConfirmPush
             | Setting::GitRememberCredentials
@@ -803,16 +716,14 @@ impl Setting {
             | Setting::TerminalPrompt
             | Setting::TerminalShellIntegration
             | Setting::TerminalApplicationPriority => SettingControl::Switch,
-            Setting::FormatCommand(_)
-            | Setting::FixCommand(_)
-            | Setting::TerminalShell
-            | Setting::GitPath => SettingControl::Command,
-            Setting::SkipOnSave
-            | Setting::Language
-            | Setting::BackgroundImage
-            | Setting::BackgroundFit
-            | Setting::TextWidth
-            | Setting::Zoom
+            Setting::TerminalShell | Setting::GitPath => SettingControl::Command,
+            Setting::LightTheme
+            | Setting::DarkTheme
+            | Setting::BodyFont
+            | Setting::CodeFont
+            | Setting::LineHeight
+            | Setting::ContentWidth
+            | Setting::ParagraphSpacing
             | Setting::RenderWhitespace
             | Setting::VimClipboard
             | Setting::TerminalPosition
@@ -821,7 +732,6 @@ impl Setting {
             | Setting::DropFolder
             | Setting::AutoSave
             | Setting::GitOpenWorktree => SettingControl::Choice,
-            Setting::AddLanguage | Setting::AddFixLanguage => SettingControl::Action,
             Setting::KeySearch => SettingControl::Search,
             Setting::Version => SettingControl::Product,
             Setting::ReleaseNotes
@@ -840,20 +750,19 @@ impl Setting {
 pub enum SettingControl {
     /// 字体名输入框。
     Font,
+    /// 紧凑数字输入框（「编辑器字体大小」）。
+    Number,
     /// 加减数值。
     Stepper,
-    /// 外观（跟随系统、浅色、深色）的缩略图，在名称右边。
+    /// 外观（自动、浅色、深色）分段控件。
     Themes,
-    /// 一排主题缩略图，在名称下面。
-    ThemeList,
     /// 开关。
     Switch,
-    /// 格式化工具、默认 shell：点击后弹出菜单的值；选择「自定义命令…」时换成比字体名输入框
-    /// 更宽的输入框。
+    /// 默认 shell、Git 程序：点击后弹出菜单或直接输入的值。
     Command,
-    /// 组下方的文字按钮（「添加语言…」）。
+    /// 组下方的文字按钮。
     Action,
-    /// 点击后弹出菜单的值，显示当前选择（如「语言」「排除的语言」）。
+    /// 点击后弹出菜单的值，显示当前选择。
     Choice,
     /// 「快捷键」页的搜索框；不按设置行排列，整页单独布局（[`KeysLayout`]）。
     Search,
@@ -1008,8 +917,6 @@ pub enum SettingsPart {
     Switch(Setting),
     /// 整行是按钮的一行，或点击后弹出菜单的值。
     Action(Setting),
-    /// 某种语言名称下方的「安装方法…」，参数是所在的设置行。
-    Install(Setting),
     /// 点击后复制到剪贴板的值（版本号）。
     Copy(Setting),
     /// 点击后在浏览器中打开的链接。
@@ -1036,10 +943,8 @@ pub enum SettingsPart {
     Decrease(Setting),
     /// 数值的加号。
     Increase(Setting),
-    /// 一张主题缩略图（连同下方的名称）。
+    /// 外观分段控件中的一段（自动、浅色、深色）。
     Theme(ThemeChoice),
-    /// 深色（`true`）或浅色主题列表里的一张缩略图（连同下方的名称）。
-    NamedTheme(bool, usize),
 }
 
 /// 计算设置浮层布局所需的界面状态。
@@ -1049,14 +954,14 @@ pub struct SettingsView<'a> {
     pub page: SettingsPage,
     /// 分类栏顶部搜索框中的文字；不为空白时正文换成搜索结果。
     pub query: &'a str,
-    /// 格式化页列出的语言。
-    pub languages: &'a ToolLanguages,
+    /// 外观页是否展开「编辑器字体大小」行。
+    pub custom_font_size: bool,
     /// 分类栏中「终端」一项的显示比例（0 到 1，开关终端模块时渐变，见
     /// [`SettingsPage::listed`]）。
     pub terminal: f32,
     /// 分类栏中「Git」一项的显示比例，同 [`Self::terminal`]。
     pub git: f32,
-    /// 正在输入的设置项：输入格式化命令时换成更宽的输入框。
+    /// 正在输入的设置项。
     pub editing: Option<Setting>,
     /// 正文的滚动量（像素）。
     pub scroll: f32,
@@ -1067,15 +972,15 @@ pub struct SettingsView<'a> {
 /// 返回搜索 `query` 时正文列出的各组：各页中名称或说明含有 `query` 的设置项
 /// （[`Setting::matches`]），按页和页内的顺序排列。
 ///
-/// 有标题的组（主题、格式化工具）保留原标题，其余各组合并为一组，以页名为标题；「快捷键」页和
+/// 有标题的组保留原标题，其余各组合并为一组，以页名为标题；「快捷键」页和
 /// 组下方的文字按钮不参与搜索。`modules` 为各模块是否开启（见 [`SettingsPage::listed`]）。
-pub fn search_sections(query: &str, languages: &ToolLanguages, modules: Modules) -> Vec<Section> {
+pub fn search_sections(query: &str, custom_font_size: bool, modules: Modules) -> Vec<Section> {
     let query = query.trim().to_lowercase();
     let mut found = Vec::new();
     for page in SettingsPage::listed(modules).filter(|&page| page != SettingsPage::Keys) {
         let mut plain = Vec::new();
         let mut titled = Vec::new();
-        for section in page.sections(languages) {
+        for section in page.sections(custom_font_size) {
             let items: Vec<Setting> = (section.items.into_iter())
                 .filter(|s| s.control() != SettingControl::Action && s.matches(&query))
                 .collect();
@@ -1183,7 +1088,7 @@ impl SettingsLayout {
         let &SettingsView {
             page,
             query,
-            languages,
+            custom_font_size,
             terminal,
             git,
             editing,
@@ -1257,9 +1162,9 @@ impl SettingsLayout {
                 git: git > 0.0,
                 terminal: terminal > 0.0,
             };
-            search_sections(query, languages, modules)
+            search_sections(query, custom_font_size, modules)
         } else {
-            page.sections(languages)
+            page.sections(custom_font_size)
         };
         for (i, section) in sections.into_iter().enumerate() {
             if i > 0 {
@@ -1366,7 +1271,7 @@ impl SettingsLayout {
             SettingControl::Font if font_menu_button(row.control).contains(x, y) => {
                 Some(SettingsPart::FontMenu(row.setting))
             }
-            SettingControl::Font | SettingControl::Command => {
+            SettingControl::Font | SettingControl::Number | SettingControl::Command => {
                 Some(SettingsPart::Field(row.setting))
             }
             SettingControl::Switch => Some(SettingsPart::Switch(row.setting)),
@@ -1386,12 +1291,6 @@ impl SettingsLayout {
             SettingControl::Themes => (0..THEME_CHOICES.len())
                 .find(|&i| theme_segment(row.control, i).contains(x, y))
                 .map(|i| SettingsPart::Theme(THEME_CHOICES[i].0)),
-            SettingControl::ThemeList => {
-                let dark = row.setting == Setting::DarkTheme;
-                (0..crate::theme::themes(dark).len())
-                    .find(|&i| theme_tile(row.control, i).contains(x, y))
-                    .map(|i| SettingsPart::NamedTheme(dark, i))
-            }
             SettingControl::Product => (ProductParts::new(row.row).version.contains(x, y))
                 .then_some(SettingsPart::Copy(row.setting)),
             SettingControl::Link => Some(SettingsPart::Link(row.setting)),
@@ -1402,8 +1301,7 @@ impl SettingsLayout {
 
 /// 返回宽 `width` 的组里一行的高度。
 ///
-/// 格式化命令行在名称下方显示所用的命令，因此总是两行高；有说明的行按说明折成的行数加高
-/// （见 [`description_lines`]）；主题一行是几排缩略图，高度按主题个数和组宽算。
+/// 有说明的行按说明折成的行数加高（见 [`description_lines`]）。
 ///
 /// `row` 给出该行的横向位置和宽度，`editing` 为该行是否正在输入，`measure` 量说明文字的宽度。
 fn row_height(
@@ -1413,17 +1311,6 @@ fn row_height(
     measure: &mut dyn FnMut(&str) -> f32,
 ) -> f32 {
     match setting.control() {
-        SettingControl::ThemeList => {
-            let n = crate::theme::themes(setting == Setting::DarkTheme).len();
-            let rows = n.div_ceil(THEME_COLUMNS) as f32;
-            let tile = theme_tile_size((row.w - SETTINGS_INSET * 2.0).max(0.0));
-            rows * tile.1 + (rows - 1.0) * THEME_GRID_GAP + THEME_GRID_PAD * 2.0
-        }
-        SettingControl::Command
-            if !matches!(setting, Setting::TerminalShell | Setting::GitPath) =>
-        {
-            SETTINGS_ROW_TALL
-        }
         SettingControl::Product => SETTINGS_PRODUCT_H,
         _ => match setting.description() {
             Some(text) => {
@@ -1473,7 +1360,6 @@ fn writing_sections(groups: Vec<(&'static str, Vec<writing::WritingItem>)>) -> V
         W::Typewriter => Setting::MarkdownTypewriter,
         W::Focus => Setting::MarkdownFocus,
         W::RemoteImages => Setting::RemoteImages,
-        W::TextWidth => Setting::TextWidth,
         W::LineNumbers => Setting::MarkdownLineNumbers,
     };
     groups

@@ -10,24 +10,19 @@ pub(super) mod shortcuts;
 
 use std::ops::RangeInclusive;
 
-use winc_editor::format::{
-    Auto, FormatError, PRESETS, Plan, Program, Task, knows_how_to_install, presets,
-};
 use winc_i18n::t;
-use winc_syntax::Language;
 
-use super::editor::format::{task_commands, task_commands_mut};
-use super::input::context_menu::{MenuTarget, menu_below, tool_setting as tool_setting_of};
+use super::input::context_menu::{MenuTarget, menu_below};
 use super::*;
 use crate::keymap::{self, Os, Stroke};
-use crate::layout::{KeyRows, KeysLayout, SettingsView, ToolLanguages};
+use crate::layout::{KeyRows, KeysLayout, SettingsView};
 
 /// 设置浮层的状态。
 #[derive(Debug, Default)]
 pub struct SettingsState {
     /// This App hosts the separate settings window rather than an editor.
     pub(crate) standalone: bool,
-    /// Workspace context for formatter suggestions; the settings window owns no documents.
+    /// Workspace context synced from the active window; the settings window owns no documents.
     pub(crate) project: (Option<PathBuf>, Option<PathBuf>),
     /// 浮层是否打开。
     ///
@@ -39,7 +34,7 @@ pub struct SettingsState {
     ///
     /// 只有此时才给选中的那一行铺底色，使用鼠标时不显示。
     pub keyboard: bool,
-    /// 正在编辑字体名或格式化命令时，对应的设置项和输入框的当前内容。
+    /// 正在编辑字体名、数字或命令时，对应的设置项和输入框的当前内容。
     pub editing: Option<(Setting, TextField)>,
     /// 开始编辑前的字体设置；按 `Esc` 或关闭浮层时退回该值。
     pub editing_original: Option<String>,
@@ -51,14 +46,6 @@ pub struct SettingsState {
     pub scroll: f32,
     /// 鼠标悬停的部件。
     pub hover: Option<SettingsPart>,
-    /// 格式化页列出的语言。
-    ///
-    /// 打开设置时确定，打开期间只会增加，不会减少，已列出的语言也不换位置。
-    pub languages: ToolLanguages,
-    /// 格式化页每一行（格式化工具、修复工具）上显示的内容。
-    pub tool_rows: Vec<(Setting, FormatRow)>,
-    /// 正在后台查询 WSL 发行版中装了哪些工具，查完后重新计算各行。
-    pub probing: bool,
     /// 分类栏顶部的搜索框：按设置项的名称和说明搜索，不为空白时正文换成搜索结果。
     pub search: TextField,
     /// 「关于」页顶部的产品图标：渲染时的边长（物理像素）和 RGBA 像素；关闭浮层时释放。
@@ -82,7 +69,7 @@ pub struct SettingsState {
     ///
     /// 消失期间 `open` 已经是 `false`，键盘和鼠标已经交回主界面，此时仍需绘制最后一帧。
     pub motion: Option<(bool, super::animation::Clock)>,
-    /// 「模式」换了以后，凸起的那一段从原来那一段（`ThemeChoice`）滑过去。
+    /// 「外观」分段换了以后，凸起的那一段从原来那一段（`ThemeChoice`）滑过去。
     pub mode_slide: Option<(ThemeChoice, super::animation::Clock)>,
     /// 刚切换的开关（`Setting`）：圆钮滑到另一侧，底色渐变到新状态的颜色。
     pub switch_slide: Option<(Setting, super::animation::Clock)>,
@@ -106,62 +93,6 @@ pub struct DialogCache {
     pub card: winc_render::Snapshot,
 }
 
-/// 格式化页中一种语言的一行（格式化工具或修复工具）：右侧显示工具，名称下方显示来源和提醒。
-#[derive(Debug, Clone, PartialEq)]
-pub struct FormatRow {
-    /// 按钮上显示的文字：工具名（例如「Ruff」）；自己写的命令为「自定义」；
-    /// 没有可用工具时为「未设置」。
-    pub tool: String,
-    /// 是否没有可用的工具（按钮上写「未设置」）：此时按钮文字画成淡色。
-    pub unset: bool,
-    /// 名称下方那一行：工具的确定方式（例如「自动 · 根据 pyproject.toml」），
-    /// 指定了命令时为命令本身。
-    pub detail: String,
-    /// 自动选择会选中的工具（例如「Ruff（pyproject.toml）」），显示在菜单中「自动」之下；
-    /// 选不出来时为 `None`。
-    pub auto: Option<String>,
-    /// 项目设置（`.winc/config.json`）中写的命令。
-    ///
-    /// 存在时，该项目内使用此命令，不看用户设置。
-    pub project: Option<String>,
-    /// 「未安装」等提醒，接在 `detail` 之后。
-    pub warning: Option<String>,
-    /// 没装但知道安装方法的工具，菜单中有「安装方法…」。
-    pub install: Vec<String>,
-    /// 能否从列表中移除（菜单中有「移除」）：只有格式化工具一行，且这种语言是用户自己加的
-    /// （或写过命令），不看用户设置时不会列出。
-    pub removable: bool,
-}
-
-impl ToolLanguages {
-    /// 返回 `task`（格式化或修复）那一组列出的语言。
-    fn of(&mut self, task: Task) -> &mut Vec<&'static str> {
-        match task {
-            Task::Format => &mut self.format,
-            Task::Fix => &mut self.fix,
-        }
-    }
-}
-
-impl SettingsState {
-    /// 返回设置项 `setting`（`FormatCommand` 或 `FixCommand`）那一行上显示的内容。
-    pub fn tool_row(&self, setting: Setting) -> Option<&FormatRow> {
-        self.tool_rows
-            .iter()
-            .find(|(s, _)| *s == setting)
-            .map(|(_, r)| r)
-    }
-}
-
-/// 返回工具设置项对应的（任务种类，语言 ID）；不是工具设置项时返回 `None`。
-fn tool_setting(setting: Setting) -> Option<(Task, &'static str)> {
-    match setting {
-        Setting::FormatCommand(id) => Some((Task::Format, id)),
-        Setting::FixCommand(id) => Some((Task::Fix, id)),
-        _ => None,
-    }
-}
-
 /// 返回字体设置值 `value` 不能用的原因；未设置或能用时返回 `None`。
 fn font_error(value: &Option<String>) -> Option<String> {
     let (spec, name, error) = unusable_font(value)?;
@@ -173,16 +104,10 @@ fn font_error(value: &Option<String>) -> Option<String> {
     })
 }
 
-/// 界面缩放的档位（百分比）：设置菜单中列出，快捷键依次经过。
+/// 界面缩放的档位（百分比）：快捷键依次经过。
 ///
 /// 100% 附近每档 10%，便于微调；更大的倍数每档 25%，较少几次即可放大到上限。
 pub(crate) const ZOOM_STEPS: [u16; 9] = [70, 80, 90, 100, 110, 125, 150, 175, 200];
-
-/// 设置页中背景图片不透明度每次调整的量（百分比）。
-const OPACITY_STEP: f32 = 5.0;
-
-/// 设置页中字重每次调整的量。
-const FONT_WEIGHT_STEP: u16 = 100;
 
 /// 把 `value` 加 1（`up` 为 `true`）或减 1，结果限制在 `range` 之内。
 fn step(value: f32, up: bool, range: RangeInclusive<f32>) -> f32 {
@@ -239,20 +164,10 @@ impl App {
         self.settings.error = self.broken_font(self.settings.selected.page());
         self.settings.keyboard = false;
         self.settings.hover = None;
-        self.settings.languages = ToolLanguages::default();
-        // 每次打开设置重新查询发行版中的工具：其间新安装的能列出来。
-        self.format.formatter.forget_wsl();
-        self.refresh_format_rows(true);
         // 列出字体要读取字体文件，先在后台读好，打开字体菜单时不必等待；「默认 Shell」菜单中的
         // shell 同样在后台检测。
         std::thread::spawn(winc_render::installed_fonts);
         self.detect_terminal_shells();
-        // 能否找到工具取决于用户 shell 中的 `PATH`，因此在后台获取该环境，取到之后再补上提醒。
-        if let Some(proxy) = self.link.proxy.clone() {
-            self.format.formatter.prepare(move || {
-                let _ = proxy.send_event(UserEvent::FormatterReady);
-            });
-        }
         self.focus = Focus::Settings;
         self.set_hover(Hover::None);
         self.request_redraw();
@@ -312,14 +227,6 @@ impl App {
             && let Some(part) = self.keys_part_at(layout.body, x, y)
         {
             return Some(part);
-        }
-        let link = self
-            .hits
-            .install_links
-            .iter()
-            .find(|(_, r)| r.contains(x, y) && layout.body.contains(x, y));
-        if let Some(&(setting, _)) = link {
-            return Some(SettingsPart::Install(setting));
         }
         match layout.part_at(x, y)? {
             // 版本号和链接只有文字那一块可点，与悬停底色一致。
@@ -409,7 +316,7 @@ impl App {
         let view = SettingsView {
             page: self.settings.selected.page(),
             query: self.settings.search.text(),
-            languages: &self.settings.languages,
+            custom_font_size: self.config.markdown_custom_font_size == Some(true),
             terminal: self
                 .motion
                 .module_fx
@@ -449,11 +356,12 @@ impl App {
 
     /// 返回键盘上下移动经过的设置项：搜索时为搜索结果，否则为各页的全部设置项。
     fn settings_items(&self) -> Vec<Setting> {
-        let (languages, modules) = (&self.settings.languages, self.settings_modules());
+        let custom_font_size = self.config.markdown_custom_font_size == Some(true);
+        let modules = self.settings_modules();
         if self.settings_searching() {
-            Setting::found(self.settings.search.text(), languages, modules)
+            Setting::found(self.settings.search.text(), custom_font_size, modules)
         } else {
-            Setting::all(languages, modules)
+            Setting::all(custom_font_size, modules)
         }
     }
 
@@ -667,23 +575,14 @@ impl App {
         }
     }
 
-    /// 处理 `←` `→`（`forward` 为 `true` 时为 `→`）：数值减一或加一，主题在缩略图之间移动一张。
+    /// 处理 `←` `→`（`forward` 为 `true` 时为 `→`）：数值减一或加一，外观分段左右移动。
     pub(super) fn settings_step(&mut self, forward: bool) {
         let setting = self.settings.selected;
         self.settings.keyboard = true;
 
         match setting.control() {
-            SettingControl::Stepper => self.settings_adjust(setting, forward),
-            SettingControl::ThemeList => {
-                let dark = setting == Setting::DarkTheme;
-                let current = self.theme_slot(dark);
-                // 到两端后停止，不绕回。
-                let next = if forward {
-                    (current + 1).min(crate::theme::themes(dark).len() - 1)
-                } else {
-                    current.saturating_sub(1)
-                };
-                self.set_named_theme(dark, next);
+            SettingControl::Stepper | SettingControl::Number => {
+                self.settings_adjust(setting, forward)
             }
             SettingControl::Themes => {
                 let current = THEME_CHOICES
@@ -754,7 +653,7 @@ impl App {
         let setting = self.settings.selected;
 
         match setting.control() {
-            SettingControl::Font => self.settings_start_editing(setting),
+            SettingControl::Font | SettingControl::Number => self.settings_start_editing(setting),
             SettingControl::Switch => self.settings_toggle(setting),
             SettingControl::Command
             | SettingControl::Action
@@ -762,9 +661,7 @@ impl App {
             | SettingControl::Button => self.settings_open_menu(setting),
             SettingControl::Product => self.settings_copy_value(setting),
             SettingControl::Link => self.settings_open_link(setting),
-            SettingControl::Stepper | SettingControl::Themes | SettingControl::ThemeList => {
-                self.settings_step(true)
-            }
+            SettingControl::Stepper | SettingControl::Themes => self.settings_step(true),
             SettingControl::Search => self.focus = Focus::KeySearch,
             SettingControl::Beta => {}
         }
@@ -773,8 +670,7 @@ impl App {
     /// 开关 `setting` 当前是否开启。
     pub(crate) fn switch_on(&self, setting: Setting) -> bool {
         match setting {
-            Setting::FormatOnSave => self.config.format_on_save == Some(true),
-            Setting::FixOnSave => self.config.fix_on_save == Some(true),
+            Setting::CustomFontSize => self.config.markdown_custom_font_size == Some(true),
             Setting::HotExit => self.config.hot_exit != Some(false),
             Setting::ConfirmClose => self.config.confirm_close == Some(true),
             Setting::RestoreFolder => self.config.restore_folder != Some(false),
@@ -788,10 +684,6 @@ impl App {
             Setting::Outline => self.config.outline != Some(false),
             Setting::LineNumbers => self.config.line_numbers != Some(false),
             Setting::DiffInline => self.config.diff_inline == Some(true),
-            Setting::StatusBar => self.status_bar_shown(),
-            Setting::RestoreWindow => self.config.restore_window != Some(false),
-            Setting::Animations => self.animations_on(),
-            Setting::SmoothScrolling => self.smooth_scrolling(),
             Setting::CompactFolders => self.config.compact_folders != Some(false),
             Setting::PreviewOnClick => self.config.preview_on_click == Some(true),
             Setting::RemoteImages => self.config.markdown_remote_images != Some(false),
@@ -803,7 +695,6 @@ impl App {
                 self.config.markdown_selection_toolbar != Some(false)
             }
             Setting::CheckUpdates => self.config.update_auto_check != Some(false),
-            Setting::SystemTitleBar => self.config.ui_native_title_bar == Some(true),
             Setting::GitModule => self.git_enabled(),
             Setting::GitConfirmPush => self.config.git_confirm_push != Some(false),
             Setting::GitRememberCredentials => self.config.git_remember_credentials != Some(false),
@@ -841,8 +732,15 @@ impl App {
         }
         self.vim_forget_option(setting);
         match setting {
-            Setting::FormatOnSave => self.config.format_on_save = Some(on),
-            Setting::FixOnSave => self.config.fix_on_save = Some(on),
+            Setting::CustomFontSize => {
+                self.config.markdown_custom_font_size = Some(on);
+                if on && self.config.markdown_font_size.is_none() {
+                    self.config.markdown_font_size = Some(Config::MARKDOWN_FONT_SIZE);
+                }
+                if !on && matches!(&self.settings.editing, Some((Setting::MarkdownFontSize, _))) {
+                    self.settings_cancel_field();
+                }
+            }
             Setting::HotExit => self.config.hot_exit = Some(on),
             Setting::ConfirmClose => self.config.confirm_close = Some(on),
             Setting::RestoreFolder => self.config.restore_folder = Some(on),
@@ -860,10 +758,6 @@ impl App {
             Setting::Outline => self.config.outline = Some(on),
             Setting::LineNumbers => self.config.line_numbers = Some(on),
             Setting::DiffInline => self.config.diff_inline = Some(on),
-            Setting::StatusBar => self.config.status_bar = Some(on),
-            Setting::RestoreWindow => self.config.restore_window = Some(on),
-            Setting::Animations => self.config.ui_animations = Some(on),
-            Setting::SmoothScrolling => self.config.smooth_scrolling = Some(on),
             Setting::CompactFolders => self.config.compact_folders = Some(on),
             Setting::PreviewOnClick => self.config.preview_on_click = Some(on),
             Setting::RemoteImages => self.config.markdown_remote_images = Some(on),
@@ -873,7 +767,6 @@ impl App {
             Setting::MarkdownTypewriter => self.config.markdown_typewriter = Some(on),
             Setting::MarkdownSelectionToolbar => self.config.markdown_selection_toolbar = Some(on),
             Setting::CheckUpdates => self.config.update_auto_check = Some(on),
-            Setting::SystemTitleBar => self.config.ui_native_title_bar = Some(on),
             Setting::GitModule => self.config.git_enabled = Some(on),
             Setting::GitConfirmPush => self.config.git_confirm_push = Some(on),
             Setting::GitRememberCredentials => {
@@ -919,7 +812,7 @@ impl App {
         }
         if matches!(
             setting,
-            Setting::Minimap | Setting::LineNumbers | Setting::StatusBar | Setting::Outline
+            Setting::Minimap | Setting::LineNumbers | Setting::Outline
         ) {
             self.relayout();
         }
@@ -937,10 +830,6 @@ impl App {
         if setting == Setting::PreviewOnClick && !on {
             self.preview_tab = None;
         }
-        // 关掉以后不再沿用：之后再打开时从下一次关闭窗口开始记录。
-        if setting == Setting::RestoreWindow && !on {
-            self.update_state(|state| state.window = None);
-        }
         if setting == Setting::CompactFolders {
             self.apply_compact_folders();
         }
@@ -953,10 +842,6 @@ impl App {
         if setting == Setting::RemoteModule && !on {
             self.stop_remote();
         }
-        if setting == Setting::SystemTitleBar {
-            self.sync_title_bar();
-            self.relayout();
-        }
         // 关闭终端模块时辅助进程和里面的 shell 一起结束；开着时等用户按 ⌃` 再启动。
         if setting == Setting::TerminalModule {
             if !on {
@@ -968,7 +853,7 @@ impl App {
         self.request_redraw();
     }
 
-    /// 开始编辑字体名或格式化命令：输入框中是当前的设置并全选，直接键入即替换。
+    /// 开始编辑字体名、数字或命令：输入框中是当前的设置并全选，直接键入即替换。
     pub(super) fn settings_start_editing(&mut self, setting: Setting) {
         if matches!(&self.settings.editing, Some((s, _)) if *s == setting) {
             self.focus = Focus::Setting;
@@ -977,11 +862,16 @@ impl App {
 
         self.settings_leave_field();
 
-        let current = match tool_setting(setting) {
-            Some((task, id)) => task_commands(&self.config, task).get(id).cloned(),
-            None if setting == Setting::TerminalShell => self.config.terminal_shell.clone(),
-            None if setting == Setting::GitPath => self.config.git_path.clone(),
-            None => self.font_setting(setting).clone(),
+        let current = match setting {
+            Setting::MarkdownFontSize => Some(format!(
+                "{:.0}",
+                self.config
+                    .markdown_font_size
+                    .unwrap_or(Config::MARKDOWN_FONT_SIZE)
+            )),
+            Setting::TerminalShell => self.config.terminal_shell.clone(),
+            Setting::GitPath => self.config.git_path.clone(),
+            _ => self.font_setting(setting).clone(),
         };
         let mut field = TextField::default();
         field.set_text(current.as_deref().unwrap_or(""));
@@ -1000,16 +890,21 @@ impl App {
     ///
     /// 这样的字体在启动时已改用默认字体，但设置中仍是原来的名字，因此在该行写明原因。
     fn broken_font(&self, page: SettingsPage) -> Option<(Setting, String)> {
-        [Setting::EditorFont, Setting::UiFont, Setting::TerminalFont]
-            .into_iter()
-            .filter(|setting| setting.page() == page)
-            .find_map(|setting| font_error(self.font_value(setting)).map(|error| (setting, error)))
+        [
+            Setting::BodyFont,
+            Setting::CodeFont,
+            Setting::EditorFont,
+            Setting::TerminalFont,
+        ]
+        .into_iter()
+        .filter(|setting| setting.page() == page)
+        .find_map(|setting| font_error(self.font_value(setting)).map(|error| (setting, error)))
     }
 
     /// 字体设置项 `setting` 在配置中的值：以逗号分隔的字体列表，未设置时为 `None`。
     pub(in crate::app) fn font_value(&self, setting: Setting) -> &Option<String> {
         match setting {
-            Setting::UiFont => &self.config.ui_font,
+            Setting::BodyFont => &self.config.markdown_body_font,
             Setting::TerminalFont => &self.config.terminal_font,
             _ => &self.config.editor_font,
         }
@@ -1017,7 +912,7 @@ impl App {
 
     fn font_setting(&mut self, setting: Setting) -> &mut Option<String> {
         match setting {
-            Setting::UiFont => &mut self.config.ui_font,
+            Setting::BodyFont => &mut self.config.markdown_body_font,
             Setting::TerminalFont => &mut self.config.terminal_font,
             _ => &mut self.config.editor_font,
         }
@@ -1077,7 +972,7 @@ impl App {
         self.request_redraw();
     }
 
-    /// 提交正在编辑的字体名或命令。
+    /// 提交正在编辑的字体名、数字或命令。
     pub(super) fn settings_commit_field(&mut self) {
         let Some((setting, field)) = self.settings.editing.as_ref() else {
             return;
@@ -1085,43 +980,42 @@ impl App {
         let (setting, text) = (*setting, field.text().trim().to_owned());
         let value = (!text.is_empty()).then_some(text);
 
-        match tool_setting(setting) {
-            Some((task, id)) => self.settings_commit_command(task, id, value),
-            None if setting == Setting::TerminalShell => {
+        match setting {
+            Setting::MarkdownFontSize => {
+                if let Some(parsed) = value.as_deref().and_then(|s| s.parse::<f32>().ok())
+                    && parsed.is_finite()
+                {
+                    let clamped = parsed
+                        .clamp(
+                            *Config::MARKDOWN_FONT_SIZE_RANGE.start(),
+                            *Config::MARKDOWN_FONT_SIZE_RANGE.end(),
+                        )
+                        .round();
+                    self.config.markdown_font_size = Some(clamped);
+                    self.save_config();
+                }
+                self.settings.editing = None;
+                self.settings.editing_original = None;
+                self.settings.error = None;
+                self.focus = Focus::Settings;
+                self.request_redraw();
+            }
+            Setting::TerminalShell => {
                 self.settings.editing = None;
                 self.settings.editing_original = None;
                 self.settings.error = None;
                 self.focus = Focus::Settings;
                 self.set_terminal_shell(value);
             }
-            None if setting == Setting::GitPath => {
+            Setting::GitPath => {
                 self.settings.editing = None;
                 self.settings.editing_original = None;
                 self.settings.error = None;
                 self.focus = Focus::Settings;
                 self.set_git_path(value);
             }
-            None => self.settings_commit_font(setting, value),
+            _ => self.settings_commit_font(setting, value),
         }
-    }
-
-    /// 提交格式化（修复）命令并写回配置；`command` 为 `None`（清空）表示自动选择。
-    ///
-    /// 命令对应的程序找不到时同样保存（工具可能只装在其他项目里，或稍后才安装），
-    /// 提醒显示在名字下方。
-    fn settings_commit_command(&mut self, task: Task, id: &'static str, command: Option<String>) {
-        let commands = task_commands_mut(&mut self.config, task);
-        match command {
-            Some(command) => commands.insert(id.to_owned(), command),
-            None => commands.remove(id),
-        };
-        self.settings.editing = None;
-        self.settings.editing_original = None;
-        self.settings.error = None;
-        self.focus = Focus::Settings;
-        self.save_config();
-        self.refresh_format_rows(false);
-        self.request_redraw();
     }
 
     /// 提交字体名：立刻换字体并写回配置。
@@ -1265,18 +1159,15 @@ impl App {
     /// 返回数值设置当前的显示值，以及是否已到范围的下限、上限（到限的一侧按钮变淡）。
     pub(crate) fn setting_value(&self, setting: Setting) -> (String, bool, bool) {
         let (value, range) = match setting {
+            Setting::MarkdownFontSize => (
+                self.config
+                    .markdown_font_size
+                    .unwrap_or(Config::MARKDOWN_FONT_SIZE),
+                Config::MARKDOWN_FONT_SIZE_RANGE,
+            ),
             Setting::EditorSize => (
                 self.config.editor_size.unwrap_or(CODE_FONT),
                 Config::EDITOR_SIZE_RANGE,
-            ),
-            Setting::UiSize => (
-                self.config.ui_size.unwrap_or(UI_FONT),
-                Config::UI_SIZE_RANGE,
-            ),
-            Setting::FontWeight => (f32::from(self.font_weight()), Config::FONT_WEIGHT_RANGE),
-            Setting::BackgroundOpacity => (
-                (self.config.ui_background_opacity).unwrap_or(Config::BACKGROUND_OPACITY),
-                Config::BACKGROUND_OPACITY_RANGE,
             ),
             Setting::TerminalSize => (
                 ViewFonts::of(&self.config).terminal,
@@ -1299,34 +1190,18 @@ impl App {
     /// 对字号、Tab 宽度这类数值设置加一（`up` 为 `true`）或减一，并写回配置。
     pub(super) fn settings_adjust(&mut self, setting: Setting, up: bool) {
         match setting {
+            Setting::MarkdownFontSize => {
+                let current = self
+                    .config
+                    .markdown_font_size
+                    .unwrap_or(Config::MARKDOWN_FONT_SIZE);
+                self.config.markdown_font_size =
+                    Some(step(current, up, Config::MARKDOWN_FONT_SIZE_RANGE));
+            }
             Setting::EditorSize => {
                 let current = self.config.editor_size.unwrap_or(CODE_FONT);
                 self.config.editor_size = Some(step(current, up, Config::EDITOR_SIZE_RANGE));
                 self.apply_fonts().ok();
-            }
-            Setting::UiSize => {
-                let current = self.config.ui_size.unwrap_or(UI_FONT);
-                self.config.ui_size = Some(step(current, up, Config::UI_SIZE_RANGE));
-                self.apply_fonts().ok();
-            }
-            // 配置中的值不在档位上时，移到该方向上最近的一档。
-            Setting::FontWeight => {
-                let (current, range) = (self.font_weight(), Config::FONT_WEIGHT_RANGE);
-                let next = if up {
-                    (current / FONT_WEIGHT_STEP + 1) * FONT_WEIGHT_STEP
-                } else {
-                    current.saturating_sub(1) / FONT_WEIGHT_STEP * FONT_WEIGHT_STEP
-                };
-                let next = next.clamp(*range.start() as u16, *range.end() as u16);
-                self.config.ui_font_weight = (next != Config::FONT_WEIGHT).then_some(next);
-                self.apply_fonts().ok();
-            }
-            Setting::BackgroundOpacity => {
-                let range = Config::BACKGROUND_OPACITY_RANGE;
-                let current =
-                    (self.config.ui_background_opacity).unwrap_or(Config::BACKGROUND_OPACITY);
-                let next = current + if up { OPACITY_STEP } else { -OPACITY_STEP };
-                self.config.ui_background_opacity = Some(next.clamp(*range.start(), *range.end()));
             }
             // 只改字号，无需重新加载字体。
             Setting::TerminalSize => {
@@ -1456,6 +1331,3 @@ pub(crate) struct Store {
     /// 配置的版本号：本窗口每写入一次配置文件加 1，应用层据此把新配置发给其他窗口。
     pub(crate) config_rev: u64,
 }
-
-#[cfg(test)]
-mod tests;

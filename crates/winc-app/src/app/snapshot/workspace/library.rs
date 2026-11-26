@@ -640,3 +640,27 @@ fn switching_expanded_folders_keeps_them_open_and_current_click_preserves_the_gr
     assert_eq!(app.library.scroll, scroll);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn pending_note_cards_render_skeletons_and_open_immediately_on_click() {
+    let (mut app, root) = note_app("library-progressive-pending");
+    let note = root.join("薄荷.md");
+    paint(&mut app);
+
+    // 模拟第一阶段已拿到目录项但摘要尚未扫完时的 PendingNote 卡片：可正常绘制且立即可点开。
+    let note_index = app
+        .library
+        .cards
+        .iter()
+        .position(|c| c.path == note)
+        .unwrap();
+    app.library.cards[note_index].content = CardContent::PendingNote;
+    paint(&mut app);
+    let card_rect = hit(&app, LibraryTarget::Card(note_index));
+    assert!(card_rect.w > 0.0 && card_rect.h > 0.0);
+
+    press(&mut app, card_rect);
+    assert!(!app.library_shown());
+    assert_eq!(app.editor.active().unwrap().path.as_ref(), Some(&note));
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}

@@ -573,7 +573,7 @@ impl App {
             ToggleReadOnlyAll => self.set_read_only_all(!self.editor.all_locked()),
             ToggleWordWrap => self.settings_toggle(crate::layout::Setting::WordWrap),
             ToggleLineNumbers => self.settings_toggle(crate::layout::Setting::LineNumbers),
-            ToggleStatusBar => self.settings_toggle(crate::layout::Setting::StatusBar),
+            ToggleStatusBar => self.toggle_status_bar(),
             // 其他选项都按「全部显示」切换；再次切换时不显示。
             ToggleWhitespace => {
                 use winc_config::RenderWhitespace::{All, None};

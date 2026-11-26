@@ -750,24 +750,7 @@ impl App {
             };
         }
 
-        let tool = match &self.overlays.context_menu {
-            Some(ContextMenu {
-                target: MenuTarget::Tool(task, id),
-                ..
-            }) => Some((*task, *id)),
-            _ => None,
-        };
-        let language = tool.map(|(_, id)| id);
-        let configured = tool.and_then(|(task, id)| {
-            crate::app::editor::format::task_commands(&self.config, task).get(id)
-        });
         match command {
-            MenuCommand::SkipOnSave(i) => winc_syntax::languages().get(i).is_some_and(|l| {
-                self.config
-                    .format_on_save_exclude
-                    .iter()
-                    .any(|id| id == l.id)
-            }),
             MenuCommand::Locale(i) => {
                 winc_i18n::LocaleChoice::ALL.get(i)
                     == Some(&self.config.language.unwrap_or_default())
@@ -822,6 +805,46 @@ impl App {
                     (self.config.option_as_meta).unwrap_or(winc_config::OptionAsMeta::Left);
                 winc_config::OptionAsMeta::ALL.get(i) == Some(&current)
             }
+            MenuCommand::ThemeDefault => true,
+            MenuCommand::BodyFontDefault => self.config.markdown_body_font.is_none(),
+            MenuCommand::BodyFont(i) => {
+                let current = winc_config::font_list(self.config.markdown_body_font.as_deref())
+                    .first()
+                    .copied();
+                winc_render::installed_fonts()
+                    .get(i)
+                    .is_some_and(|f| current == Some(f.name.as_str()))
+            }
+            MenuCommand::CodeFontDefault => self.config.editor_font.is_none(),
+            MenuCommand::CodeFont(i) => {
+                let current = winc_config::font_list(self.config.editor_font.as_deref())
+                    .first()
+                    .copied();
+                winc_render::installed_fonts()
+                    .get(i)
+                    .is_some_and(|f| current == Some(f.name.as_str()))
+            }
+            MenuCommand::LineHeight(None) => self.config.markdown_line_height.is_none(),
+            MenuCommand::LineHeight(Some(i)) => {
+                crate::layout::LINE_HEIGHT_OPTIONS.get(i).is_some_and(|&v| {
+                    self.config
+                        .markdown_line_height
+                        .is_some_and(|cur| (cur - v).abs() < 0.005)
+                })
+            }
+            MenuCommand::ContentWidth(None) => self.config.markdown_content_width.is_none(),
+            MenuCommand::ContentWidth(Some(i)) => {
+                crate::layout::CONTENT_WIDTH_OPTIONS.get(i)
+                    == self.config.markdown_content_width.as_ref()
+            }
+            MenuCommand::ParagraphSpacing(None) => self.config.markdown_paragraph_spacing.is_none(),
+            MenuCommand::ParagraphSpacing(Some(i)) => crate::layout::PARAGRAPH_SPACING_OPTIONS
+                .get(i)
+                .is_some_and(|&v| {
+                    self.config
+                        .markdown_paragraph_spacing
+                        .is_some_and(|cur| (cur - v).abs() < 0.005)
+                }),
             MenuCommand::FontDefault | MenuCommand::Font(_) | MenuCommand::FallbackFont(_) => {
                 let Some(ContextMenu {
                     target: MenuTarget::Font(setting),
@@ -840,13 +863,6 @@ impl App {
                     }
                     _ => list.is_empty(),
                 }
-            }
-            MenuCommand::ToolAuto => language.is_some() && configured.is_none(),
-            MenuCommand::ToolPreset(i) => {
-                configured.is_some_and(|c| PRESETS.get(i).is_some_and(|p| p.command == c))
-            }
-            MenuCommand::ToolCustom => {
-                configured.is_some_and(|c| PRESETS.iter().all(|p| p.command != c))
             }
             _ => false,
         }

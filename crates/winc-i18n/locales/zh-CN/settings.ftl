@@ -19,6 +19,9 @@ settings-page-terminal = 终端
 settings-page-modules = 模块
 settings-page-keys = 快捷键
 settings-page-about = 关于
+settings-section-theme = 主题
+settings-section-fonts = 字体
+settings-section-typography = 排版
 settings-section-format-tools = 格式化工具
 settings-section-fix-tools = 修复工具
 settings-section-spelling = 拼写检查
@@ -117,9 +120,19 @@ settings-syntax-custom-formats-desc = 用可复用的 HTML 或 Markdown 标记�
 
 ## 设置项的名称。
 
-settings-theme = 颜色模式
+settings-theme = 外观
 settings-light-theme = 浅色主题
 settings-dark-theme = 深色主题
+settings-theme-default = 默认
+settings-follow-theme = 自动（跟随主题）
+settings-body-font = 正文字体
+settings-code-font = 代码字体
+settings-custom-font-size = 使用自定义字体大小
+settings-markdown-font-size = 编辑器字体大小
+settings-line-height = 行高
+settings-content-width = 内容宽度
+settings-content-width-desc = 只影响编辑窗口，不影响导出的文件。
+settings-paragraph-spacing = 段落间距
 settings-ui-font = 界面字体
 settings-ui-size = 界面字号
 settings-font-weight = 全局字重
@@ -307,7 +320,7 @@ settings-terminal-option-as-meta-desc = 按所选的 ⌥ 时发送 Esc 前缀，
 
 ## 设置项的值和提示。
 
-settings-theme-auto = 跟随系统
+settings-theme-auto = 自动
 settings-theme-light = 浅色
 settings-theme-dark = 深色
 settings-skip-on-save-none = 无

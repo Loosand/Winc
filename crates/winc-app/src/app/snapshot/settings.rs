@@ -1,16 +1,11 @@
 //! 设置浮层与字号缩放的测试：模态行为、键盘遍历、鼠标命中、字体名校验、滚动、拖动、动画。
 
-// 格式化设置页的测试用 sh 脚本冒充格式化工具。
 mod appearance;
-#[cfg(unix)]
-mod format;
 mod search;
 mod shortcuts;
 mod terminal;
 
 use super::*;
-#[cfg(unix)]
-use winc_editor::format::{PRESETS, Task};
 
 #[test]
 fn dragging_the_title_row_moves_the_card_and_keeps_it_in_the_window() {
@@ -147,8 +142,6 @@ fn scrolling_settings_reuses_the_window_below_and_looks_the_same() {
 
 #[test]
 fn zoom_scales_the_whole_window_in_steps() {
-    use crate::app::input::context_menu::{MenuCommand, MenuTarget};
-
     let dir = search_folder("ui-zoom");
     let mut app = app_with(&dir, false);
     paint(&mut app);
@@ -189,16 +182,8 @@ fn zoom_scales_the_whole_window_in_steps() {
     assert_eq!(scale(&app), base);
     assert_eq!(app.layout.window, window);
 
-    // 设置中的菜单列出各档位，当前的打勾；选中后写入配置。
-    app.open_settings();
-    app.settings_open_menu(Setting::Zoom);
-    assert_eq!(
-        app.overlays.context_menu.as_ref().map(|m| &m.target),
-        Some(&MenuTarget::Zoom)
-    );
-    assert!(app.menu_checked(MenuCommand::Zoom(3)));
-    assert_eq!(app.menu_label(MenuCommand::Zoom(6)).title, "150%");
-    app.run_menu_command(MenuCommand::Zoom(6));
+    // 直接设置缩放档位：写入配置并按比例缩放。
+    app.set_zoom(150);
     assert_eq!(app.config.ui_zoom, Some(150));
     assert!((scale(&app) - base * 1.5).abs() < 1e-4);
     let _ = std::fs::remove_dir_all(&dir);
@@ -211,23 +196,23 @@ fn long_descriptions_wrap_and_make_the_row_taller() {
     let dir = search_folder("settings-wrap");
     let mut app = app_with(&dir, false);
     app.open_settings();
-    app.settings_show_page(SettingsPage::Format);
+    app.settings_show_page(SettingsPage::Editor);
     let row = |app: &App, setting| app.settings_layout().row(setting).unwrap().row;
 
     // 默认大小的窗口中各项说明都放得下一行。
-    assert_eq!(row(&app, Setting::SkipOnSave).h, SETTINGS_ROW_TALL);
-    assert_eq!(row(&app, Setting::FormatOnSave).h, SETTINGS_ROW_TALL);
+    assert_eq!(row(&app, Setting::WholeLines).h, SETTINGS_ROW_TALL);
+    assert_eq!(row(&app, Setting::ConfirmClose).h, SETTINGS_ROW_TALL);
 
     // 放大界面后可用宽度变小：较长的说明折成两行，该行加高一行的行距，不超过上限；短说明仍是
     // 一行。
     app.set_zoom(200);
-    let h = row(&app, Setting::SkipOnSave).h;
+    let h = row(&app, Setting::WholeLines).h;
     let most = SETTINGS_ROW_TALL + (SETTINGS_DESC_LINES - 1) as f32 * SETTINGS_DESC_LINE;
     assert!(
         h >= SETTINGS_ROW_TALL + SETTINGS_DESC_LINE && h <= most,
         "{h}"
     );
-    assert_eq!(row(&app, Setting::FormatOnSave).h, SETTINGS_ROW_TALL);
+    assert_eq!(row(&app, Setting::ConfirmClose).h, SETTINGS_ROW_TALL);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -284,17 +269,15 @@ fn settings_keyboard_walks_every_item_and_adjusts() {
     // 搜索框，最后是关于页的各行，到达末尾后不再移动。越过一页的末项时自动换页，右侧显示该页
     // 内容。
     // 格式化页列出的语言随机器上装了哪些工具而变，步数按全部设置项计算。
+    let custom_font_size = app.config.markdown_custom_font_size.unwrap_or(false);
     let mut seen = vec![app.settings.selected];
-    for _ in 0..Setting::all(&app.settings.languages, app.settings_modules()).len() + 2 {
+    for _ in 0..Setting::all(custom_font_size, app.settings_modules()).len() + 2 {
         app.settings_move(true);
         if seen.last() != Some(&app.settings.selected) {
             seen.push(app.settings.selected);
         }
     }
-    assert_eq!(
-        seen,
-        Setting::all(&app.settings.languages, app.settings_modules())
-    );
+    assert_eq!(seen, Setting::all(custom_font_size, app.settings_modules()));
     assert_eq!(app.settings.selected, Setting::License);
     assert_eq!(app.settings_layout().page, SettingsPage::About);
     // 往回走过关于页的九行（版本、更新三行、更新日志和四个链接），回到快捷键页的搜索框。
@@ -321,8 +304,8 @@ fn settings_keyboard_walks_every_item_and_adjusts() {
     };
     assert_eq!(app.settings.selected, last);
 
-    // 主题：← → 在三个选项之间切换，到头后不再变化。步数按全部设置项计算，原因同上。
-    for _ in 0..Setting::all(&app.settings.languages, app.settings_modules()).len() {
+    // 主题：← → 在三个选项之间切换，到头后不再变化。
+    for _ in 0..Setting::all(custom_font_size, app.settings_modules()).len() {
         app.settings_move(false);
     }
     assert_eq!(app.settings.selected, Setting::Theme);
@@ -336,47 +319,14 @@ fn settings_keyboard_walks_every_item_and_adjusts() {
     app.settings_step(true);
     assert_eq!(app.theme_choice, ThemeChoice::Dark);
 
-    // 语言：← → 不改变选择。
+    // 浅色主题、深色主题为下拉菜单：← → 不改变选择。
     app.settings_move(true);
-    assert_eq!(app.settings.selected, Setting::Language);
-    app.settings_step(true);
-    assert_eq!(app.config.language, None);
-
-    // 浅色主题（语言下面是界面缩放、界面字体、字号、字重，然后是状态栏、动态效果、记住窗口三个
-    // 开关和各平台多出的一个（macOS 上是平滑滚动，其他平台上是使用系统标题栏），以及背景的图片、
-    // 显示方式、不透明度，再下面是两组主题）：外观为深色时选一个浅色主题，外观随之切换。深色主题：
-    // → 换到下一个，外观回到深色；到头后不再变化。
-    for _ in 0..12 {
-        app.settings_move(true);
-    }
     assert_eq!(app.settings.selected, Setting::LightTheme);
-    app.settings_step(true);
-    assert_eq!(app.config.light_theme.as_deref(), Some("winc-paper"));
-    assert_eq!(app.theme_choice, ThemeChoice::Light);
-    assert!(std::ptr::eq(app.palette, &crate::theme::WINC_PAPER));
     app.settings_move(true);
     assert_eq!(app.settings.selected, Setting::DarkTheme);
-    app.settings_step(true);
-    assert_eq!(app.config.dark_theme.as_deref(), Some("winc-slate"));
-    assert_eq!(app.theme_choice, ThemeChoice::Dark);
-    assert!(std::ptr::eq(app.palette, &crate::theme::WINC_SLATE));
-    for _ in 0..10 {
-        app.settings_step(true);
-    }
-    let last = crate::theme::DARK_THEMES.last().unwrap().palette;
-    assert!(std::ptr::eq(app.palette, last));
-    // 跟随系统时只换那一种外观的主题，现在的配色不变。
-    app.set_theme_choice(ThemeChoice::Auto);
-    let before = app.palette;
-    app.set_named_theme(!before.dark, 3);
-    assert!(std::ptr::eq(app.palette, before));
-    for _ in 0..10 {
-        app.settings_step(false);
-    }
-    assert!(std::ptr::eq(app.palette, &crate::theme::WINC_NIGHT));
 
-    // 编辑器字号：→ 加 1；到达上限后不再变化，对应一侧的按钮变淡。
-    for _ in 0..2 {
+    // 跳过字体与排版各项，进入编辑器页的「字号」：→ 加 1；到达上限后不再变化，对应一侧的按钮变淡。
+    for _ in 0..8 {
         app.settings_move(true);
     }
     assert_eq!(app.settings.selected, Setting::EditorSize);
@@ -426,10 +376,15 @@ fn settings_mouse_controls_use_the_same_geometry_as_drawing() {
     click_part(&mut app, SettingsPart::Theme(ThemeChoice::Dark));
     assert_eq!(app.theme_choice, ThemeChoice::Dark);
 
-    // 点击界面字体的输入框进入编辑，焦点交给该输入框。
-    click_part(&mut app, SettingsPart::Field(Setting::UiFont));
+    // 开启「使用自定义字体大小」后，点击「编辑器字体大小」进入编辑。
+    click_part(&mut app, SettingsPart::Switch(Setting::CustomFontSize));
+    assert!(app.switch_on(Setting::CustomFontSize));
+    click_part(&mut app, SettingsPart::Field(Setting::MarkdownFontSize));
     assert_eq!(app.focus, Focus::Setting);
-    assert!(matches!(&app.settings.editing, Some((Setting::UiFont, _))));
+    assert!(matches!(
+        &app.settings.editing,
+        Some((Setting::MarkdownFontSize, _))
+    ));
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -502,12 +457,13 @@ fn settings_pages_are_listed_on_the_left() {
     for &(_, row) in &layout.pages {
         assert!(layout.nav.contains(row.x, row.y) && row.right() <= layout.nav.right());
     }
+    let custom_font_size = app.config.markdown_custom_font_size.unwrap_or(false);
     let mut listed = Vec::new();
     for page in SettingsPage::ALL {
         let view = crate::layout::SettingsView {
             page,
             query: "",
-            languages: &app.settings.languages,
+            custom_font_size,
             terminal: 1.0,
             git: 1.0,
             editing: None,
@@ -517,7 +473,6 @@ fn settings_pages_are_listed_on_the_left() {
         let layout = SettingsLayout::compute(app.layout.window, &view, &mut |_| 0.0);
         for row in &layout.rows {
             assert_eq!(row.setting.page(), page);
-            // 分组下方的文字按钮（添加语言）不在分组内，其余设置项都在分组内。
             let in_group = layout
                 .groups
                 .iter()
@@ -533,7 +488,7 @@ fn settings_pages_are_listed_on_the_left() {
     }
     assert_eq!(
         listed,
-        Setting::all(&app.settings.languages, app.settings_modules())
+        Setting::all(custom_font_size, app.settings_modules())
     );
 
     // 悬停在分类栏的一项上时记录该项；点击后换页，选中该页的第一项，滚动位置回到顶部。
@@ -608,9 +563,8 @@ fn settings_body_scrolls_when_the_window_is_short() {
     )));
     assert_eq!(app.settings.scroll, 0.0);
 
-    // 窗口变矮后可以滚动，到底即停；文档本身不动。外观页的两组主题各有两排，默认窗口下
-    // 也需要滚动，这里用格式化页。
-    app.settings_show_page(SettingsPage::Format);
+    // 窗口变矮后可以滚动，到底即停；文档本身不动。
+    app.settings_show_page(SettingsPage::Appearance);
     app.layout.window.h = 280.0;
     let body = app.settings_layout().body;
     app.on_mouse_move(body.x + 20.0, body.y + 20.0);
@@ -641,54 +595,20 @@ fn settings_open_from_the_shortcut_without_a_tab() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 创建格式化设置页测试用的应用，返回应用及其项目目录。
-///
-/// 项目的 `pyproject.toml` 中配置了 Ruff；`PATH` 中只有 `bin` 目录，其中有 `rustfmt`、`gofmt`、
-/// `jq`，没有 `ruff`。因此哪些工具能找到，与本机实际安装的工具无关。
-#[cfg(unix)]
-pub(super) fn format_settings_app(name: &str, dark: bool) -> (App, PathBuf) {
-    let dir = search_folder(name);
-    std::fs::write(
-        dir.join("pyproject.toml"),
-        "[tool.ruff]\nline-length = 100\n",
-    )
-    .unwrap();
-    let bin = dir.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    for tool in ["rustfmt", "gofmt", "jq"] {
-        winc_backend::testing::write_script(&bin.join(tool), "#!/bin/sh\ncat\n");
-    }
-
-    let mut app = app_with(&dir, dark);
-    app.format.formatter = winc_editor::format::Formatter::with_vars(vec![(
-        std::ffi::OsString::from("PATH"),
-        bin.into_os_string(),
-    )]);
-    app.config
-        .format_commands
-        .insert("json".to_owned(), "jq --indent 4 .".to_owned());
-    (app, dir)
-}
-
-#[cfg(unix)]
 #[test]
 fn scrolled_rows_stay_under_the_header() {
-    let (mut app, dir) = format_settings_app("settings-scroll-clip", false);
+    let dir = search_folder("settings-scroll-clip");
+    let mut app = app_with(&dir, false);
     app.frame.renderer =
         Some(Renderer::offscreen(820.0, 420.0, SCALE, app.palette.frame_bg, None, None).unwrap());
-    app.config.format_commands.insert(
-        "python".to_owned(),
-        "black --quiet --stdin-filename {file} -".to_owned(),
-    );
     app.open_settings();
-    app.settings_show_page(SettingsPage::Format);
+    app.settings_show_page(SettingsPage::Editor);
     app.relayout();
 
-    // 滚动到 Python 一行压在标题下沿上：名称已滚到标题之后，其下的说明行和右侧的工具名
-    // 有一半在标题区域内。
+    // 滚动到某一行压在标题下沿上。
     let layout = app.settings_layout();
-    let python = layout.row(Setting::FormatCommand("python")).unwrap().row;
-    app.settings.scroll = python.y - layout.body.y + 35.0;
+    let target = layout.row(Setting::WordWrap).unwrap().row;
+    app.settings.scroll = target.y - layout.body.y + 20.0;
     assert!(app.settings.scroll <= app.settings_layout().max_scroll());
     paint(&mut app);
 
@@ -705,19 +625,6 @@ fn scrolled_rows_stay_under_the_header() {
         for x in (body.x as i32 + 1..body.right() as i32 - 1).step_by(3) {
             assert_eq!(px(x as f32, y), first, "({x}, {y}) 画到了标题里");
         }
-    }
-    // 不可见的「安装方法…」链接不会被点击命中。
-    let hidden = app
-        .hits
-        .install_links
-        .iter()
-        .find(|(s, _)| *s == Setting::FormatCommand("python"));
-    if let Some(&(_, link)) = hidden {
-        let (x, y) = (link.x + 4.0, body.y - 3.0);
-        assert_ne!(
-            app.settings_part_at(x, y),
-            Some(SettingsPart::Install(Setting::FormatCommand("python")))
-        );
     }
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -1035,7 +942,7 @@ fn line_numbers_and_the_status_bar_can_be_hidden() {
     paint(&mut app);
 
     // 状态栏：底部只留下边距，卡片变高，点不到状态栏上的项。
-    assert!(app.switch_on(Setting::StatusBar));
+    assert!(app.status_bar_shown());
     assert!(app.run_action(crate::keymap::Action::ToggleStatusBar));
     assert_eq!(app.config.status_bar, Some(false));
     assert_eq!(app.layout.status.h, crate::theme::ISLAND_MARGIN);
@@ -1057,68 +964,6 @@ fn line_numbers_and_the_status_bar_can_be_hidden() {
     paint(&mut app);
     assert!(!app.hits.status.is_empty());
 
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn turning_off_window_restore_forgets_the_saved_frame() {
-    let dir = sample_folder("settings-window");
-    let mut app = app_with(&dir.join("short.rs"), false);
-    app.state.window = Some(winc_config::WindowFrame {
-        position: Some((10.0, 20.0)),
-        width: 900.0,
-        height: 600.0,
-        scale: 1.0,
-        maximized: false,
-    });
-    assert!(app.switch_on(Setting::RestoreWindow));
-    app.settings_toggle(Setting::RestoreWindow);
-    assert_eq!(app.config.restore_window, Some(false));
-    assert_eq!(app.state.window, None);
-
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn the_animations_switch_overrides_the_system_setting() {
-    let dir = sample_folder("settings-animations");
-    let mut app = app_with(&dir.join("short.rs"), false);
-    // 没有设置时跟随系统；测试中系统视为未开启「减弱动态效果」。
-    assert_eq!(app.config.ui_animations, None);
-    assert!(app.animations_on() && app.switch_on(Setting::Animations));
-    assert_eq!(Setting::Animations.page(), SettingsPage::Appearance);
-
-    app.settings_toggle(Setting::Animations);
-    assert_eq!(app.config.ui_animations, Some(false));
-    assert!(!app.animations_on() && !app.switch_on(Setting::Animations));
-    // 关闭后不再创建动画时钟，各处直接显示终态。
-    assert!(app.clock(std::time::Duration::from_millis(100)).is_none());
-
-    app.settings_toggle(Setting::Animations);
-    assert_eq!(app.config.ui_animations, Some(true));
-    assert!(app.animations_on());
-
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-/// 平滑滚动默认开着，可以单独关掉，不影响其他动态效果；只在 macOS 上列出。
-#[test]
-fn smooth_scrolling_switches_off_on_its_own() {
-    let dir = sample_folder("settings-smooth-scrolling");
-    let mut app = app_with(&dir.join("short.rs"), false);
-    assert_eq!(app.config.smooth_scrolling, None);
-    assert!(app.smooth_scrolling() && app.switch_on(Setting::SmoothScrolling));
-    assert_eq!(Setting::SmoothScrolling.page(), SettingsPage::Appearance);
-
-    app.settings_toggle(Setting::SmoothScrolling);
-    assert_eq!(app.config.smooth_scrolling, Some(false));
-    assert!(!app.smooth_scrolling() && app.animations_on());
-
-    app.open_settings();
-    app.settings_show_page(SettingsPage::Appearance);
-    let listed =
-        (app.settings_layout().rows.iter()).any(|row| row.setting == Setting::SmoothScrolling);
-    assert_eq!(listed, cfg!(target_os = "macos"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

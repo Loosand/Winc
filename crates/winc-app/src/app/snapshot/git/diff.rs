@@ -677,7 +677,7 @@ fn moving_to_a_change_clears_the_message_about_having_none() {
     assert_eq!(app.status.message.as_deref(), Some("已是第一处更改"));
 
     // 隐藏状态栏时消息在提示条上，同样清除。
-    app.settings_toggle(Setting::StatusBar);
+    app.toggle_status_bar();
     assert!(app.run_action(Action::PreviousDifference));
     assert_eq!(app.notice.text.as_deref(), Some("已是第一处更改"));
     assert!(app.run_action(Action::NextDifference));

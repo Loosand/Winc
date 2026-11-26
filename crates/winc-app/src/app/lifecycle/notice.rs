@@ -13,8 +13,6 @@ pub enum NoticeAction {
     ///
     /// `dir` 是文件所在的目录。
     Install { tools: Vec<String>, dir: PathBuf },
-    /// 「去设置」：打开设置的格式化一页，在那里指定工具命令。
-    FormatSettings,
     /// 「查看输出」：在只读标签中打开 Git 操作的输出。
     GitOutput,
     /// 「重新连接」：重新连接远端主机并回到其上的目录。
@@ -70,7 +68,6 @@ impl NoticeAction {
                 t!("workspace-notice-show-output")
             }
             NoticeAction::Install { .. } => t!("workspace-notice-install"),
-            NoticeAction::FormatSettings => t!("workspace-notice-open-settings"),
             NoticeAction::Reconnect(_) => t!("workspace-notice-reconnect"),
             NoticeAction::CancelConnect | NoticeAction::CancelCopy => {
                 t!("workspace-notice-cancel")
@@ -199,7 +196,6 @@ impl App {
                 self.ensure_caret_visible();
             }
             NoticeAction::Install { tools, dir } => self.show_install_guide(&tools, &dir),
-            NoticeAction::FormatSettings => self.open_settings_page(Some(SettingsPage::Format)),
             NoticeAction::GitOutput => self.show_git_output(),
             NoticeAction::Reconnect(folder) => {
                 self.reopen_remote(&folder);

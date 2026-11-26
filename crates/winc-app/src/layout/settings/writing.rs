@@ -100,7 +100,6 @@ pub(super) enum WritingItem {
     Typewriter,
     Focus,
     RemoteImages,
-    TextWidth,
     LineNumbers,
 }
 
@@ -220,11 +219,7 @@ pub(super) fn markdown_groups() -> Vec<(&'static str, Vec<WritingItem>)> {
         beta_group(t!("settings-section-custom-formats"), &[CustomFormats]),
         group(
             t!("settings-section-markdown-display"),
-            [
-                WritingItem::RemoteImages,
-                WritingItem::TextWidth,
-                WritingItem::LineNumbers,
-            ],
+            [WritingItem::RemoteImages, WritingItem::LineNumbers],
         ),
     ]
 }

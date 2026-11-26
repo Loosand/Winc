@@ -232,20 +232,6 @@ impl App {
                 MenuCommand::CloseFolder => self.close_folder(),
                 _ => {}
             },
-            MenuTarget::AddLanguage(task) => {
-                if let MenuCommand::Language(i) = command
-                    && let Some(&language) = winc_syntax::languages().get(i)
-                {
-                    self.settings_add_language(task, language);
-                }
-            }
-            MenuTarget::SkipOnSave => {
-                if let MenuCommand::SkipOnSave(i) = command
-                    && let Some(&language) = winc_syntax::languages().get(i)
-                {
-                    self.settings_toggle_skip(language.id);
-                }
-            }
             MenuTarget::Locale => {
                 if let MenuCommand::Locale(i) = command
                     && let Some(&choice) = winc_i18n::LocaleChoice::ALL.get(i)
@@ -343,6 +329,61 @@ impl App {
                     self.set_option_as_meta(choice);
                 }
             }
+            MenuTarget::LightTheme => {
+                if command == MenuCommand::ThemeDefault {
+                    self.set_named_theme(false, 0);
+                }
+            }
+            MenuTarget::DarkTheme => {
+                if command == MenuCommand::ThemeDefault {
+                    self.set_named_theme(true, 0);
+                }
+            }
+            MenuTarget::BodyFont => match command {
+                MenuCommand::BodyFontDefault => self.settings_choose_font(Setting::BodyFont, None),
+                MenuCommand::BodyFont(i) => {
+                    if let Some(family) = winc_render::installed_fonts().get(i) {
+                        self.settings_choose_font(Setting::BodyFont, Some(family.name.clone()));
+                    }
+                }
+                _ => {}
+            },
+            MenuTarget::CodeFont => match command {
+                MenuCommand::CodeFontDefault => self.settings_choose_font(Setting::CodeFont, None),
+                MenuCommand::CodeFont(i) => {
+                    if let Some(family) = winc_render::installed_fonts().get(i) {
+                        self.settings_choose_font(Setting::CodeFont, Some(family.name.clone()));
+                    }
+                }
+                _ => {}
+            },
+            MenuTarget::LineHeight => match command {
+                MenuCommand::LineHeight(None) => self.set_markdown_line_height(None),
+                MenuCommand::LineHeight(Some(i)) => {
+                    if let Some(&v) = crate::layout::LINE_HEIGHT_OPTIONS.get(i) {
+                        self.set_markdown_line_height(Some(v));
+                    }
+                }
+                _ => {}
+            },
+            MenuTarget::ContentWidth => match command {
+                MenuCommand::ContentWidth(None) => self.set_markdown_content_width(None),
+                MenuCommand::ContentWidth(Some(i)) => {
+                    if let Some(&v) = crate::layout::CONTENT_WIDTH_OPTIONS.get(i) {
+                        self.set_markdown_content_width(Some(v));
+                    }
+                }
+                _ => {}
+            },
+            MenuTarget::ParagraphSpacing => match command {
+                MenuCommand::ParagraphSpacing(None) => self.set_markdown_paragraph_spacing(None),
+                MenuCommand::ParagraphSpacing(Some(i)) => {
+                    if let Some(&v) = crate::layout::PARAGRAPH_SPACING_OPTIONS.get(i) {
+                        self.set_markdown_paragraph_spacing(Some(v));
+                    }
+                }
+                _ => {}
+            },
             MenuTarget::Font(setting) => match command {
                 MenuCommand::FontDefault => self.settings_choose_font(setting, None),
                 MenuCommand::Font(i) => {
@@ -357,9 +398,6 @@ impl App {
                 }
                 _ => {}
             },
-            MenuTarget::Tool(task, id) => {
-                self.settings_choose_tool(tool_setting(task, id), command)
-            }
             MenuTarget::Keymap => match command {
                 MenuCommand::KeymapPreset(preset) => self.set_keymap_preset(preset),
                 MenuCommand::ImportKeymap(i) => self.import_keymap(i),

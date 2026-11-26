@@ -85,16 +85,21 @@ impl App {
         if self.sync_diff_wrap() {
             return;
         }
-        let width = (self.config.word_wrap == Some(true)).then(|| self.wrap_cells());
         let tab_width = self.editor.active_tab_width();
         let resizing = self.text_width_changing();
         let visible = self.visible_lines();
+        let wrap_cells = self.wrap_cells();
+        let wrap_config = self.config.word_wrap;
         let Some(doc) = self.editor.active_mut() else {
             return;
         };
         if !doc.shows_text() {
             return;
         }
+        // 用户未显式关闭自动换行时，Markdown 源码视图默认按编辑区宽度自动折行。
+        let wrap = wrap_config
+            .unwrap_or_else(|| doc.preview_kind() == Some(winc_editor::PreviewKind::Markdown));
+        let width = wrap.then_some(wrap_cells);
         let before = doc.wrap_width();
         // 整篇断行的耗时与行数成正比（20 万行约 115 ms），不能在宽度逐帧变化时每帧执行。此时沿用
         // 已有的断行宽度，动画结束或松开分隔条后按最终宽度重新断行一次。

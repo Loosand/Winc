@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use winc_render::{Color, Frame, Rect};
-use winc_typeset::{Cx, Env, Item, LaidBlock, Raw, Span, margins};
+use winc_typeset::{Cx, Env, Item, LaidBlock, Raw, Span, margins_with};
 
 use crate::decorations::{DecorationId, DecorationSet};
 use crate::mapping::{LiveKey, LiveLeaf};
@@ -115,7 +115,7 @@ impl Laid {
         prepare_memo(input.memo, key);
         let space_width = frame
             .advance_faux(
-                winc_render::FontKind::Ui,
+                winc_render::FontKind::Body,
                 winc_render::Faux::default(),
                 key.base,
                 ' ',
@@ -158,7 +158,8 @@ impl Laid {
         let widget_buckets = WidgetBuckets::collect(decorations, parsed.blocks.len(), &ranges);
         let mut widgets: Vec<LaidWidget> = Vec::new();
         let (mut y, mut below, mut chars) = (0.0, None, 0);
-        let blank_row = winc_typeset::blank_row_height(key.base);
+        let blank_row =
+            winc_typeset::blank_row_height_with(key.base, key.line_height, key.paragraph_gap);
         // During an asynchronous reparse, keep the raw editing fallback rather than attaching
         // old source offsets to the newly edited note.
         let checked = editable && input_checked;
@@ -231,7 +232,7 @@ impl Laid {
                 stale[i] = true;
             }
             // 沿用的结果已经释放了要画的项，而这一块在需要保留的范围内：重新排版。
-            let (margin, margin_bottom) = margins(block, key.base, false);
+            let (margin, margin_bottom) = margins_with(block, key.base, key.paragraph_gap, false);
             let already = blocks.last().map_or(0.0, |(_, b)| b.editing_blank_height());
             let offsets = blank.before(i);
             let extra_rows = offsets.len().saturating_sub(1 + usize::from(i != 0));
@@ -616,6 +617,8 @@ impl Laid {
             let mut cx = Cx {
                 frame,
                 base: key.base,
+                line_height: key.line_height,
+                paragraph_gap: key.paragraph_gap,
                 token: input.token,
                 surface: input.surface,
                 accent: input.accent,

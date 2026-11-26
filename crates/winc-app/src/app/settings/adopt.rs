@@ -18,10 +18,13 @@ impl App {
         }
         let new = &self.config;
         let zoom = old.ui_zoom != new.ui_zoom;
-        let fonts = (old.editor_font != new.editor_font || old.ui_font != new.ui_font)
-            || (old.editor_size != new.editor_size || old.ui_size != new.ui_size)
-            || (old.terminal_font != new.terminal_font || old.terminal_size != new.terminal_size)
-            || old.ui_font_weight != new.ui_font_weight;
+        let fonts = old.editor_font != new.editor_font
+            || old.markdown_body_font != new.markdown_body_font
+            || old.editor_size != new.editor_size
+            || old.markdown_custom_font_size != new.markdown_custom_font_size
+            || old.markdown_font_size != new.markdown_font_size
+            || old.terminal_font != new.terminal_font
+            || old.terminal_size != new.terminal_size;
         let theme = (old.theme != new.theme || old.dark_theme != new.dark_theme)
             || old.light_theme != new.light_theme;
         let tab_width = (old.tab_width != new.tab_width)

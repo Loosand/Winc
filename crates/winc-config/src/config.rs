@@ -111,6 +111,18 @@ pub struct Config {
     pub markdown_remote_images: Option<bool>,
     /// Markdown 预览正文的最大宽度，默认为 [`TextWidth::Standard`]。
     pub markdown_text_width: Option<TextWidth>,
+    /// Markdown 正文字体；未设置时跟随主题默认字体。
+    pub markdown_body_font: Option<String>,
+    /// Markdown 编辑区是否启用自定义字体大小，默认为否（跟随主题默认字号）。
+    pub markdown_custom_font_size: Option<bool>,
+    /// Markdown 编辑区自定义字体大小（逻辑像素），默认为 16。
+    pub markdown_font_size: Option<f32>,
+    /// Markdown 正文行高倍数；未设置时跟随主题默认。
+    pub markdown_line_height: Option<f32>,
+    /// Markdown 编辑窗口正文最大宽度（逻辑像素）；未设置时跟随主题默认。
+    pub markdown_content_width: Option<u16>,
+    /// Markdown 段落间距（em）；未设置时跟随主题默认。
+    pub markdown_paragraph_spacing: Option<f32>,
     /// Markdown 预览是否显示行号，默认为是：可编辑的预览在左侧写原文行号，其余预览在代码块中
     /// 写从 1 起的行号。
     pub markdown_line_numbers: Option<bool>,
@@ -330,6 +342,16 @@ impl Config {
     ///
     /// 上限 21 是 WCAG 对比度的最大值，即黑底白字之比。
     pub const CONTRAST_RANGE: std::ops::RangeInclusive<f32> = 0.0..=21.0;
+    /// Markdown 编辑器字体大小的合法范围（逻辑像素）。
+    pub const MARKDOWN_FONT_SIZE_RANGE: std::ops::RangeInclusive<f32> = 10.0..=36.0;
+    /// Markdown 编辑器默认字号（逻辑像素）。
+    pub const MARKDOWN_FONT_SIZE: f32 = 16.0;
+    /// Markdown 正文行高倍数的合法范围。
+    pub const LINE_HEIGHT_RANGE: std::ops::RangeInclusive<f32> = 1.0..=3.0;
+    /// Markdown 内容宽度的合法范围（逻辑像素）。
+    pub const CONTENT_WIDTH_RANGE: std::ops::RangeInclusive<f32> = 400.0..=2400.0;
+    /// Markdown 段落间距的合法范围（em）。
+    pub const PARAGRAPH_SPACING_RANGE: std::ops::RangeInclusive<f32> = 0.0..=4.0;
 
     /// 读取用户级配置，返回配置和读取过程中发现的问题（可能有多条）。
     ///
@@ -887,6 +909,55 @@ impl Config {
 
     /// `markdown` 一节。
     const MARKDOWN: &[Field<Self>] = &[
+        string_field!("bodyFont", markdown_body_font),
+        bool_field!("customFontSize", markdown_custom_font_size),
+        Field {
+            key: "fontSize",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-font-size");
+                config.markdown_font_size = read_number(
+                    value,
+                    name,
+                    Config::MARKDOWN_FONT_SIZE_RANGE,
+                    label,
+                    problems,
+                );
+            },
+            write: |config| config.markdown_font_size.map(number),
+        },
+        Field {
+            key: "lineHeight",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-line-height");
+                config.markdown_line_height =
+                    read_number(value, name, Config::LINE_HEIGHT_RANGE, label, problems);
+            },
+            write: |config| config.markdown_line_height.map(number),
+        },
+        Field {
+            key: "contentWidth",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-content-width");
+                config.markdown_content_width =
+                    read_number(value, name, Config::CONTENT_WIDTH_RANGE, label, problems)
+                        .map(|w| w.round() as u16);
+            },
+            write: |config| config.markdown_content_width.map(|w| number(f32::from(w))),
+        },
+        Field {
+            key: "paragraphSpacing",
+            read: |config, value, name, problems| {
+                let label = t!("config-label-paragraph-spacing");
+                config.markdown_paragraph_spacing = read_number(
+                    value,
+                    name,
+                    Config::PARAGRAPH_SPACING_RANGE,
+                    label,
+                    problems,
+                );
+            },
+            write: |config| config.markdown_paragraph_spacing.map(number),
+        },
         bool_field!("remoteImages", markdown_remote_images),
         bool_field!("lineNumbers", markdown_line_numbers),
         bool_field!("shortcuts", markdown_shortcuts),

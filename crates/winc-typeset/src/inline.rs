@@ -108,7 +108,7 @@ impl Cx<'_, '_> {
             para.size
         };
         RunStyle {
-            font: if code { FontKind::Mono } else { FontKind::Ui },
+            font: if code { FontKind::Mono } else { FontKind::Body },
             faux: Faux {
                 bold: !code && (para.bold || style.has(Style::STRONG)),
                 italic: style.has(Style::EMPHASIS),
@@ -330,8 +330,8 @@ impl Cx<'_, '_> {
                 (AtomKind::Char(a), AtomKind::Char(b)) => {
                     let (a, b) = (*a, *b);
                     // 1. 拉丁比例字体字偶 kerning（同样式相邻西文字母/标点对）。
-                    if st0.font == FontKind::Ui
-                        && st1.font == FontKind::Ui
+                    if st0.font == FontKind::Body
+                        && st1.font == FontKind::Body
                         && st0.faux == st1.faux
                         && (st0.size - st1.size).abs() < 0.01
                     {
@@ -345,9 +345,9 @@ impl Cx<'_, '_> {
                         || (is_latin_or_digit(a) && is_cjk_ideograph(b))
                     {
                         let sz = st0.size.min(st1.size);
-                        let space = self
-                            .frame
-                            .advance_faux(FontKind::Ui, Faux::default(), sz, ' ');
+                        let space =
+                            self.frame
+                                .advance_faux(FontKind::Body, Faux::default(), sz, ' ');
                         let gap = (sz * CJK_LATIN_MAX_EM)
                             .min(space * CJK_LATIN_SPACE_RATIO)
                             .max(0.0);
@@ -469,7 +469,7 @@ impl Cx<'_, '_> {
             .flatten();
         let mut top = y;
         let mut first_baseline = None;
-        let main = self.frame.metrics(FontKind::Ui, para.size);
+        let main = self.frame.metrics(FontKind::Body, para.size);
         let mut prev_end = 0;
         let total_atoms = atoms.len();
         for line in lines {
@@ -567,7 +567,7 @@ impl Cx<'_, '_> {
                     x: pen,
                     baseline,
                     text: "".into(),
-                    font: FontKind::Ui,
+                    font: FontKind::Body,
                     faux: Faux::default(),
                     size: para.size,
                     color: para.color,

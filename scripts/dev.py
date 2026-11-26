@@ -22,7 +22,35 @@ HOME = DEV / "home"
 STATE = HOME / "Library/Application Support/winc/state.json"
 BUNDLE = DEV / "Minc Dev.app"
 EXECUTABLE = BUNDLE / "Contents/MacOS/minc-dev"
+INFO_PLIST = BUNDLE / "Contents/Info.plist"
 BUNDLE_ID = "local.minc.dev"
+LSREGISTER = Path(
+    "/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+    "LaunchServices.framework/Support/lsregister"
+)
+
+
+def bundle_manifest():
+    return plistlib.dumps({
+        "CFBundleName": "Minc Dev",
+        "CFBundleIdentifier": BUNDLE_ID,
+        "CFBundleExecutable": EXECUTABLE.name,
+        "CFBundlePackageType": "APPL",
+        "CFBundleDocumentTypes": [
+            {
+                "CFBundleTypeName": "Document",
+                "CFBundleTypeRole": "Editor",
+                "LSHandlerRank": "Alternate",
+                "LSItemContentTypes": ["public.data"],
+            },
+            {
+                "CFBundleTypeName": "Folder",
+                "CFBundleTypeRole": "Editor",
+                "LSHandlerRank": "Alternate",
+                "LSItemContentTypes": ["public.folder"],
+            },
+        ],
+    })
 
 
 def message(text):
@@ -53,7 +81,13 @@ def stop_preview():
 
 
 def deploy(activate_existing):
-    changed = not EXECUTABLE.is_file() or not filecmp.cmp(BUILD, EXECUTABLE, shallow=False)
+    manifest = bundle_manifest()
+    try:
+        manifest_changed = INFO_PLIST.read_bytes() != manifest
+    except FileNotFoundError:
+        manifest_changed = True
+    binary_changed = not EXECUTABLE.is_file() or not filecmp.cmp(BUILD, EXECUTABLE, shallow=False)
+    changed = binary_changed or manifest_changed
     if changed and EXECUTABLE.is_file() and not stop_preview():
         message("暂不更新：请在 Minc Dev 处理退出提示，下次保存代码或重跑脚本即可重试。")
         return False
@@ -62,16 +96,14 @@ def deploy(activate_existing):
 
     if changed:
         EXECUTABLE.parent.mkdir(parents=True, exist_ok=True)
-        with (BUNDLE / "Contents/Info.plist").open("wb") as manifest:
-            plistlib.dump({
-                "CFBundleName": "Minc Dev",
-                "CFBundleIdentifier": BUNDLE_ID,
-                "CFBundleExecutable": EXECUTABLE.name,
-                "CFBundlePackageType": "APPL",
-            }, manifest)
-        staging = EXECUTABLE.with_suffix(".new")
-        shutil.copy2(BUILD, staging)
-        staging.replace(EXECUTABLE)
+        if manifest_changed:
+            INFO_PLIST.write_bytes(manifest)
+        if binary_changed:
+            staging = EXECUTABLE.with_suffix(".new")
+            shutil.copy2(BUILD, staging)
+            staging.replace(EXECUTABLE)
+        if manifest_changed and LSREGISTER.is_file():
+            subprocess.run([str(LSREGISTER), "-f", str(BUNDLE)], check=False)
 
     try:
         restore = bool(json.loads(STATE.read_text()).get("last"))

@@ -752,10 +752,30 @@ pub fn plan_backspace(
     let blank = |l: usize| rope.line(l).chars().all(char::is_whitespace);
     if before.is_empty() && blank(line) {
         if blank(line - 1) {
+            let prev_is_content = line >= 2 && !blank(line - 2);
+            // 刚好剩 1 个空段（块间 3 个空行 `A\n\n|\n\nB` 或文末 2 个换行 `A\n\n|` / `A\n\n|\n`）：
+            // 退格一次删掉整个空段（2 个换行）并退回上一段末尾，避免光标落进段落分隔空行产生伪删除。
+            let empty_para_between = prev_is_content
+                && line + 2 < rope.len_lines()
+                && blank(line + 1)
+                && !blank(line + 2);
+            let empty_para_at_end = prev_is_content
+                && (line + 1 == rope.len_lines()
+                    || (line + 2 == rope.len_lines() && rope.line(line + 1).len_chars() == 0));
+            if empty_para_between || empty_para_at_end {
+                let delete_from = line_end(rope, line - 2);
+                let delete_to = line_end(rope, line);
+                if delete_from < delete_to {
+                    return Some(BackspaceAction::Replace {
+                        range: delete_from..delete_to,
+                        insert: String::new(),
+                        caret: Some(delete_from),
+                    });
+                }
+            }
             // 连续空行恰好剩 2 个（即 1 个额外空行 + 1 个常规段落分隔空行）且前后均有块时：
             // 删除这个额外空行并直接把光标退回上一段末尾，避免光标悬停在折叠分隔行上、
             // 再次退格时把两段误粘成同一行。
-            let prev_is_content = line >= 2 && !blank(line - 2);
             let next_is_content = line + 1 < rope.len_lines() && !blank(line + 1);
             if prev_is_content && next_is_content {
                 let delete_from = line_end(rope, line - 1);
@@ -777,7 +797,7 @@ pub fn plan_backspace(
                     });
                 }
             }
-            // 多余空行仍有 3 行以上时，普通退格逐行删除。
+            // 多余空行仍有更多时，普通退格逐行删除。
             return None;
         }
         // 光标落在两段之间唯一的分隔空行上时，退格只将光标移回上一段末尾，不把两段强行合并为一行。

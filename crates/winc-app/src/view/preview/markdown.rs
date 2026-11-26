@@ -18,7 +18,6 @@ use crate::theme::Palette;
 
 mod caret;
 mod line_numbers;
-mod note_footer;
 mod outline;
 mod resize;
 mod selection;
@@ -378,11 +377,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         return;
     };
     let pad = if area.w >= 600.0 { PAD } else { PAD_NARROW };
-    let widest = match app.config.markdown_text_width.unwrap_or_default() {
-        winc_config::TextWidth::Standard => MAX_WIDTH,
-        winc_config::TextWidth::Wide => WIDE_WIDTH,
-        winc_config::TextWidth::Full => f32::MAX,
-    };
+    let widest = app.markdown_content_width();
     let width = (area.w - pad * 2.0).clamp(1.0, widest).floor();
     let left = (area.x + (area.w - width) / 2.0).round();
     // 有标题列表时正文左侧为指示条留出位置，留白不足时正文右移并变窄。钉住的列表占一列，
@@ -400,11 +395,14 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     };
     // 钉住状态变化时正文按新宽度排版，左边缘从原位置过渡到新位置，与标题列表的过渡同步。
     let left = app.preview.markdown.toc.body_left(left);
-    let base = (app.fonts.code * BASE_RATIO).round();
+    let base = app.markdown_base_size();
     let (images_version, loaded) = app.preview.markdown.images.begin_layout();
     let key = Key {
         width,
         base,
+        line_height: app.markdown_line_height(),
+        paragraph_gap: app.markdown_paragraph_gap(),
+        fonts: app.font_rev,
         text: p.text,
         background: p.editor_bg,
         images: images_version,
@@ -729,9 +727,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         }
     });
     crate::frame_log::time_layout(|| laid.place(left, pad, app.live_upstream()));
-    app.note_links.footer_hits.clear();
-    let footer = note_footer::height(app);
-    app.preview.markdown.height = laid.height + pad * 2.0 + footer;
+    app.preview.markdown.height = laid.height + pad * 2.0;
     // 可编辑的预览与编辑区相同：内容高于一屏时，最后一行下方可以滚出一段空白。
     if app.markdown_live() && app.preview.markdown.height > area.h {
         app.preview.markdown.height += area.h * crate::layout::OVERSCROLL;
@@ -747,7 +743,6 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         app.align_markdown_once();
     }
     app.scroll_to_pending_anchor();
-    note_footer::follow_citation(app);
     app.hold_book_place();
     // `layout` 刚在上面放进去，取出时一定存在。
     let mut laid = app.preview.markdown.layout.take().expect("刚放进去");
@@ -1304,7 +1299,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         // 正文中的组字文字已排入所在的行，不再在其上重复绘制。
         let inline = laid.has_preedit();
         // 段落之后的空行上组字使用正文的字体，不沿用上方标题的字体。
-        let body = (winc_render::FontKind::Ui, Default::default(), key.base);
+        let body = (winc_render::FontKind::Body, Default::default(), key.base);
         let font = if blank || gap_row {
             Some(body)
         } else {
@@ -1312,12 +1307,8 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         };
         (point, (!inline).then_some(font))
     });
-    let footer_at = Rect::new(left, origin_y + laid.height, key.width, footer);
     md.layout = Some(laid);
     md.motion = motion;
-    if footer > 0.0 {
-        note_footer::draw(app, frame, footer_at, area);
-    }
     // 与源代码的光标相同，只在编辑区持有焦点时绘制；焦点在终端、查找条等处时不显示，
     // 也不占用输入法候选窗的位置。
     if let Some(((x, y, h), font)) = live_point.filter(|_| {

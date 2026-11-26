@@ -111,19 +111,6 @@ pub fn globe(frame: &mut Frame<'_>, (cx, cy): (f32, f32), k: f32, color: Color, 
     frame.stroke(&lines, RING_STROKE, color, clip);
 }
 
-/// 绘制「格式化」图标，14×10：四道长短、缩进各不相同的横线，表示排版后的代码。
-///
-/// 用于设置的分类栏。
-pub fn format(frame: &mut Frame<'_>, (cx, cy): (f32, f32), color: Color, clip: Rect) {
-    let lines = [
-        Stroke::Line(cx - 6.5, cy - 4.5, cx + 4.5, cy - 4.5),
-        Stroke::Line(cx - 2.5, cy - 1.5, cx + 6.5, cy - 1.5),
-        Stroke::Line(cx - 2.5, cy + 1.5, cx + 3.5, cy + 1.5),
-        Stroke::Line(cx - 6.5, cy + 4.5, cx + 0.5, cy + 4.5),
-    ];
-    frame.stroke(&lines, RING_STROKE, color, clip);
-}
-
 /// 绘制「终端」图标，15×11：圆角框，内有提示符 `>_`。
 ///
 /// 用于设置的分类栏。

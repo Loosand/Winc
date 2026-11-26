@@ -19,8 +19,7 @@ use winc_core::{Lines, Selection, movement};
 use winc_render::Renderer;
 
 use crate::app::{
-    App, Click, DOUBLE_CLICK, Drag, Focus, Hover, MenuCommand, TreeDrag, WindowControl,
-    resize_cursor,
+    App, Click, DOUBLE_CLICK, Drag, Focus, Hover, TreeDrag, WindowControl, resize_cursor,
 };
 use crate::layout::{
     RowAction, Scrollbar, SearchParts, SettingControl, SettingsPart, SidebarView, hit,

@@ -64,6 +64,7 @@ impl App {
             one_off: Default::default(),
             palette: DARK_THEMES[0].palette,
             fonts,
+            font_rev: 0,
             metrics: crate::app::lifecycle::TextMetrics {
                 ui: placeholder,
                 mono: placeholder,

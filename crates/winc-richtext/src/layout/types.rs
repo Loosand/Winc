@@ -104,6 +104,12 @@ pub struct Key {
     pub width: f32,
     /// 正文字号（逻辑像素）。
     pub base: f32,
+    /// 正文行高倍数。
+    pub line_height: f32,
+    /// 段落间距倍数（em）。
+    pub paragraph_gap: f32,
+    /// 字体版本号（切换正文或代码字体时递增）。
+    pub fonts: u64,
     /// 正文字色。
     pub text: Color,
     /// 背景底色。
@@ -221,12 +227,19 @@ pub(super) fn build_live_raw(
 pub(super) fn prepare_memo(memo: &mut Memo, key: Key) {
     memo.prepare(winc_typeset::memo_key(|h| {
         use std::hash::Hash;
-        for v in [key.width, key.base, key.tall] {
+        for v in [
+            key.width,
+            key.base,
+            key.line_height,
+            key.paragraph_gap,
+            key.tall,
+        ] {
             v.to_bits().hash(h);
         }
         for c in [key.text, key.background] {
             [c.r, c.g, c.b, c.a].map(f32::to_bits).hash(h);
         }
+        key.fonts.hash(h);
         key.images.hash(h);
         key.numbers.hash(h);
     }));
@@ -242,6 +255,8 @@ pub(super) fn build_cx<'a, 'f>(
     let cx = Cx {
         frame,
         base: key.base,
+        line_height: key.line_height,
+        paragraph_gap: key.paragraph_gap,
         token: input.token,
         surface: input.surface,
         accent: input.accent,

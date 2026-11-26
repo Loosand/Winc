@@ -11,7 +11,6 @@ use winc_preview::note_links::{LinkSyntax, extract};
 use super::*;
 use crate::app::preview::markdown::local_target;
 
-pub(crate) mod footer;
 #[cfg(test)]
 mod tests;
 
@@ -40,8 +39,9 @@ pub(crate) enum WikiResult<'a> {
     Missing,
 }
 
-/// One displayed citation. The original link is kept to validate the source location on open.
+/// One parsed note link citation.
 #[derive(Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct Citation {
     pub(crate) range: Range<usize>,
     pub(crate) before: String,
@@ -57,10 +57,12 @@ pub(crate) type Backlinks = BTreeMap<PathBuf, Vec<Citation>>;
 pub(crate) struct Index {
     notes: BTreeMap<PathBuf, Arc<Vec<Citation>>>,
     names: BTreeMap<String, Vec<PathBuf>>,
+    #[cfg_attr(not(test), allow(dead_code))]
     incoming: BTreeMap<PathBuf, Backlinks>,
 }
 
 impl Index {
+    #[cfg(test)]
     pub(crate) fn backlinks(&self, path: &Path) -> Option<&Backlinks> {
         self.incoming.get(path)
     }
@@ -304,9 +306,6 @@ pub(crate) struct State {
     pub(crate) index: Option<Arc<Index>>,
     queued: Option<Changes>,
     response: Option<mpsc::Receiver<Index>>,
-    pub(crate) expanded: BTreeMap<PathBuf, BTreeSet<PathBuf>>,
-    pub(crate) footer_hits: Vec<footer::Action>,
-    pub(crate) citation_jump: Option<(DocumentId, u64, usize)>,
 }
 
 impl App {

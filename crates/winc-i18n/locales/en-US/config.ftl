@@ -63,3 +63,6 @@ config-label-vim-yank-highlight = milliseconds a yank stays highlighted
 config-label-repository-scan-depth = repository scan depth
 config-label-lines = line count
 config-label-contrast = contrast
+config-label-line-height = line height
+config-label-content-width = content width
+config-label-paragraph-spacing = paragraph spacing

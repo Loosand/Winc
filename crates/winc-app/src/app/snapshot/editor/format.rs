@@ -287,7 +287,7 @@ fn failures_explain_themselves_and_leave_the_text_alone() {
     assert_eq!(app.editor.active().unwrap().name(), "安装格式化工具");
     assert!(text(&app).contains("npm install --global @biomejs/biome"));
 
-    // 这种语言没有自动使用的工具：提示条上的「去设置」打开设置的格式化一页。
+    // 这种语言没有自动使用的工具：在提示条中报错。
     std::fs::write(dir.join("Makefile"), "all:\n\ttrue\n").unwrap();
     app.open_path(&dir.join("Makefile"));
     app.format_active();
@@ -296,11 +296,7 @@ fn failures_explain_themselves_and_leave_the_text_alone() {
         app.notice.text.as_deref(),
         Some("无法格式化：Makefile 无可自动使用的格式化工具，请在设置中指定命令")
     );
-    assert_eq!(app.notice.action, Some(NoticeAction::FormatSettings));
-    app.run_notice_action();
-    assert!(app.settings.open);
-    assert_eq!(app.settings.selected.page(), SettingsPage::Format);
-    app.close_settings();
+    assert_eq!(app.notice.action, None);
 
     // 安装了排在候选列表后面的 Biome：改用 Biome。
     let biome = fake_tool(&dir.join("bin"), "biome", "tr a-z A-Z");
@@ -446,17 +442,7 @@ fn project_settings_win_but_run_only_after_asking() {
     app.open_path(&dir.join("README.md"));
     assert!(!app.formats_on_save(app.editor.active().unwrap().id));
 
-    // 设置页：JavaScript 这一行的 `project` 字段为项目设置中的命令，且没有警告。
-    app.open_settings();
-    let row = app.settings.format_row("javascript").unwrap();
-    assert_eq!(
-        row.project.as_deref(),
-        Some(format!("'{}'", tool.display()).as_str())
-    );
-    assert_eq!(row.warning, None);
-
     // 用户已选择不运行：提示原因，不格式化。
-    app.close_settings();
     app.state.set_tool_choice(&root.join(".winc"), false);
     app.open_path(&dir.join("app.js"));
     app.format_active();

@@ -96,6 +96,105 @@ fn notebook_switches_roots_and_creates_in_the_selected_folder() {
 }
 
 #[test]
+fn writing_workspace_drop_switches_folder_and_renders_file() {
+    use crate::app::DropZone;
+    use winc_editor::PreviewMode;
+
+    let first = winc_config::files::canonicalize(sample_folder("drop-ws-first")).unwrap();
+    let second = winc_config::files::canonicalize(sample_folder("drop-ws-second")).unwrap();
+    let outside = winc_config::files::canonicalize(sample_folder("drop-ws-outside")).unwrap();
+    let external_note = outside.join("dropped.md");
+    std::fs::write(&external_note, "# Dropped\n\nBody text.\n").unwrap();
+
+    let mut app = blank_app(false);
+    app.panels.sidebar.legacy_chrome = false;
+    paint(&mut app);
+
+    // 1. 空窗口下拖入 Markdown 文件（即使落在编辑区边缘）：直接打开并渲染，不拆窗格。
+    let editor = app.layout.editor;
+    let edge = (editor.right() - 12.0, editor.y + editor.h / 2.0);
+    app.on_mouse_move(edge.0, edge.1);
+    app.hover_file(&external_note);
+    assert_eq!(app.file_hover(), Some(&DropZone::Open(None)));
+    app.drop_file_at(&external_note, edge.0, edge.1);
+    app.editor.load_active();
+    app.poll_loads();
+    paint(&mut app);
+    assert_eq!(app.editor.panes.tree.panes().len(), 1);
+    assert_eq!(
+        app.editor.active().and_then(|d| d.path.as_deref()),
+        Some(external_note.as_path())
+    );
+    assert_eq!(
+        app.editor.active().map(|d| d.preview_mode()),
+        Some(PreviewMode::Preview)
+    );
+    assert!(app.editor.root().is_none());
+
+    // 2. 空窗口下拖入文件夹（落在编辑区）：切换并录入工作区，清掉先前的独立文件。
+    let center = (editor.x + editor.w / 2.0, editor.y + editor.h / 2.0);
+    app.on_mouse_move(center.0, center.1);
+    app.hover_file(&first);
+    assert_eq!(app.file_hover(), Some(&DropZone::NotebookSwitch));
+    app.drop_file_at(&first, center.0, center.1);
+    paint(&mut app);
+    assert_eq!(app.editor.root(), Some(first.as_path()));
+    assert_eq!(app.state.notebook_workspaces, std::slice::from_ref(&first));
+    assert!(app.editor.active().is_none());
+
+    // 3. 已有工作区时拖入外部 Markdown 文件到侧栏文件树：打开并渲染，不复制到工作区。
+    let tree = app.layout.tree;
+    let on_tree = (tree.x + 20.0, tree.y + 20.0);
+    app.on_mouse_move(on_tree.0, on_tree.1);
+    app.hover_file(&external_note);
+    assert_eq!(app.file_hover(), Some(&DropZone::Open(None)));
+    app.drop_file_at(&external_note, on_tree.0, on_tree.1);
+    app.editor.load_active();
+    app.poll_loads();
+    paint(&mut app);
+    assert_eq!(app.editor.root(), Some(first.as_path()));
+    assert_eq!(
+        app.editor.active().and_then(|d| d.path.as_deref()),
+        Some(external_note.as_path())
+    );
+    assert_eq!(
+        app.editor.active().map(|d| d.preview_mode()),
+        Some(PreviewMode::Preview)
+    );
+    assert!(!first.join("dropped.md").exists());
+
+    // 即使文件当前处于源码视图，再次拖入后也会回到渲染视图。
+    app.set_preview_mode(PreviewMode::Source);
+    assert_eq!(
+        app.editor.active().map(|d| d.preview_mode()),
+        Some(PreviewMode::Source)
+    );
+    app.drop_file_at(&external_note, on_tree.0, on_tree.1);
+    assert_eq!(
+        app.editor.active().map(|d| d.preview_mode()),
+        Some(PreviewMode::Preview)
+    );
+
+    // 4. 已有工作区时拖入另一个文件夹到编辑区：切换并录入工作区，保留原工作区记录。
+    let editor = app.layout.editor;
+    let center = (editor.x + editor.w / 2.0, editor.y + editor.h / 2.0);
+    app.on_mouse_move(center.0, center.1);
+    app.hover_file(&second);
+    assert_eq!(app.file_hover(), Some(&DropZone::NotebookSwitch));
+    app.drop_file_at(&second, center.0, center.1);
+    paint(&mut app);
+    assert_eq!(app.editor.root(), Some(second.as_path()));
+    assert_eq!(
+        app.state.notebook_workspaces,
+        [second.clone(), first.clone()]
+    );
+
+    for path in [first, second, outside] {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+#[test]
 fn a_folder_can_be_added_to_the_window_and_removed() {
     let main = winc_config::files::canonicalize(sample_folder("folders-main")).unwrap();
     let other = winc_config::files::canonicalize(search_folder("folders-other")).unwrap();

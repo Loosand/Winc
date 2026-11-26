@@ -21,6 +21,7 @@ pub(crate) use motion::FolderPose;
 
 pub(in crate::app) const HOME_ROW: f32 = 34.0;
 const GRID_TOP: f32 = 78.0;
+const FIRST_BATCH: usize = 24;
 const PREVIEW_BYTES: u64 = 4096;
 const PREVIEW_LINES: usize = 14;
 const LINE_CHARS: usize = 200;
@@ -132,6 +133,8 @@ impl Card {
 
 pub(crate) enum CardContent {
     Note(Vec<PreviewLine>),
+    /// 渐进加载第一阶段：已拿到笔记标题，正等待后台读取正文摘要。
+    PendingNote,
     Attachment(AttachmentKind),
     File,
     Folder(Option<FolderPreview>),
@@ -161,7 +164,22 @@ struct Snapshot {
     attachments: HashMap<PathBuf, AttachmentPreview>,
 }
 
-type Scan = (u64, io::Result<Snapshot>);
+enum ScanUpdate {
+    /// 第一阶段：拿到当前目录的条目列表后立刻上屏，用户可马上浏览和点击。
+    Listing(Vec<Card>),
+    /// 渐进批次：将第 `start` 项起已就绪的摘要、文件夹封面与缩略图原地填回卡片网格。
+    Batch {
+        start: usize,
+        cards: Vec<Card>,
+        attachments: HashMap<PathBuf, AttachmentPreview>,
+    },
+    /// 渐进扫描全部完成。
+    Done,
+    /// 非渐进刷新完成或发生错误：一次性替换整份快照，刷新途中保留旧网格。
+    Complete(io::Result<Snapshot>),
+}
+
+type Scan = (u64, ScanUpdate);
 
 pub(crate) struct Library {
     pub(crate) folder: Option<PathBuf>,
@@ -175,6 +193,7 @@ pub(crate) struct Library {
     generation: Arc<AtomicU64>,
     queued: bool,
     running: bool,
+    loading_since: Option<std::time::Instant>,
     scans: (mpsc::Sender<Scan>, mpsc::Receiver<Scan>),
 }
 
@@ -191,6 +210,7 @@ impl Default for Library {
             generation: Arc::default(),
             queued: false,
             running: false,
+            loading_since: None,
             scans: mpsc::channel(),
         }
     }
@@ -199,6 +219,22 @@ impl Default for Library {
 impl Library {
     pub(crate) fn loading(&self) -> bool {
         self.running || self.queued
+    }
+
+    /// 当前是否处于需要显示骨架/加载指示的状态（空网格等待目录，或卡片仍在补齐摘要）。
+    pub(crate) fn loading_visual(&self) -> bool {
+        self.loading()
+            && (self.cards.is_empty()
+                || self
+                    .cards
+                    .iter()
+                    .any(|card| matches!(card.content, CardContent::PendingNote)))
+    }
+
+    /// 骨架呼吸动画的已运行秒数。
+    pub(crate) fn loading_phase(&self) -> f32 {
+        self.loading_since
+            .map_or(0.0, |since| since.elapsed().as_secs_f32())
     }
 
     pub(crate) fn folder_pose(&self, card: usize) -> FolderPose {
@@ -464,6 +500,7 @@ impl App {
         self.library.pressed = None;
         self.library.generation.fetch_add(1, Ordering::Relaxed);
         self.library.queued = false;
+        self.library.loading_since = None;
     }
 
     fn set_library_folder(&mut self, folder: PathBuf) {
@@ -478,6 +515,7 @@ impl App {
         self.library.scroll = 0.0;
         self.library.folders = FolderMotion::default();
         self.library.pressed = None;
+        self.library.loading_since = Some(std::time::Instant::now());
         self.hits.library.clear();
         self.refresh_library();
     }
@@ -534,6 +572,23 @@ impl App {
         self.request_redraw();
     }
 
+    fn apply_library_batch(
+        &mut self,
+        start: usize,
+        cards: Vec<Card>,
+        attachments: HashMap<PathBuf, AttachmentPreview>,
+    ) {
+        for (offset, card) in cards.into_iter().enumerate() {
+            if let Some(slot) = self.library.cards.get_mut(start + offset)
+                && slot.path == card.path
+            {
+                *slot = card;
+            }
+        }
+        self.library.attachments.extend(attachments);
+        self.request_redraw();
+    }
+
     fn start_library_scan(&mut self) {
         if self.library.running || !self.library.queued {
             return;
@@ -541,6 +596,12 @@ impl App {
         let Some(folder) = self.library.folder.clone() else {
             return;
         };
+        let progressive = self.library.cards.is_empty();
+        if progressive {
+            self.library
+                .loading_since
+                .get_or_insert_with(std::time::Instant::now);
+        }
         self.library.queued = false;
         self.library.running = true;
         let generation = Arc::clone(&self.library.generation);
@@ -549,29 +610,204 @@ impl App {
         let show_hidden = self.panels.sidebar.show_hidden_files;
         let reverse = self.panels.sidebar.reverse_name_order;
         let sender = self.library.scans.0.clone();
+        let proxy = self.link.proxy.clone();
         self.spawn_then(UserEvent::LibraryScanned, move || {
-            let snapshot = match (root, winc_config::files::canonicalize(&folder)) {
+            let emit = |update: ScanUpdate| {
+                let _ = sender.send((version, update));
+                if let Some(proxy) = &proxy {
+                    let _ = proxy.send_event(UserEvent::LibraryScanned);
+                }
+            };
+            let result = match (root, winc_config::files::canonicalize(&folder)) {
                 (Some(root), Ok(path)) if folder.starts_with(&root) && path.starts_with(&root) => {
-                    scan_library(&root, &folder, show_hidden, reverse, || {
-                        generation.load(Ordering::Relaxed) != version
-                    })
+                    if progressive {
+                        scan_library_progressive(
+                            &root,
+                            &folder,
+                            show_hidden,
+                            reverse,
+                            || generation.load(Ordering::Relaxed) != version,
+                            &emit,
+                        )
+                        .map(|done| {
+                            if done {
+                                ScanUpdate::Done
+                            } else {
+                                ScanUpdate::Complete(Ok(Snapshot::default()))
+                            }
+                        })
+                    } else {
+                        scan_library(&root, &folder, show_hidden, reverse, || {
+                            generation.load(Ordering::Relaxed) != version
+                        })
+                        .map(|snapshot| ScanUpdate::Complete(Ok(snapshot)))
+                    }
                 }
                 (_, Err(error)) => Err(error),
                 _ => Err(io::Error::from(io::ErrorKind::PermissionDenied)),
             };
-            let _ = sender.send((version, snapshot));
+            let final_update = match result {
+                Ok(update) => update,
+                Err(error) => ScanUpdate::Complete(Err(error)),
+            };
+            let _ = sender.send((version, final_update));
         });
     }
 
     pub(in crate::app) fn poll_library(&mut self) {
-        if let Ok((version, snapshot)) = self.library.scans.1.try_recv() {
-            self.library.running = false;
-            if version == self.library.generation.load(Ordering::Relaxed) {
-                self.show_library_snapshot(snapshot);
+        let current = self.library.generation.load(Ordering::Relaxed);
+        while let Ok((version, update)) = self.library.scans.1.try_recv() {
+            match update {
+                ScanUpdate::Listing(cards) => {
+                    if version == current && self.library.cards.is_empty() {
+                        self.library.cards = cards;
+                        self.library.error = None;
+                        self.set_pane_scroll(ScrollTarget::Library, self.library.scroll);
+                        self.request_redraw();
+                    }
+                }
+                ScanUpdate::Batch {
+                    start,
+                    cards,
+                    attachments,
+                } => {
+                    if version == current {
+                        self.apply_library_batch(start, cards, attachments);
+                    }
+                }
+                ScanUpdate::Done => {
+                    self.library.running = false;
+                    if version == current {
+                        self.library.loading_since = None;
+                        self.request_redraw();
+                    }
+                }
+                ScanUpdate::Complete(snapshot) => {
+                    self.library.running = false;
+                    if version == current {
+                        self.library.loading_since = None;
+                        self.show_library_snapshot(snapshot);
+                    }
+                }
             }
         }
         self.start_library_scan();
     }
+}
+
+fn sorted_entries(folder: &Path, show_hidden: bool, reverse: bool) -> io::Result<Vec<DirEntry>> {
+    let mut entries = visible_entries(folder, show_hidden)?;
+    if reverse {
+        let split = entries.partition_point(|entry| entry.kind == EntryKind::Dir);
+        entries[..split].reverse();
+        entries[split..].reverse();
+    }
+    Ok(entries)
+}
+
+fn placeholder_card(entry: &DirEntry) -> Card {
+    if entry.kind == EntryKind::Dir {
+        Card {
+            path: entry.path.clone(),
+            name: entry.name.clone(),
+            content: CardContent::Folder(None),
+        }
+    } else if !entry.symlink && is_markdown(&entry.path) {
+        Card {
+            path: entry.path.clone(),
+            name: note_name(entry),
+            content: CardContent::PendingNote,
+        }
+    } else if !entry.symlink
+        && let Some(kind) = AttachmentKind::of(&entry.path)
+    {
+        Card {
+            path: entry.path.clone(),
+            name: entry.name.clone(),
+            content: CardContent::Attachment(kind),
+        }
+    } else {
+        Card {
+            path: entry.path.clone(),
+            name: entry.name.clone(),
+            content: CardContent::File,
+        }
+    }
+}
+
+fn scan_entry(
+    root: &Path,
+    entry: DirEntry,
+    show_hidden: bool,
+    attachments: &mut HashMap<PathBuf, AttachmentPreview>,
+) -> Card {
+    let card = if entry.kind == EntryKind::Dir {
+        let preview = (!entry.symlink
+            && winc_config::files::canonicalize(&entry.path)
+                .is_ok_and(|path| path.starts_with(root))
+            && winc_backend::fs::symlink_metadata(&entry.path).is_ok_and(|meta| meta.is_dir()))
+        .then(|| folder_preview(root, &entry.path, show_hidden))
+        .flatten();
+        Card {
+            path: entry.path,
+            name: entry.name,
+            content: CardContent::Folder(preview),
+        }
+    } else {
+        file_card(root, entry)
+    };
+    if let Some((path, kind)) = card.attachment()
+        && let Some(preview) = attachment::load(root, path, kind)
+    {
+        attachments.insert(path.to_path_buf(), preview);
+    }
+    card
+}
+
+/// 渐进扫描：先立刻发回目录项占位卡片，再按批次流式补齐封面、摘要与附件缩略图。
+///
+/// 返回 `Ok(true)` 表示已发回占位并按批次完成；`Ok(false)` 表示目录为空。
+fn scan_library_progressive(
+    root: &Path,
+    folder: &Path,
+    show_hidden: bool,
+    reverse: bool,
+    canceled: impl Fn() -> bool,
+    emit: &impl Fn(ScanUpdate),
+) -> io::Result<bool> {
+    let entries = sorted_entries(folder, show_hidden, reverse)?;
+    if entries.is_empty() {
+        return Ok(false);
+    }
+    let listing = entries.iter().map(placeholder_card).collect();
+    emit(ScanUpdate::Listing(listing));
+
+    let mut batch_start = 0usize;
+    let mut batch_cards = Vec::with_capacity(FIRST_BATCH.min(entries.len()));
+    let mut batch_attachments = HashMap::new();
+    for (index, entry) in entries.into_iter().enumerate() {
+        if canceled() {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        let card = scan_entry(root, entry, show_hidden, &mut batch_attachments);
+        batch_cards.push(card);
+        if batch_cards.len() >= FIRST_BATCH {
+            emit(ScanUpdate::Batch {
+                start: batch_start,
+                cards: std::mem::take(&mut batch_cards),
+                attachments: std::mem::take(&mut batch_attachments),
+            });
+            batch_start = index + 1;
+        }
+    }
+    if !batch_cards.is_empty() {
+        emit(ScanUpdate::Batch {
+            start: batch_start,
+            cards: batch_cards,
+            attachments: batch_attachments,
+        });
+    }
+    Ok(true)
 }
 
 fn scan_library(
@@ -581,12 +817,7 @@ fn scan_library(
     reverse: bool,
     canceled: impl Fn() -> bool,
 ) -> io::Result<Snapshot> {
-    let mut entries = visible_entries(folder, show_hidden)?;
-    if reverse {
-        let split = entries.partition_point(|entry| entry.kind == EntryKind::Dir);
-        entries[..split].reverse();
-        entries[split..].reverse();
-    }
+    let entries = sorted_entries(folder, show_hidden, reverse)?;
     let mut snapshot = Snapshot {
         cards: Vec::with_capacity(entries.len()),
         attachments: HashMap::new(),
@@ -595,26 +826,7 @@ fn scan_library(
         if canceled() {
             return Err(io::Error::from(io::ErrorKind::Interrupted));
         }
-        let card = if entry.kind == EntryKind::Dir {
-            let preview = (!entry.symlink
-                && winc_config::files::canonicalize(&entry.path)
-                    .is_ok_and(|path| path.starts_with(root))
-                && winc_backend::fs::symlink_metadata(&entry.path).is_ok_and(|meta| meta.is_dir()))
-            .then(|| folder_preview(root, &entry.path, show_hidden))
-            .flatten();
-            Card {
-                path: entry.path,
-                name: entry.name,
-                content: CardContent::Folder(preview),
-            }
-        } else {
-            file_card(root, entry)
-        };
-        if let Some((path, kind)) = card.attachment()
-            && let Some(preview) = attachment::load(root, path, kind)
-        {
-            snapshot.attachments.insert(path.to_path_buf(), preview);
-        }
+        let card = scan_entry(root, entry, show_hidden, &mut snapshot.attachments);
         snapshot.cards.push(card);
     }
     Ok(snapshot)

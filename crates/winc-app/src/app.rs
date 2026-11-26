@@ -198,8 +198,6 @@ pub enum UserEvent {
     RunApproved(Box<winc_config::RunConfig>),
     /// 提示框中回答了是否信任 Git 仓库（第一个参数）指纹为第二个参数的配置。
     GitTrust(PathBuf, u64, bool),
-    /// 已取得用户 shell 的环境，格式化工具在其 `PATH` 中查找。
-    FormatterReady,
     /// 后台查找定义有新进展。
     Definitions,
     /// 已打开目录中有文件被外部修改。
@@ -871,6 +869,8 @@ pub struct App {
     pub palette: &'static Palette,
     /// 界面字体和等宽字体的字体、字号。
     pub fonts: ViewFonts,
+    /// 字体重载版本号，切换正文或代码字体时递增以失效排版缓存。
+    pub(crate) font_rev: u64,
     /// 各字体的行高、基线等尺寸和字符格的宽度（逻辑像素），随字体设置和缩放比例更新。
     pub(crate) metrics: lifecycle::TextMetrics,
 

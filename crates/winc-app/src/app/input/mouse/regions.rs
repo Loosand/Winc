@@ -74,14 +74,6 @@ impl App {
                 self.settings.selected = crate::layout::Setting::Theme;
                 self.set_theme_choice(choice);
             }
-            Some(SettingsPart::NamedTheme(dark, index)) => {
-                self.settings.selected = if dark {
-                    crate::layout::Setting::DarkTheme
-                } else {
-                    crate::layout::Setting::LightTheme
-                };
-                self.set_named_theme(dark, index);
-            }
             Some(SettingsPart::Switch(setting)) => {
                 self.settings.selected = setting;
                 self.settings_toggle(setting);
@@ -110,9 +102,6 @@ impl App {
             }
             Some(SettingsPart::Copy(setting)) => self.settings_copy_value(setting),
             Some(SettingsPart::Link(setting)) => self.settings_open_link(setting),
-            Some(SettingsPart::Install(id)) => {
-                self.settings_choose_tool(id, MenuCommand::ToolInstall);
-            }
             None => {
                 // 点在卡片内的空白处：落在某一行上时选中该行，焦点回到浮层。
                 if let Some(row) = layout.rows.iter().find(|r| r.row.contains(x, y)) {
@@ -339,8 +328,8 @@ impl App {
         self.focus = Focus::Tree;
         let (command, shift) = (self.command_held(), self.pointer.modifiers.shift_key());
 
-        // 点在最后一行下面的空白处：不选中任何一项，此时新建的内容放在根目录；
-        // 双击则在根目录新建文件。
+        // 点在最后一行下面的空白处：不选中任何一项；笔记库侧栏下回到主页，
+        // 其余工作区双击在根目录新建文件。
         if self.tree_blank_at(y) {
             let count = self.click_count(x, y);
             if let Some(ws) = &mut self.editor.workspace {
@@ -348,6 +337,10 @@ impl App {
                     return;
                 }
                 ws.select(None);
+                if self.notebook_sidebar() {
+                    self.browse_library();
+                    return;
+                }
                 if count == 2 {
                     self.start_new_entry(false);
                 }

@@ -307,14 +307,12 @@ impl App {
     /// 目标文档已不存在时不弹出。
     pub(in crate::app) fn open_context_menu(&mut self, target: MenuTarget, at: (f32, f32)) {
         let entries = match &target {
-            &MenuTarget::AddLanguage(task) => {
-                let listed = match task {
-                    Task::Format => &self.settings.languages.format,
-                    Task::Fix => &self.settings.languages.fix,
-                };
-                language_menu(task, listed)
-            }
-            MenuTarget::SkipOnSave => skip_menu(&self.settings.languages.format),
+            MenuTarget::LightTheme | MenuTarget::DarkTheme => theme_default_menu(),
+            MenuTarget::BodyFont => body_font_menu(),
+            MenuTarget::CodeFont => code_font_menu(self.config.editor_font.as_deref()),
+            MenuTarget::LineHeight => line_height_menu(),
+            MenuTarget::ContentWidth => content_width_menu(),
+            MenuTarget::ParagraphSpacing => paragraph_spacing_menu(),
             MenuTarget::Locale => locale_menu(),
             MenuTarget::Whitespace => whitespace_menu(),
             MenuTarget::VimClipboard => vim_clipboard_menu(),
@@ -334,12 +332,6 @@ impl App {
             MenuTarget::TerminalTabPosition => terminal_tab_position_menu(),
             MenuTarget::OptionAsMeta => option_as_meta_menu(),
             &MenuTarget::Font(setting) => font_menu(setting, self.font_value(setting).as_deref()),
-            &MenuTarget::Tool(task, id) => {
-                let row = self.settings.tool_row(tool_setting(task, id));
-                let install = row.is_some_and(|r| !r.install.is_empty());
-                let removable = row.is_some_and(|r| r.removable);
-                tool_menu(task, id, install, removable)
-            }
             MenuTarget::Project => {
                 let root = self.editor.root();
                 let current = root.and_then(|r| self.state.recent.iter().position(|p| p == r));
@@ -756,6 +748,13 @@ impl App {
             target,
             MenuTarget::CommitButton
                 | MenuTarget::TabList
+                | MenuTarget::LightTheme
+                | MenuTarget::DarkTheme
+                | MenuTarget::BodyFont
+                | MenuTarget::CodeFont
+                | MenuTarget::LineHeight
+                | MenuTarget::ContentWidth
+                | MenuTarget::ParagraphSpacing
                 | MenuTarget::Locale
                 | MenuTarget::Whitespace
                 | MenuTarget::VimClipboard
@@ -771,18 +770,20 @@ impl App {
                 | MenuTarget::OptionAsMeta
                 | MenuTarget::Font(_)
         );
-        // 设置中语言、字体等选项的菜单不窄于弹出它的控件。
+        // 设置中下拉选项的菜单不窄于弹出它的控件。
         let control = match target {
-            MenuTarget::Locale => Some(Setting::Language),
+            MenuTarget::LightTheme => Some(Setting::LightTheme),
+            MenuTarget::DarkTheme => Some(Setting::DarkTheme),
+            MenuTarget::BodyFont => Some(Setting::BodyFont),
+            MenuTarget::CodeFont => Some(Setting::CodeFont),
+            MenuTarget::LineHeight => Some(Setting::LineHeight),
+            MenuTarget::ContentWidth => Some(Setting::ContentWidth),
+            MenuTarget::ParagraphSpacing => Some(Setting::ParagraphSpacing),
             MenuTarget::Whitespace => Some(Setting::RenderWhitespace),
             MenuTarget::VimClipboard => Some(Setting::VimClipboard),
             MenuTarget::OpenWorktree => Some(Setting::GitOpenWorktree),
             MenuTarget::DropFolder => Some(Setting::DropFolder),
             MenuTarget::AutoSave => Some(Setting::AutoSave),
-            MenuTarget::Zoom => Some(Setting::Zoom),
-            MenuTarget::BackgroundImage => Some(Setting::BackgroundImage),
-            MenuTarget::BackgroundFit => Some(Setting::BackgroundFit),
-            MenuTarget::TextWidth => Some(Setting::TextWidth),
             MenuTarget::TerminalPosition => Some(Setting::TerminalPosition),
             MenuTarget::TerminalTabPosition => Some(Setting::TerminalTabPosition),
             MenuTarget::OptionAsMeta => Some(Setting::TerminalOptionAsMeta),

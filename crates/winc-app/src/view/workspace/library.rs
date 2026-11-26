@@ -65,10 +65,22 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         ui_text(frame, app, x, subtitle, &label, p.text_muted, subtitle);
     }
 
+    let animate = app.animations_on();
+    let phase = if animate {
+        app.library.loading_phase()
+    } else {
+        0.0
+    };
+    if app.library.loading_visual() {
+        draw_loading_status(app, frame, title_rect, animate);
+    }
+
     if app.library.cards.is_empty() {
-        let msg = if app.library.loading() {
-            t!("workspace-library-loading").to_owned()
-        } else if let Some(error) = &app.library.error {
+        if app.library.loading() {
+            draw_skeleton_grid(frame, p, area, phase, animate);
+            return;
+        }
+        let msg = if let Some(error) = &app.library.error {
             t!("workspace-library-failed", error = error.as_str())
         } else {
             t!("workspace-library-empty").to_owned()
@@ -83,6 +95,7 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         .library
         .scroll
         .min(grid.max_scroll(app.library.cards.len()));
+    let folder_clip = Rect::new(area.x, grid.body.y - 6.0, area.w, grid.body.h + 6.0);
     for index in grid.visible(app.library.cards.len(), scroll) {
         let c = &app.library.cards[index];
         let rect = grid.card(index, scroll, matches!(c.content, CardContent::Folder(_)));
@@ -94,7 +107,6 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         let hover = matches!(app.pointer.hover, Hover::Library(
             LibraryTarget::Card(i) | LibraryTarget::NewInFolder(i) | LibraryTarget::FolderMenu(i)
         ) if i == index);
-        let folder_clip = Rect::new(area.x, grid.body.y - 6.0, area.w, grid.body.h + 6.0);
         let paint_clip = if matches!(c.content, CardContent::Folder(_)) {
             rect.inset(-6.0, -6.0).intersect(folder_clip)
         } else {
@@ -110,6 +122,10 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
             CardContent::Note(lines) => {
                 brush.sheet(frame, rect, brush.edge(), 16.0);
                 brush.page(frame, rect, &c.name, lines, true);
+            }
+            CardContent::PendingNote => {
+                brush.sheet(frame, rect, brush.edge(), 16.0);
+                brush.pending_page(frame, rect, &c.name, skeleton_wave(phase, index, animate));
             }
             CardContent::File | CardContent::Attachment(_) => {
                 brush.sheet(frame, rect, brush.edge(), 16.0);
@@ -165,6 +181,111 @@ pub(super) fn draw_grid_scrollbar(app: &mut App, frame: &mut Frame<'_>) {
     );
 }
 
+/// 计算每张骨架卡片的呼吸亮度（`0.0..=1.0`），按卡片序号微错峰形成平缓波纹。
+fn skeleton_wave(phase: f32, index: usize, animate: bool) -> f32 {
+    if !animate {
+        return 0.5;
+    }
+    0.5 + 0.5 * (phase * 3.6 - index as f32 * 0.42).sin()
+}
+
+/// 在标题行右端绘制轻量的旋转圆弧与「正在读取文件夹…」提示，避免大目录等待时空白无反馈。
+fn draw_loading_status(app: &App, frame: &mut Frame<'_>, title_rect: Rect, animate: bool) {
+    use std::f32::consts::{FRAC_PI_2, PI, TAU};
+
+    let p = app.palette;
+    let label = t!("workspace-library-loading");
+    let size = app.fonts.ui_small;
+    let text_w = frame.measure(FontKind::Ui, size, label);
+    let spinner_gap = 18.0;
+    let total_w = spinner_gap + text_w;
+    if total_w + 80.0 > title_rect.w {
+        return;
+    }
+    let left = title_rect.right() - total_w;
+    let cy = title_rect.y + 20.0;
+    let cx = left + 5.5;
+    let radius = 4.5;
+    frame.stroke(
+        &[Stroke::Circle(cx, cy, radius)],
+        1.3,
+        p.separator,
+        title_rect,
+    );
+    let start = if animate {
+        icons::spin_turn().rem_euclid(1.0) * TAU - PI
+    } else {
+        -FRAC_PI_2
+    };
+    frame.stroke(
+        &[Stroke::Arc(cx, cy, radius, start, start + 2.2)],
+        1.3,
+        p.text_muted,
+        title_rect,
+    );
+    let label_rect = Rect::new(left + spinner_gap, title_rect.y + 8.0, text_w + 4.0, 24.0);
+    ui_text_small(
+        frame,
+        app,
+        label_rect.x,
+        label_rect,
+        label,
+        p.text_muted,
+        title_rect,
+    );
+}
+
+/// 尚未收到目录条目时，按与真实纸张卡片一致的 5:6 网格绘制带柔和呼吸动效的骨架卡片。
+fn draw_skeleton_grid(frame: &mut Frame<'_>, p: &Palette, area: Rect, phase: f32, animate: bool) {
+    let grid = Grid::for_cards(area, false);
+    let count = (grid.cols * 2).clamp(4, 12);
+    let ink = if p.dark {
+        Color::hex(0xffffff)
+    } else {
+        Color::hex(0)
+    };
+    for index in 0..count {
+        let rect = grid.card(index, 0.0, false);
+        let clip = rect.intersect(grid.body);
+        if clip.w <= 0.0 || clip.h <= 0.0 {
+            continue;
+        }
+        let wave = skeleton_wave(phase, index, animate);
+        let brush = CardBrush {
+            p,
+            clip,
+            shadow_clip: grid.body,
+            hot: false,
+        };
+        brush.sheet(frame, rect, p.border.alpha(0.55), 16.0);
+
+        let margin = (rect.w * 0.075).clamp(10.0, 22.0);
+        let body = rect.inset(margin, margin);
+        let inner = clip.intersect(body);
+        if inner.w <= 0.0 || inner.h <= 0.0 {
+            continue;
+        }
+        let title_h = (rect.w * 0.068).clamp(11.0, 16.0);
+        let title_frac = [0.64, 0.52, 0.72, 0.58][index % 4];
+        let title_bar = Rect::new(body.x, body.y + 2.0, body.w * title_frac, title_h);
+        frame.rect_clipped(title_bar, ink.alpha(0.075 + 0.045 * wave), 4.5, inner);
+        let body_brush = CardBrush {
+            p,
+            clip: inner,
+            shadow_clip: grid.body,
+            hot: false,
+        };
+        body_brush.skeleton_lines(
+            frame,
+            body,
+            title_bar.bottom() + (rect.w * 0.06).clamp(10.0, 16.0),
+            rect.w,
+            wave,
+            index,
+        );
+    }
+}
+
 const BOLD: Faux = Faux {
     bold: true,
     italic: false,
@@ -194,6 +315,73 @@ impl CardBrush<'_> {
             (radius - 1.0).max(0.0),
             self.clip,
         );
+    }
+
+    fn pending_page(&self, frame: &mut Frame<'_>, rect: Rect, title: &str, wave: f32) {
+        let margin = (rect.w * 0.075).clamp(10.0, 22.0);
+        let body = rect.inset(margin, margin);
+        let clip = self.clip.intersect(body);
+        if clip.w <= 0.0 || clip.h <= 0.0 {
+            return;
+        }
+        let title_size = (rect.w * 0.074).clamp(12.0, 20.0);
+        let title_lines = crate::layout::wrap_text(title, body.w, |s| {
+            frame.measure_faux(FontKind::Ui, BOLD, title_size, s)
+        });
+        let mut y = body.y + title_size;
+        for line in title_lines.iter().take(2) {
+            frame.text_faux(
+                FontKind::Ui,
+                BOLD,
+                title_size,
+                body.x,
+                y,
+                line,
+                self.p.text,
+                clip,
+            );
+            y += title_size * 1.18;
+        }
+        let body_brush = CardBrush {
+            p: self.p,
+            clip,
+            shadow_clip: self.shadow_clip,
+            hot: false,
+        };
+        body_brush.skeleton_lines(frame, body, y + 4.0, rect.w, wave, 0);
+    }
+
+    fn skeleton_lines(
+        &self,
+        frame: &mut Frame<'_>,
+        body: Rect,
+        start_y: f32,
+        card_w: f32,
+        wave: f32,
+        seed: usize,
+    ) {
+        let ink = if self.p.dark {
+            Color::hex(0xffffff)
+        } else {
+            Color::hex(0)
+        };
+        let line_h = (card_w * 0.036).clamp(6.0, 9.0);
+        let stride = line_h * 2.1;
+        let color = ink.alpha(0.045 + 0.035 * wave);
+        let patterns: [[f32; 5]; 3] = [
+            [0.92, 0.84, 0.96, 0.72, 0.48],
+            [0.86, 0.95, 0.78, 0.88, 0.42],
+            [0.94, 0.76, 0.90, 0.68, 0.56],
+        ];
+        let widths = patterns[seed % patterns.len()];
+        for (i, frac) in widths.into_iter().enumerate() {
+            let y = start_y + i as f32 * stride;
+            if y + line_h > body.bottom() {
+                break;
+            }
+            let bar = Rect::new(body.x, y, body.w * frac, line_h);
+            frame.rect_clipped(bar, color, line_h / 2.0, self.clip);
+        }
     }
 
     fn file(&self, frame: &mut Frame<'_>, rect: Rect, name: &str) {

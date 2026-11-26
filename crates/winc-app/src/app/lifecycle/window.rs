@@ -93,6 +93,16 @@ impl App {
                 continue;
             }
             self.open_path(&target.path);
+            if self.writing_workspace() && target.line.is_none() {
+                self.when_loaded(|app| {
+                    if app.editor.active().is_some_and(|doc| {
+                        doc.preview_kind() == Some(winc_editor::PreviewKind::Markdown)
+                            && doc.preview_mode() != winc_editor::PreviewMode::Preview
+                    }) {
+                        app.set_preview_mode(winc_editor::PreviewMode::Preview);
+                    }
+                });
+            }
             self.note_opened_file(&target.path);
             if let Some(line) = target.line {
                 self.jump_to(line, target.col.unwrap_or(0), 0);

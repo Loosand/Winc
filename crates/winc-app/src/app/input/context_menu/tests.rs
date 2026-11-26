@@ -166,8 +166,6 @@ fn menus_depend_on_what_was_clicked() {
             (AddBookmark, true),
             (RemoveBookmark, false),
             (ListBookmarks, true),
-            (Format, true),
-            (Fix, true),
             (Cut, true),
             (Copy, true),
             (Paste, true),
@@ -182,18 +180,11 @@ fn menus_depend_on_what_was_clicked() {
             (AddBookmark, true),
             (RemoveBookmark, false),
             (ListBookmarks, true),
-            (Format, false),
-            (Fix, false),
             (Cut, false),
             (Copy, true),
             (Paste, false),
             (CopyReference, true)
         ]
-    );
-    // 有选区时多一项「格式化选中部分」。
-    assert_eq!(
-        commands(editor_menu(true, true, true))[6],
-        (FormatSelection, true)
     );
     // 光标所在行已有书签时只能删除，不能重复添加。
     let marked = commands(editor_menu(true, false, true));

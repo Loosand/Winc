@@ -473,6 +473,7 @@ impl App {
                 .any(|(badge, status)| badge.w > 0.0 && badge.h > 0.0 && status.transferring())
                 && self.animations_on())
             || self.library.animating()
+            || (self.library_shown() && self.library.loading_visual() && self.animations_on())
             || self.log_tree_animating()
             || self.panels.tree.labels.moving()
             || self.git.commit.names.moving()

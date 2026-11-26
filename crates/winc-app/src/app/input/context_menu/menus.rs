@@ -443,11 +443,11 @@ pub fn hex_menu(selected: bool) -> Vec<MenuEntry> {
     ]
 }
 
-pub fn editor_menu(editable: bool, selected: bool, bookmarked: bool) -> Vec<MenuEntry> {
+pub fn editor_menu(editable: bool, _selected: bool, bookmarked: bool) -> Vec<MenuEntry> {
     use MenuCommand::*;
     use MenuEntry::{Item, Separator};
 
-    let mut menu = vec![
+    vec![
         Item(GoToDefinition, true),
         Item(FindReferences, true),
         Separator,
@@ -455,20 +455,11 @@ pub fn editor_menu(editable: bool, selected: bool, bookmarked: bool) -> Vec<Menu
         Item(RemoveBookmark, bookmarked),
         Item(ListBookmarks, true),
         Separator,
-        Item(Format, editable),
-    ];
-    if selected {
-        menu.push(Item(FormatSelection, editable));
-    }
-    menu.push(Item(Fix, editable));
-    menu.extend([
-        Separator,
         Item(Cut, editable),
         Item(Copy, true),
         Item(Paste, editable),
         Item(CopyReference, true),
-    ]);
-    menu
+    ]
 }
 
 /// 返回终端里的菜单项：右键点在命令块上时（`block`：报了命令行，能不能重新运行）先是复制命令、
@@ -582,39 +573,68 @@ pub fn project_menu(
     menu
 }
 
-/// 返回 `task`（格式化或修复）那一组「添加语言…」菜单的菜单项：这一组尚未列出的语言，有这类
-/// 预设工具的排在前面，与其余语言之间用分隔线隔开。
-///
-/// `listed` 为这一组已列出的语言 ID。
-pub fn language_menu(task: Task, listed: &[&str]) -> Vec<MenuEntry> {
-    use MenuEntry::{Item, Separator};
-
-    let (with_presets, others): (Vec<_>, Vec<_>) = winc_syntax::languages()
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| !listed.contains(&l.id))
-        .partition(|(_, l)| winc_editor::format::presets(task, l.id).next().is_some());
-    let item = |(i, _)| Item(MenuCommand::Language(i), true);
-
-    let mut menu: Vec<MenuEntry> = with_presets.into_iter().map(item).collect();
-    if !menu.is_empty() && !others.is_empty() {
-        menu.push(Separator);
-    }
-    menu.extend(others.into_iter().map(item));
-    menu
-}
-
-/// 返回设置中 `id` 语言的 `task`（格式化或修复）工具所在的设置项。
-pub(in crate::app) fn tool_setting(task: Task, id: &'static str) -> Setting {
-    match task {
-        Task::Format => Setting::FormatCommand(id),
-        Task::Fix => Setting::FixCommand(id),
-    }
-}
-
 /// 返回在按钮下方弹出菜单时传给系统的位置：菜单外框的上沿与按钮相距 [`MENU_GAP`]，左边与按钮对齐。
 pub(in crate::app) fn menu_below(button: Rect) -> (f32, f32) {
     (button.x, button.bottom() + MENU_GAP + MENU_TOP_PADDING)
+}
+
+/// 返回外观页浅色/深色主题菜单的菜单项（当前仅提供官方默认主题）。
+pub fn theme_default_menu() -> Vec<MenuEntry> {
+    vec![MenuEntry::Item(MenuCommand::ThemeDefault, true)]
+}
+
+/// 返回外观页「正文字体」菜单的菜单项：第一项为「自动（跟随主题）」，其后为本地已安装的字族。
+pub fn body_font_menu() -> Vec<MenuEntry> {
+    let mut menu = vec![MenuEntry::Item(MenuCommand::BodyFontDefault, true)];
+    menu.extend(
+        (0..winc_render::installed_fonts().len())
+            .map(|i| MenuEntry::Item(MenuCommand::BodyFont(i), true)),
+    );
+    menu
+}
+
+/// 返回外观页「代码字体」菜单的菜单项：第一项为「自动（跟随主题）」，其后为本地已安装的等宽字族。
+pub fn code_font_menu(current: Option<&str>) -> Vec<MenuEntry> {
+    let primary = winc_config::font_list(current).first().copied();
+    let mut menu = vec![MenuEntry::Item(MenuCommand::CodeFontDefault, true)];
+    menu.extend(
+        winc_render::installed_fonts()
+            .iter()
+            .enumerate()
+            .filter(|(_, family)| family.monospace || primary == Some(family.name.as_str()))
+            .map(|(i, _)| MenuEntry::Item(MenuCommand::CodeFont(i), true)),
+    );
+    menu
+}
+
+/// 返回外观页「行高」菜单的菜单项。
+pub fn line_height_menu() -> Vec<MenuEntry> {
+    std::iter::once(MenuEntry::Item(MenuCommand::LineHeight(None), true))
+        .chain(
+            (0..crate::layout::LINE_HEIGHT_OPTIONS.len())
+                .map(|i| MenuEntry::Item(MenuCommand::LineHeight(Some(i)), true)),
+        )
+        .collect()
+}
+
+/// 返回外观页「内容宽度」菜单的菜单项。
+pub fn content_width_menu() -> Vec<MenuEntry> {
+    std::iter::once(MenuEntry::Item(MenuCommand::ContentWidth(None), true))
+        .chain(
+            (0..crate::layout::CONTENT_WIDTH_OPTIONS.len())
+                .map(|i| MenuEntry::Item(MenuCommand::ContentWidth(Some(i)), true)),
+        )
+        .collect()
+}
+
+/// 返回外观页「段落间距」菜单的菜单项。
+pub fn paragraph_spacing_menu() -> Vec<MenuEntry> {
+    std::iter::once(MenuEntry::Item(MenuCommand::ParagraphSpacing(None), true))
+        .chain(
+            (0..crate::layout::PARAGRAPH_SPACING_OPTIONS.len())
+                .map(|i| MenuEntry::Item(MenuCommand::ParagraphSpacing(Some(i)), true)),
+        )
+        .collect()
 }
 
 /// 返回「语言」菜单的菜单项：跟随系统和各种语言，当前的选择打勾。
@@ -732,43 +752,21 @@ pub(crate) const COMMON_FONTS: &[&str] = &[
     "Ubuntu Mono",
 ];
 
-/// 界面字体菜单中直接列出的常用界面字体：各平台的系统界面字体及其中文字体和常见的开源界面
-/// 字体，按字母顺序。
-pub(crate) const COMMON_UI_FONTS: &[&str] = &[
-    "Cantarell",
-    "DejaVu Sans",
-    "Helvetica Neue",
-    "Hiragino Sans GB",
-    "Inter",
-    "Microsoft YaHei",
-    "Noto Sans",
-    "Noto Sans SC",
-    "PingFang SC",
-    "Roboto",
-    "SF Pro",
-    "Segoe UI",
-    "Source Han Sans SC",
-    "Ubuntu",
-];
-
 /// 返回字体菜单的菜单项：第一项是「系统默认」（终端字体为「跟随编辑器」），其后是已安装的
 /// 字族，当前的选择打勾；最后一组是子菜单「其他字体」和「后备字体」（见 [`fallback_font_menu`]）。
 ///
-/// 直接列出已安装的常用字体（编辑器和终端为 [`COMMON_FONTS`]，界面为 [`COMMON_UI_FONTS`]）和
-/// 当前的字体（`current` 中的第一个）。编辑器和终端的「其他字体」中先列其余的等宽字体，再列
-/// 非等宽字体。
-pub fn font_menu(setting: Setting, current: Option<&str>) -> Vec<MenuEntry> {
+/// 直接列出已安装的常用编程字体（[`COMMON_FONTS`]）和当前的字体（`current` 中的第一个）。
+/// 「其他字体」中先列其余的等宽字体，再列非等宽字体。
+pub fn font_menu(_setting: Setting, current: Option<&str>) -> Vec<MenuEntry> {
     use MenuEntry::{Item, Separator, Submenu};
 
     let item = |(i, _)| Item(MenuCommand::Font(i), true);
     let fonts = winc_render::installed_fonts().iter().enumerate();
     let primary = winc_config::font_list(current).first().copied();
-    let ui = setting == Setting::UiFont;
-    let common = if ui { COMMON_UI_FONTS } else { COMMON_FONTS };
     let (first, rest): (Vec<_>, Vec<_>) = fonts.partition(|(_, family)| {
-        common.contains(&family.name.as_str()) || primary == Some(family.name.as_str())
+        COMMON_FONTS.contains(&family.name.as_str()) || primary == Some(family.name.as_str())
     });
-    let (mono, other): (Vec<_>, Vec<_>) = rest.into_iter().partition(|(_, f)| !ui && f.monospace);
+    let (mono, other): (Vec<_>, Vec<_>) = rest.into_iter().partition(|(_, f)| f.monospace);
     let mut menu = vec![Item(MenuCommand::FontDefault, true)];
     if !first.is_empty() {
         menu.push(Separator);
@@ -813,61 +811,6 @@ pub fn fallback_font_menu(current: Option<&str>) -> Vec<MenuEntry> {
         menu.push(Separator);
     }
     menu.extend(rest.map(item));
-    menu
-}
-
-/// 返回「排除的语言」菜单的菜单项：格式化页列出的语言，被排除的打勾。
-///
-/// 点击一项即切换该语言是否被排除，菜单随即关闭。
-pub fn skip_menu(listed: &[&str]) -> Vec<MenuEntry> {
-    winc_syntax::languages()
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| listed.contains(&l.id))
-        .map(|(i, _)| MenuEntry::Item(MenuCommand::SkipOnSave(i), true))
-        .collect()
-}
-
-/// 返回一种语言的格式化（修复）工具菜单的菜单项：自动、该语言的预设、自定义命令。
-///
-/// 没有可自动使用的预设（没有预设，或预设都不自动使用）时不列出「自动」，选了也不会生效。
-/// `install` 为 `true`（工具没装且知道安装方法）时有「安装方法…」；`removable` 为 `true`
-/// （用户自己加的语言）时最后一项是「移除」。
-pub fn tool_menu(task: Task, language: &str, install: bool, removable: bool) -> Vec<MenuEntry> {
-    use MenuEntry::{Item, Separator};
-
-    // 各组之间用分隔线隔开。
-    fn group(menu: &mut Vec<MenuEntry>, items: Vec<MenuEntry>) {
-        if items.is_empty() {
-            return;
-        }
-        if !menu.is_empty() {
-            menu.push(Separator);
-        }
-        menu.extend(items);
-    }
-
-    let mut menu = Vec::new();
-    let presets = || {
-        PRESETS
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| p.task == task && p.languages.contains(&language))
-    };
-    if presets().any(|(_, p)| !matches!(p.auto, Auto::Never)) {
-        group(&mut menu, vec![Item(MenuCommand::ToolAuto, true)]);
-    }
-    let items = presets()
-        .map(|(i, _)| Item(MenuCommand::ToolPreset(i), true))
-        .collect();
-    group(&mut menu, items);
-    group(&mut menu, vec![Item(MenuCommand::ToolCustom, true)]);
-    if install {
-        group(&mut menu, vec![Item(MenuCommand::ToolInstall, true)]);
-    }
-    if removable {
-        group(&mut menu, vec![Item(MenuCommand::ToolRemove, true)]);
-    }
     menu
 }
 

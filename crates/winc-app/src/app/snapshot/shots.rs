@@ -7,8 +7,6 @@ mod settings;
 mod sidebar;
 
 use super::*;
-#[cfg(unix)]
-use winc_editor::format::Task;
 
 #[test]
 #[ignore = "截图，手动运行"]

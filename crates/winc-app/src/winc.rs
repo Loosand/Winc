@@ -91,8 +91,6 @@ pub enum Request {
     OpenSettings(WindowKey, Option<SettingsPage>),
     /// Open release notes in a document window rather than a preferences tab.
     SettingsReleaseNotes,
-    /// Show a formatter installation guide in the document window.
-    SettingsInstallGuide(Vec<String>, PathBuf),
     /// Apply the Git list/tree display choice to the document window.
     SettingsGitTree(bool),
     /// 启动时为上次开着的目录新建窗口：用该目录记下的大小和位置，不相对当前窗口错开。
@@ -631,12 +629,6 @@ impl Winc {
                             app.open_release_notes(crate::release_notes::Scope::All);
                         }
                     }
-                    Request::SettingsInstallGuide(tools, dir) => {
-                        if let Some(app) = self.settings_document() {
-                            app.raise();
-                            app.show_install_guide(&tools, &dir);
-                        }
-                    }
                     Request::SettingsGitTree(on) => {
                         if let Some(app) = self.settings_document()
                             && app.git.commit.flat() == on
@@ -780,13 +772,21 @@ impl Winc {
         if let Some(key) = key {
             return Ok(key);
         }
-        let Some(key) = self.blank_window() else {
-            return Err(folder);
-        };
-        if let (Some(folder), Some(app)) = (&folder, self.by_key(key)) {
-            app.open_folder_now(folder);
+        if let Some(key) = self.blank_window() {
+            if let (Some(folder), Some(app)) = (&folder, self.by_key(key)) {
+                app.open_folder_now(folder);
+            }
+            return Ok(key);
         }
-        Ok(key)
+        if let Some(folder) = &folder
+            && let Some(key) = self.active_key()
+            && let Some(app) = self.by_key(key)
+            && app.writing_workspace()
+        {
+            app.switch_folder(folder);
+            return Ok(key);
+        }
+        Err(folder)
     }
 
     /// 停在开始页上、什么都没开（没有目录也没有标签）的窗口，当前窗口优先；没有时返回 `None`。

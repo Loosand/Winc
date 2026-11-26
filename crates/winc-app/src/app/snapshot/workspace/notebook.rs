@@ -445,8 +445,7 @@ fn notebook_sidebar_reaches_search_creation_and_outline() {
 }
 
 #[test]
-fn notebook_links_and_backlinks_use_the_same_targets() {
-    use crate::app::workspace::note_links::footer::{Action as Footer, CONTROL};
+fn notebook_links_resolve_targets_without_a_backlinks_footer() {
     use winc_preview::note_links::WIKI_TARGET;
 
     let (mut app, root) = note_app("minc-link-navigation");
@@ -479,73 +478,14 @@ fn notebook_links_and_backlinks_use_the_same_targets() {
     app.scroll_markdown_to(f32::MAX);
     paint(&mut app);
 
-    let hit_for = |app: &App, matches: fn(&Footer) -> bool| {
-        let i = app.note_links.footer_hits.iter().position(matches).unwrap();
-        let key = format!("{CONTROL}{i}");
-        app.hits
-            .markdown_links
-            .iter()
-            .find(|(_, url)| *url == key)
-            .unwrap()
-            .0
-    };
-    let expand = hit_for(&app, |hit| matches!(hit, Footer::Expand(_)));
-    press(&mut app, expand);
-    assert_eq!(
-        app.note_links
-            .footer_hits
-            .iter()
-            .filter(|hit| matches!(hit, Footer::Cite(..)))
-            .count(),
-        2
-    );
-    let citation = hit_for(&app, |hit| matches!(hit, Footer::Cite(..)));
-    press(&mut app, citation);
-    let doc = app.editor.active().unwrap();
-    assert_eq!(doc.path.as_deref(), Some(tea.as_path()));
-    assert_eq!(
-        doc.text()
-            .rope()
-            .unwrap()
-            .slice(doc.selection.from()..doc.selection.to())
-            .to_string(),
-        "[[薄荷|香草]]"
-    );
+    // 不再在正文末尾渲染「引用此笔记」区域。
+    let preview = &app.preview.markdown;
+    let layout = preview.layout.as_ref().unwrap();
+    assert_eq!(preview.height, layout.height());
 
     let index = app.note_links.index.as_ref().unwrap();
+    assert!(index.backlinks(&mint).is_some());
     assert!(index.backlinks(&copy).is_none());
-    let _ = std::fs::remove_dir_all(root.parent().unwrap());
-}
-
-#[test]
-fn notebook_hides_the_backlinks_footer_when_the_last_reference_is_removed() {
-    let (mut app, root) = note_app("minc-empty-backlinks");
-    let tea = root.join("Recipes/茶.md");
-    let mint = root.join("薄荷.md");
-    std::fs::write(&tea, "薄荷可以泡茶：[[薄荷]]。\n").unwrap();
-    app.open_path(&tea);
-    for _ in 0..3 {
-        app.wait_for_markdown();
-        paint(&mut app);
-    }
-    let no_footer = |app: &App| {
-        let preview = &app.preview.markdown;
-        let layout = preview.layout.as_ref().unwrap();
-        assert_eq!(preview.height, layout.height());
-        assert!(app.note_links.footer_hits.is_empty());
-    };
-    no_footer(&app);
-
-    app.open_path(&mint);
-    for _ in 0..3 {
-        app.wait_for_markdown();
-        paint(&mut app);
-    }
-    assert!(!app.note_links.footer_hits.is_empty());
-    std::fs::write(&tea, "没有链接。\n").unwrap();
-    app.library_paths_changed(false, std::slice::from_ref(&tea));
-    paint(&mut app);
-    no_footer(&app);
     let _ = std::fs::remove_dir_all(root.parent().unwrap());
 }
 
@@ -795,13 +735,45 @@ fn shoot_notebook_navigation() {
     press(&mut app, search);
     shoot(&mut app, "notebook-search");
     app.show_files();
-    app.open_path(&tea);
-    for _ in 0..3 {
-        app.wait_for_markdown();
-        paint(&mut app);
-    }
-    app.scroll_markdown_to(f32::MAX);
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn clicking_blank_sidebar_area_returns_to_library_home() {
+    let (mut app, root) = note_app("minc-sidebar-blank-home");
+    let folder = root.join("Recipes");
+    let note = root.join("薄荷.md");
+
+    app.open_path(&note);
     paint(&mut app);
-    shoot(&mut app, "notebook-backlinks");
+    assert!(!app.library_shown());
+
+    let tree = app.layout.tree;
+    let blank = (tree.x + 40.0, tree.bottom() - 12.0);
+    assert!(app.tree_blank_at(blank.1));
+
+    // 从笔记点击侧栏空白处：回到笔记库主页并取消文件树选中。
+    click(&mut app, blank);
+    paint(&mut app);
+    assert!(app.library_shown());
+    assert_eq!(app.library.folder.as_ref(), Some(&root));
+    assert_eq!(app.editor.workspace.as_ref().unwrap().selected, None);
+
+    // 从子目录点击侧栏空白处：同样回到笔记库根目录主页，双击不弹出新建输入框。
+    let row = row_of(&app, "Recipes");
+    let at = tree_row_center(&app, row);
+    click(&mut app, at);
+    paint(&mut app);
+    assert_eq!(app.library.folder.as_ref(), Some(&folder));
+
+    app.pointer.last_click = None;
+    click(&mut app, blank);
+    click(&mut app, blank);
+    paint(&mut app);
+    assert!(app.library_shown());
+    assert_eq!(app.library.folder.as_ref(), Some(&root));
+    assert_eq!(app.editor.workspace.as_ref().unwrap().selected, None);
+    assert!(app.panels.name_input.is_none());
+
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }

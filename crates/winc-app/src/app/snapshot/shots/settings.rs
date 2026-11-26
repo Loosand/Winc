@@ -87,64 +87,6 @@ fn snapshot_keys_page() {
     }
 }
 
-#[cfg(unix)]
-#[test]
-#[ignore = "截图，手动运行"]
-fn snapshot_settings_format() {
-    for (tag, dark) in [("light", false), ("dark", true)] {
-        let (mut app, dir) =
-            crate::app::snapshot::settings::format_settings_app("settings-format-shot", dark);
-        app.config.format_on_save = Some(true);
-        app.open_settings();
-        app.settings_show_page(SettingsPage::Format);
-        paint(&mut app);
-
-        // 鼠标停在「添加语言…」上。
-        let (x, y) = settings_point(&app, SettingsPart::Action(Setting::AddLanguage));
-        app.on_mouse_move(x, y);
-        shoot(&mut app, &format!("settings-format-{tag}"));
-
-        // Python 选择「自定义命令…」：按钮换成较宽的输入框，输入为空时以淡色显示填写提示。
-        app.settings_open_menu(Setting::FormatCommand("python"));
-        app.run_menu_command(MenuCommand::ToolCustom);
-        app.on_mouse_move(4.0, 4.0);
-        shoot(&mut app, &format!("settings-format-edit-{tag}"));
-
-        // 滚动到底：显示修复工具一组。
-        app.settings_cancel_field();
-        app.settings_scroll_by(-1000.0);
-        shoot(&mut app, &format!("settings-fix-{tag}"));
-
-        // 窗口很矮且滚动到中间：压在标题下沿和卡片底边上的行被裁剪，不会画到这两个边界之外。
-        app.frame.renderer = Some(
-            Renderer::offscreen(820.0, 420.0, SCALE, app.palette.frame_bg, None, None).unwrap(),
-        );
-        app.relayout();
-        app.settings.scroll = 0.0;
-        app.settings_scroll_by(-150.0);
-        shoot(&mut app, &format!("settings-format-scrolled-{tag}"));
-
-        // 装了 Prettier：它能格式化的语言都自动列出来；再手动加 TOML（只有 Taplo，未安装）和
-        // Groovy（没有预设）。修复工具一组仍只有项目在用的 Python，不为每种语言列一行「无」。
-        winc_backend::testing::write_script(&dir.join("bin/prettier"), "#!/bin/sh\ncat\n");
-        app.frame.renderer = Some(
-            Renderer::offscreen(SIZE.0, SIZE.1, SCALE, app.palette.frame_bg, None, None).unwrap(),
-        );
-        app.close_settings();
-        app.open_settings();
-        app.settings_show_page(SettingsPage::Format);
-        app.settings_add_language(Task::Format, winc_syntax::find("toml").unwrap());
-        app.overlays.context_menu = None;
-        app.settings_add_language(Task::Format, winc_syntax::find("groovy").unwrap());
-        app.settings_cancel_field();
-        app.settings_scroll_by(-10_000.0);
-        app.on_mouse_move(4.0, 4.0);
-        shoot(&mut app, &format!("settings-format-many-{tag}"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
 /// 截图：设置的 Git 一页（`settings-git-*`）。
 #[test]
 #[ignore = "截图，手动运行"]
@@ -302,12 +244,9 @@ fn snapshot_english() {
     app.config.terminal_enabled = Some(true);
     app.open_settings();
     shoot(&mut app, "english-settings");
-    app.settings_open_menu(Setting::Language);
-    shoot(&mut app, "english-settings-language");
-    app.overlays.context_menu = None;
     for page in [
         SettingsPage::Editor,
-        SettingsPage::Format,
+        SettingsPage::Markdown,
         SettingsPage::Terminal,
         SettingsPage::Keys,
     ] {

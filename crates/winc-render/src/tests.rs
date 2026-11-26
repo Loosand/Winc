@@ -418,7 +418,7 @@ fn font_weight_changes_the_ink_of_every_kind_of_font() {
         let mut renderer =
             Renderer::offscreen(60.0, 40.0, 1.0, Color::hex(0x000000), None, None).unwrap();
         renderer
-            .set_fonts(std::slice::from_ref(spec), &[], &[], weight)
+            .set_fonts(std::slice::from_ref(spec), &[], &[], &[], weight)
             .unwrap();
         let mut advance = 0.0;
         renderer.draw(|frame| {

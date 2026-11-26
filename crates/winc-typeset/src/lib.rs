@@ -692,6 +692,10 @@ pub struct Cx<'a, 'f> {
     pub frame: &'a mut Frame<'f>,
     /// 正文字号（逻辑像素），标题、代码按它缩放。
     pub base: f32,
+    /// 正文行高倍数（默认为 [`BODY_LINE`]）。
+    pub line_height: f32,
+    /// 段落间距倍数（em，默认为 [`PARAGRAPH_GAP`]）。
+    pub paragraph_gap: f32,
     /// 返回语法标记对应的颜色，用于代码的高亮。
     pub token: &'a dyn Fn(TokenKind) -> Color,
     /// 编辑区的底色，图的填充色由它与强调色混合得到。
@@ -798,7 +802,8 @@ impl Cx<'_, '_> {
         let mut first_baseline = None;
         let mut below: Option<f32> = None;
         for block in blocks {
-            let (margin_top, margin_bottom) = margins(block, self.base, env.depth > 0);
+            let (margin_top, margin_bottom) =
+                margins_with(block, self.base, self.paragraph_gap, env.depth > 0);
             if let Some(below) = below {
                 top += below.max(margin_top);
             }
@@ -829,7 +834,8 @@ impl Cx<'_, '_> {
         let mut first_baseline = None;
         let mut below: Option<f32> = None;
         for block in blocks {
-            let (margin_top, margin_bottom) = margins(block, self.base, env.depth > 0);
+            let (margin_top, margin_bottom) =
+                margins_with(block, self.base, self.paragraph_gap, env.depth > 0);
             if let Some(below) = below {
                 top += below.max(margin_top);
             }
@@ -1003,16 +1009,16 @@ impl Cx<'_, '_> {
     ) -> Item {
         let size = self.base;
         let baseline = baseline.unwrap_or_else(|| {
-            let m = self.frame.metrics(FontKind::Ui, size);
-            y + (size * 1.5 - m.ascent - m.descent) / 2.0 + m.ascent
+            let m = self.frame.metrics(FontKind::Body, size);
+            y + (size * self.line_height - m.ascent - m.descent) / 2.0 + m.ascent
         });
         let gap = size * 0.4;
-        let width = self.frame.measure(FontKind::Ui, size, marker);
+        let width = self.frame.measure(FontKind::Body, size, marker);
         Item::Text {
             x: content_x - gap - width,
             baseline,
             text: marker.into(),
-            font: FontKind::Ui,
+            font: FontKind::Body,
             faux: Faux::default(),
             size,
             color,
@@ -1143,7 +1149,7 @@ impl Cx<'_, '_> {
             }
             // 空的一项也占一行。
             let item_h = flow.height.max(if item.blocks.is_empty() {
-                (base * BODY_LINE).round()
+                (base * self.line_height).round()
             } else {
                 0.0
             });
@@ -1195,8 +1201,8 @@ impl Cx<'_, '_> {
     /// 只将第一行计入正常段落间距；再按回车要给每个额外空行留下实际高度。
     fn blank_lines(&mut self, blanks: &[usize], x: f32, y: f32, width: f32, out: &mut Out) -> f32 {
         let size = self.base;
-        let line_h = (size * BODY_LINE).round();
-        let m = self.frame.metrics(FontKind::Ui, size);
+        let line_h = (size * self.line_height).round();
+        let m = self.frame.metrics(FontKind::Body, size);
         let room = width.max(size);
         let Some((&source, before)) = blanks.split_last() else {
             return 0.0;
@@ -1204,7 +1210,8 @@ impl Cx<'_, '_> {
         let gap = if before.is_empty() {
             (size * 0.25).round()
         } else {
-            size + (before.len() - 1) as f32 * blank_row_height(size)
+            size + (before.len() - 1) as f32
+                * blank_row_height_with(size, self.line_height, self.paragraph_gap)
         };
         let line_text = self
             .raw
@@ -1229,7 +1236,7 @@ impl Cx<'_, '_> {
                 x,
                 baseline: baseline(base_top),
                 text: "".into(),
-                font: FontKind::Ui,
+                font: FontKind::Body,
                 faux: Faux::default(),
                 size,
                 color: self.colors.text,
@@ -1247,7 +1254,7 @@ impl Cx<'_, '_> {
         }
         let widths = self
             .frame
-            .advances_faux(FontKind::Ui, Faux::default(), size, &chars);
+            .advances_faux(FontKind::Body, Faux::default(), size, &chars);
         let mut top = base_top;
         let mut pen = 0.0f32;
         let mut run_text = String::new();
@@ -1262,7 +1269,7 @@ impl Cx<'_, '_> {
                     x,
                     baseline: baseline(top),
                     text: std::mem::take(&mut run_text).into(),
-                    font: FontKind::Ui,
+                    font: FontKind::Body,
                     faux: Faux::default(),
                     size,
                     color: self.colors.text,
@@ -1295,7 +1302,7 @@ impl Cx<'_, '_> {
                 x,
                 baseline: baseline(top),
                 text: run_text.into(),
-                font: FontKind::Ui,
+                font: FontKind::Body,
                 faux: Faux::default(),
                 size,
                 color: self.colors.text,
@@ -1332,8 +1339,9 @@ pub struct Out {
 }
 
 /// Vertical rhythm shared by prose, editable blank lines and empty lists.
-const BODY_LINE: f32 = 1.5;
-const PARAGRAPH_GAP: f32 = 1.0;
+pub const BODY_LINE: f32 = 1.5;
+/// 默认段落间距（em）。
+pub const PARAGRAPH_GAP: f32 = 1.0;
 const LIST_GAP: f32 = 0.25;
 
 /// 分隔线的粗细（逻辑像素）：正文字号的四分之一。
@@ -1345,18 +1353,28 @@ fn rule_height(base: f32) -> f32 {
 /// Filling the middle of four line endings with text replaces two extra rows
 /// with a normal paragraph plus its margin, without moving later text.
 pub fn blank_row_height(base: f32) -> f32 {
-    ((base * BODY_LINE).round() + base * PARAGRAPH_GAP) / 2.0
+    blank_row_height_with(base, BODY_LINE, PARAGRAPH_GAP)
+}
+
+/// 同 [`blank_row_height`]，使用自定义的行高倍数与段落间距（em）。
+pub fn blank_row_height_with(base: f32, line_height: f32, paragraph_gap: f32) -> f32 {
+    ((base * line_height).round() + base * paragraph_gap) / 2.0
 }
 
 /// 块上下的外边距（逻辑像素）。
 ///
 /// `tight` 为真时在列表项里：段落之间不额外留空，嵌套的列表之前只留出列表项之间的间距。
 pub fn margins(block: &Block, base: f32, tight: bool) -> (f32, f32) {
+    margins_with(block, base, PARAGRAPH_GAP, tight)
+}
+
+/// 同 [`margins`]，使用自定义的段落间距（em）。
+pub fn margins_with(block: &Block, base: f32, paragraph_gap: f32, tight: bool) -> (f32, f32) {
     match block {
         // 项里的文字之后接嵌套的列表时，间距与相邻两项之间相同（见 [`LIST_GAP`]）。
         Block::List(..) if tight => (base * LIST_GAP, 0.0),
-        Block::Paragraph(_) => (0.0, if tight { 0.0 } else { base * PARAGRAPH_GAP }),
-        Block::Heading(..) => (base * 1.5, base * PARAGRAPH_GAP),
+        Block::Paragraph(_) => (0.0, if tight { 0.0 } else { base * paragraph_gap }),
+        Block::Heading(..) => (base * 1.5, base * paragraph_gap),
         Block::Rule(_) => (base * 1.5, base * 1.5),
         Block::Footnote(..) => (0.0, base * 0.5),
         _ => (0.0, base),

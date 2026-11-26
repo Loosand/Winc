@@ -60,16 +60,15 @@ impl App {
     }
 
     fn path_drop_zone(&self, x: f32, y: f32, directory: bool) -> DropZone {
-        if directory
-            && self.notebook_sidebar()
-            && self.panels.sidebar.visible
-            && self.panels.sidebar.view == SidebarView::Files
-            && (self.layout.tree.contains(x, y)
-                || self
-                    .notebook_folder_heading()
-                    .is_some_and(|r| r.contains(x, y)))
-        {
-            return DropZone::NotebookSwitch;
+        if self.writing_workspace() {
+            if self.terminal_takes_drop(x, y) {
+                return DropZone::Terminal;
+            }
+            return if directory {
+                DropZone::NotebookSwitch
+            } else {
+                DropZone::Open(None)
+            };
         }
         self.drop_zone(x, y)
     }
@@ -82,7 +81,7 @@ impl App {
     /// 文件或目录拖入了窗口（`HoveredFile`；同时拖动多项时每项触发一次）：开始跟踪落点。
     pub(in crate::app) fn hover_file(&mut self, path: &Path) {
         self.panels.file_hover_directory |=
-            self.notebook_sidebar() && winc_backend::fs::is_dir(path);
+            self.writing_workspace() && winc_backend::fs::is_dir(path);
         self.panes.dropped_into = None;
         // 从 Winc 拖出的文件不放回 Winc 的窗口，不标出落点。
         #[cfg(target_os = "macos")]
@@ -138,7 +137,6 @@ impl App {
 
     /// 处理拖进窗口松手的文件或目录 `path`，规则见 [`Self::drop_file_at`]。
     pub(in crate::app) fn drop_file(&mut self, path: &Path) {
-        self.end_file_hover();
         let (x, y) = self.drop_point();
         self.drop_file_at(path, x, y);
     }
@@ -147,10 +145,11 @@ impl App {
     ///
     /// 可以加为附加目录的目录先按设置询问或添加（见 [`App::drop_folder`]）。
     pub(in crate::app) fn drop_file_at(&mut self, path: &Path, x: f32, y: f32) {
+        self.end_file_hover();
         let into = match self.path_drop_zone(
             x,
             y,
-            self.notebook_sidebar() && winc_backend::fs::is_dir(path),
+            self.writing_workspace() && winc_backend::fs::is_dir(path),
         ) {
             DropZone::NotebookSwitch => {
                 self.switch_folder(path);
@@ -186,6 +185,16 @@ impl App {
     pub(in crate::app) fn drop_plain(&mut self, path: &Path, into: Option<PathBuf>) {
         let Some(dir) = into else {
             self.open_path(path);
+            if self.writing_workspace() {
+                self.when_loaded(|app| {
+                    if app.editor.active().is_some_and(|doc| {
+                        doc.preview_kind() == Some(winc_editor::PreviewKind::Markdown)
+                            && doc.preview_mode() != winc_editor::PreviewMode::Preview
+                    }) {
+                        app.set_preview_mode(winc_editor::PreviewMode::Preview);
+                    }
+                });
+            }
             self.note_opened_file(path);
             return;
         };

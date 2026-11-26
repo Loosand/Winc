@@ -205,6 +205,71 @@ fn dropped_on_the_dock_icon_open_in_the_window_that_has_them_or_the_current_one(
 }
 
 #[test]
+fn dock_drop_in_writing_window_switches_workspace_and_renders_markdown() {
+    use winc_editor::PreviewMode;
+
+    let first = winc_config::files::canonicalize(sample_folder("dock-writing-first")).unwrap();
+    let second = winc_config::files::canonicalize(sample_folder("dock-writing-second")).unwrap();
+    let outside = winc_config::files::canonicalize(sample_folder("dock-writing-outside")).unwrap();
+    let note = outside.join("dock.md");
+    std::fs::write(&note, "# Dock\n\nRendered.\n").unwrap();
+
+    let mut winc = Winc::new(None, None);
+    let mut app = blank_app(false);
+    app.panels.sidebar.legacy_chrome = false;
+    app.open_folder_now(&first);
+    let key = winc.add_detached(app);
+    winc.set_active(key);
+    winc.settle_for_test();
+
+    let target = |path: &Path| crate::cli::Target {
+        path: path.to_path_buf(),
+        line: None,
+        col: None,
+    };
+
+    // 拖入文件夹到 Dock：在当前写作窗口切换并录入工作区，不另开新窗口。
+    assert_eq!(winc.window_for_test(&[target(&second)]), Ok(key));
+    winc.app(key).open_files(&[target(&second)]);
+    winc.settle_for_test();
+    assert_eq!(winc.app(key).editor.root(), Some(second.as_path()));
+    assert_eq!(
+        winc.app(key).state.notebook_workspaces,
+        [second.clone(), first.clone()]
+    );
+
+    // 拖入 Markdown 文件到 Dock：在当前写作窗口打开并渲染，工作区不变。
+    assert_eq!(winc.window_for_test(&[target(&note)]), Ok(key));
+    winc.app(key).open_files(&[target(&note)]);
+    winc.app(key).editor.load_active();
+    winc.app(key).poll_loads();
+    assert_eq!(winc.app(key).editor.root(), Some(second.as_path()));
+    assert_eq!(
+        winc.app(key)
+            .editor
+            .active()
+            .and_then(|d| d.path.as_deref()),
+        Some(note.as_path())
+    );
+    assert_eq!(
+        winc.app(key).editor.active().map(|d| d.preview_mode()),
+        Some(PreviewMode::Preview)
+    );
+
+    // 即使当前处于源码视图，再次从 Dock 拖入也恢复渲染视图。
+    winc.app(key).set_preview_mode(PreviewMode::Source);
+    winc.app(key).open_files(&[target(&note)]);
+    assert_eq!(
+        winc.app(key).editor.active().map(|d| d.preview_mode()),
+        Some(PreviewMode::Preview)
+    );
+
+    for path in [first, second, outside] {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+#[test]
 fn settings_changed_in_one_window_reach_the_others() {
     let (mut winc, a, b, dir) = two_windows("windows-config");
     winc.app(a).step_font_size(Some(true));

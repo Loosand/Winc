@@ -19,13 +19,15 @@ use crate::text::face::{
 };
 use crate::text::font_path::FontFile;
 
-/// 字体种类：编辑区、界面、注释斜体、数学字体，以及终端的正体和斜体。
+/// 字体种类：编辑区、界面、正文、注释斜体、数学字体，以及终端的正体和斜体。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FontKind {
     /// 编辑区的等宽字体。
     Mono,
     /// 界面字体（文件树、标签、状态栏）。
     Ui,
+    /// 文档正文字体（Markdown 正文与标题）；未单独设置时与 [`FontKind::Ui`] 相同。
+    Body,
     /// 等宽字体的斜体，用于注释。
     ///
     /// 字体没有斜体或斜体的字宽与正体不同时，把正体斜切代替。
@@ -43,7 +45,7 @@ pub enum FontKind {
 
 impl FontKind {
     /// 字体种类的个数。
-    const COUNT: usize = 6;
+    const COUNT: usize = 7;
 
     /// 是否为斜体：要斜体的字落到正体字体上时斜切。
     pub(crate) fn italic(self) -> bool {
@@ -88,16 +90,18 @@ enum BoldSlot {
 pub(crate) const MONO: u8 = 0;
 /// 界面字体所在的槽位。
 const UI: u8 = 1;
+/// 文档正文字体所在的槽位；未单独设置时为 `Missing`（使用界面字体）。
+const BODY: u8 = 2;
 /// 等宽字体的斜体所在的槽位。
-const MONO_ITALIC: u8 = 2;
+const MONO_ITALIC: u8 = 3;
 /// 数学字体所在的槽位。
-const MATH: u8 = 3;
+const MATH: u8 = 4;
 /// 终端字体所在的槽位；没有单独设置终端字体时为 `Missing`。
-const TERMINAL: u8 = 4;
+const TERMINAL: u8 = 5;
 /// 终端字体的斜体所在的槽位。
-const TERMINAL_ITALIC: u8 = 5;
+const TERMINAL_ITALIC: u8 = 6;
 /// 第一个后备字体的槽位。
-const FALLBACK: u8 = 6;
+const FALLBACK: u8 = 7;
 
 /// 一项字体设置中最多使用的字体数（个）：槽位编号是 `u8`，三项设置的列表与平台后备字体合计
 /// 不能超过 256 个槽位；常见的写法只有两三个字体。
@@ -135,16 +139,16 @@ pub(crate) struct Fonts {
     fallbacks: Range<u8>,
     /// 彩色 emoji 字体所在的后备槽位；默认按 emoji 显示的字符先在这里找。
     emoji: u8,
-    /// 等宽字体、界面字体和终端字体的列表中写在主字体之后的字体所在的槽位范围，依次尝试。
-    listed: [Range<u8>; 3],
+    /// 等宽字体、界面字体、正文字体和终端字体的列表中写在主字体之后的字体所在的槽位范围，依次尝试。
+    listed: [Range<u8>; 4],
 }
 
 impl Fonts {
-    /// 加载字体；`mono`、`ui` 和 `terminal` 是用户配置里指定的字体列表，为空时等宽字体和界面
-    /// 字体用内置候选，终端用等宽字体。
+    /// 加载字体；`mono`、`ui`、`body` 和 `terminal` 是用户配置里指定的字体列表，为空时等宽字体和界面
+    /// 字体用内置候选，正文用界面字体，终端用等宽字体。
     ///
-    /// 列表中第一个能打开的字体是主字体，其余的字体在主字体缺字时依次尝试。指定的终端字体都打不
-    /// 开时同样用等宽字体，不报错。`weight` 是全部文字的字重，超出 100 至 900 时取最接近的值。
+    /// 列表中第一个能打开的字体是主字体，其余的字体在主字体缺字时依次尝试。指定的正文或终端字体都打不
+    /// 开时退回界面或等宽字体，不报错。`weight` 是全部文字的字重，超出 100 至 900 时取最接近的值。
     ///
     /// # Errors
     ///
@@ -156,12 +160,13 @@ impl Fonts {
     pub(crate) fn load(
         mono: &[FontSpec],
         ui: &[FontSpec],
+        body: &[FontSpec],
         terminal: &[FontSpec],
         weight: u16,
     ) -> Result<Fonts, String> {
         let shift = weight.clamp(WEIGHT_MIN, WEIGHT_MAX) as i16 - REGULAR as i16;
         // 指定的字体不可用时退回内置候选而不报错：字体配置有误时程序仍可启动。
-        let listed = [mono, ui, terminal].map(resolve_list);
+        let listed = [mono, ui, body, terminal].map(resolve_list);
         let candidates = Candidates::for_platform(&listed[0], &listed[1]);
         let (mono, mono_file) = first_opened(&candidates.mono, shift).ok_or_else(|| {
             format!(
@@ -176,12 +181,17 @@ impl Fonts {
             .or_else(|| first_opened(&candidates.mono, shift))
             .expect("等宽字体刚刚成功打开过");
 
+        let (body_slot, body_file) = match first_opened(&listed[2], shift) {
+            Some((face, file)) => (Slot::Ready(face, Some(file.clone())), Some(file)),
+            None => (Slot::Missing, None),
+        };
+
         let italic = italic_candidates(&mono_file, &mono);
         // 数学字体一开始就映射（只是映射文件，很快）：度量要用到它，`metrics` 不能再去加载。
         let math = first_opened(&candidates.math, shift)
             .map_or(Slot::Missing, |(face, file)| Slot::Ready(face, Some(file)));
         // 终端字体同样一开始就映射：度量要用到它。
-        let (terminal, terminal_italic, terminal_file) = match first_opened(&listed[2], shift) {
+        let (terminal, terminal_italic, terminal_file) = match first_opened(&listed[3], shift) {
             Some((face, file)) => {
                 let italic = italic_candidates(&file, &face);
                 (
@@ -195,6 +205,7 @@ impl Fonts {
         let mut slots = vec![
             Slot::Ready(mono, Some(mono_file.clone())),
             Slot::Ready(ui, Some(ui_file.clone())),
+            body_slot,
             Slot::Pending(Choices::files(italic)),
             math,
             terminal,
@@ -204,8 +215,13 @@ impl Fonts {
         slots.extend(candidates.fallbacks.into_iter().map(Slot::Pending));
         let fallbacks = FALLBACK..slots.len() as u8;
         // 列表中主字体之外的字体到第一次用到时才打开。排在主字体之前的字体刚才已打不开，到时
-        // 再试一次即成为 `Missing`。没有终端字体时终端用等宽字体，终端的列表不再使用。
-        let chosen = [Some(&mono_file), Some(&ui_file), terminal_file.as_ref()];
+        // 再试一次即成为 `Missing`。没有正文或终端字体时，对应列表不再使用。
+        let chosen = [
+            Some(&mono_file),
+            Some(&ui_file),
+            body_file.as_ref(),
+            terminal_file.as_ref(),
+        ];
         let listed = std::array::from_fn(|i| {
             let start = slots.len() as u8;
             if chosen[i].is_some() {
@@ -232,6 +248,9 @@ impl Fonts {
         for kind in [FontKind::Mono, FontKind::Ui, FontKind::Math] {
             fonts.fill_ascii(kind);
         }
+        if fonts.face(BODY).is_some() {
+            fonts.fill_ascii(FontKind::Body);
+        }
         if fonts.face(TERMINAL).is_some() {
             fonts.fill_ascii(FontKind::Terminal);
         }
@@ -239,12 +258,15 @@ impl Fonts {
         Ok(fonts)
     }
 
-    /// 返回实际使用的字体种类：没有单独的终端字体时，终端的正体、斜体即等宽字体的正体、斜体。
+    /// 返回实际使用的字体种类：没有单独的终端字体时，终端的正体、斜体即等宽字体的正体、斜体；
+    /// 没有单独的正文字体时，正文即界面字体。
     fn effective(&self, kind: FontKind) -> FontKind {
-        let separate = self.face(TERMINAL).is_some();
+        let separate_terminal = self.face(TERMINAL).is_some();
+        let separate_body = self.face(BODY).is_some();
         match kind {
-            FontKind::Terminal if !separate => FontKind::Mono,
-            FontKind::TerminalItalic if !separate => FontKind::MonoItalic,
+            FontKind::Body if !separate_body => FontKind::Ui,
+            FontKind::Terminal if !separate_terminal => FontKind::Mono,
+            FontKind::TerminalItalic if !separate_terminal => FontKind::MonoItalic,
             kind => kind,
         }
     }
@@ -286,6 +308,7 @@ impl Fonts {
         match self.effective(kind) {
             FontKind::Mono => MONO,
             FontKind::Ui => UI,
+            FontKind::Body => BODY,
             FontKind::MonoItalic => MONO_ITALIC,
             FontKind::Math => MATH,
             FontKind::Terminal => TERMINAL,
@@ -366,14 +389,15 @@ impl Fonts {
         }
 
         // 先找主字体及其列表中的字体，再找其他主字体及其列表（斜体没有的字符用正体，终端字体
-        // 没有的用等宽字体），最后是后备字体。斜体、终端字体不作为其他字体的后备。
-        let [mono, ui, terminal] = self.listed.clone();
+        // 没有的用等宽字体，正文没有的用界面字体），最后是后备字体。斜体、终端字体不作为其他字体的后备。
+        let [mono, ui, body, terminal] = self.listed.clone();
         let with = |slot: u8, listed: Range<u8>| std::iter::once(slot).chain(listed);
         let mono = with(MONO, mono);
         let ui = with(UI, ui);
         let mut order: Vec<u8> = match kind {
             FontKind::Mono => mono.chain(ui).collect(),
             FontKind::Ui => ui.chain(mono).collect(),
+            FontKind::Body => with(BODY, body).chain(ui).chain(mono).collect(),
             FontKind::MonoItalic => [MONO_ITALIC].into_iter().chain(mono).chain(ui).collect(),
             FontKind::Math => [MATH].into_iter().chain(ui).chain(mono).collect(),
             FontKind::Terminal => with(TERMINAL, terminal).chain(mono).chain(ui).collect(),

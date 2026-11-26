@@ -58,12 +58,10 @@ impl App {
         self.request_redraw();
     }
 
-    /// 返回配置中的编辑区字体、界面字体和终端字体的列表；未配置时为空。
+    /// 返回配置中的代码字体、界面字体（固定系统默认）、正文字体和终端字体的列表；未配置时为空。
     ///
-    /// 未配置时渲染层使用内置的系统字体路径表。按名字查询 CoreText 一次约 4–7 ms，
-    /// 路径表只需几次 `stat`，因此未配置时不调用 CoreText。终端字体与编辑区字体相同时同样为
-    /// 空，不重复加载。
-    pub(in crate::app) fn font_specs(&self) -> [Vec<FontSpec>; 3] {
+    /// 未配置时渲染层使用内置的系统字体路径表。终端字体与代码字体相同时同样为空，不重复加载。
+    pub(in crate::app) fn font_specs(&self) -> [Vec<FontSpec>; 4] {
         let terminal = configured_fonts(&self.config.terminal_font);
         let editor = configured_fonts(&self.config.editor_font);
         let terminal = if terminal == editor {
@@ -71,12 +69,88 @@ impl App {
         } else {
             terminal
         };
-        [editor, configured_fonts(&self.config.ui_font), terminal]
+        let body = configured_fonts(&self.config.markdown_body_font);
+        [editor, Vec::new(), body, terminal]
     }
 
-    /// 返回全部文字的字重（`ui.fontWeight`），未配置时为 400。
+    /// 返回全部文字的字重（固定为常规 400）。
     pub(in crate::app) fn font_weight(&self) -> u16 {
-        self.config.ui_font_weight.unwrap_or(Config::FONT_WEIGHT)
+        Config::FONT_WEIGHT
+    }
+
+    /// 返回 Markdown 编辑器正文基准字号（逻辑像素）。
+    ///
+    /// 开启「使用自定义字体大小」时直接取配置值（默认 16）；关闭时跟随主题默认比例。
+    pub(crate) fn markdown_base_size(&self) -> f32 {
+        if self.config.markdown_custom_font_size == Some(true) {
+            self.config
+                .markdown_font_size
+                .unwrap_or(Config::MARKDOWN_FONT_SIZE)
+                .clamp(
+                    *Config::MARKDOWN_FONT_SIZE_RANGE.start(),
+                    *Config::MARKDOWN_FONT_SIZE_RANGE.end(),
+                )
+                .round()
+        } else {
+            (self.fonts.code * crate::app::preview::markdown::laid::BASE_RATIO).round()
+        }
+    }
+
+    /// 返回 Markdown 正文行高倍数；未设置时使用主题默认。
+    pub(crate) fn markdown_line_height(&self) -> f32 {
+        self.config
+            .markdown_line_height
+            .unwrap_or(winc_typeset::BODY_LINE)
+    }
+
+    /// 返回 Markdown 编辑窗口正文最大宽度（逻辑像素）；未设置时兼容旧配置或使用主题默认。
+    pub(crate) fn markdown_content_width(&self) -> f32 {
+        if let Some(px) = self.config.markdown_content_width {
+            return f32::from(px);
+        }
+        match self.config.markdown_text_width.unwrap_or_default() {
+            winc_config::TextWidth::Standard => crate::app::preview::markdown::laid::MAX_WIDTH,
+            winc_config::TextWidth::Wide => crate::app::preview::markdown::laid::WIDE_WIDTH,
+            winc_config::TextWidth::Full => f32::MAX,
+        }
+    }
+
+    /// 返回 Markdown 段落间距（em）；未设置时使用主题默认。
+    pub(crate) fn markdown_paragraph_gap(&self) -> f32 {
+        self.config
+            .markdown_paragraph_spacing
+            .unwrap_or(winc_typeset::PARAGRAPH_GAP)
+    }
+
+    /// 设置 Markdown 行高并写回配置；`None` 表示自动（跟随主题）。
+    pub(in crate::app) fn set_markdown_line_height(&mut self, value: Option<f32>) {
+        self.config.markdown_line_height = value;
+        self.save_config();
+        self.request_redraw();
+    }
+
+    /// 设置 Markdown 编辑窗口内容宽度并写回配置；`None` 表示自动（跟随主题）。
+    pub(in crate::app) fn set_markdown_content_width(&mut self, value: Option<u16>) {
+        self.config.markdown_content_width = value;
+        self.config.markdown_text_width = None;
+        self.save_config();
+        self.request_redraw();
+    }
+
+    /// 设置 Markdown 段落间距并写回配置；`None` 表示自动（跟随主题）。
+    pub(in crate::app) fn set_markdown_paragraph_spacing(&mut self, value: Option<f32>) {
+        self.config.markdown_paragraph_spacing = value;
+        self.save_config();
+        self.request_redraw();
+    }
+
+    /// 切换底部状态栏显示并写回配置。
+    pub(in crate::app) fn toggle_status_bar(&mut self) {
+        let on = !self.status_bar_shown();
+        self.config.status_bar = Some(on);
+        self.relayout();
+        self.save_config();
+        self.request_redraw();
     }
 
     /// 应用主题选择：`Auto` 交由系统决定，`Dark`、`Light` 固定为指定外观。
@@ -137,15 +211,18 @@ impl App {
     ///
     /// 渲染层无法使用配置的字体时，返回面向用户的错误说明。
     pub(in crate::app) fn apply_fonts(&mut self) -> Result<(), String> {
-        let [mono, ui, terminal] = self.font_specs();
+        let [mono, ui, body, terminal] = self.font_specs();
         let weight = self.font_weight();
 
         if let Some(renderer) = &mut self.frame.renderer
-            && renderer.set_fonts(&mono, &ui, &terminal, weight).is_err()
+            && renderer
+                .set_fonts(&mono, &ui, &body, &terminal, weight)
+                .is_err()
         {
             return Err(winc_i18n::t!("workspace-font-unusable").to_owned());
         }
 
+        self.font_rev = self.font_rev.wrapping_add(1);
         self.apply_font_sizes();
         Ok(())
     }

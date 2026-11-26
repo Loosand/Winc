@@ -566,3 +566,78 @@ fn input_rules_support_single_step_undo_and_respect_ime_preedit() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[test]
+fn multiple_enters_then_backspaces_return_cleanly_without_phantom_separator() {
+    use winc_editor::Command;
+    use winit::keyboard::{Key, NamedKey};
+
+    let enter = Key::Named(NamedKey::Enter);
+    let backspace = Key::Named(NamedKey::Backspace);
+    let press_backspace = |app: &mut App| {
+        if !app.markdown_key(&backspace, false) {
+            app.run(Command::Backspace { word: false });
+        }
+        settle(app);
+    };
+
+    for (name, source, anchor) in [
+        ("between-paragraphs", "第一段。\n\n第二段。\n", "第一段。"),
+        (
+            "between-paragraphs-crlf",
+            "第一段。\r\n\r\n第二段。\r\n",
+            "第一段。",
+        ),
+        ("after-heading", "# 标题\n\n正文。\n", "标题"),
+        ("at-eof-no-newline", "最后一段。", "最后一段。"),
+        ("at-eof-trailing-newline", "最后一段。\n", "最后一段。"),
+    ] {
+        for enters in [2usize, 3] {
+            let (mut app, dir) = live_doc(&format!("md-multi-enter-{name}-{enters}"), source);
+            put_caret(&mut app, anchor, true);
+            let initial = with_caret(&app);
+
+            for _ in 0..enters {
+                assert!(app.markdown_key(&enter, false), "{name}/{enters}");
+                settle(&mut app);
+            }
+            for step in 0..enters {
+                press_backspace(&mut app);
+                if step + 1 < enters {
+                    assert_ne!(
+                        doc_text(&app),
+                        source,
+                        "{name}/{enters}: step {step} returned too early"
+                    );
+                }
+            }
+            // 回车 N 次后退格 N 次，恰好回到原段末尾且保留原有段落分隔，不落入分隔空行。
+            assert_eq!(with_caret(&app), initial, "{name}/{enters}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}
+
+#[test]
+fn markdown_source_mode_wraps_long_lines_by_default() {
+    let long = "这是一段在源码模式下应该按编辑区宽度自动折行显示的长文本。".repeat(8);
+    let source = format!("# 标题\n\n{long}\n\n尾段。\n");
+    let (mut app, dir) = live_doc("md-source-default-wrap", &source);
+    assert_eq!(app.config.word_wrap, None);
+
+    app.set_preview_mode(PreviewMode::Source);
+    paint(&mut app);
+    let doc = app.editor.active().unwrap();
+    assert!(doc.is_wrapping(), "Markdown 源码模式默认应自动换行");
+    assert!(doc.rows_of(2) > 1, "长段落在源码模式下应折为多行");
+
+    // 显式关闭 word_wrap 时仍尊重用户配置。
+    app.config.word_wrap = Some(false);
+    app.word_wrap_changed();
+    paint(&mut app);
+    let doc = app.editor.active().unwrap();
+    assert!(!doc.is_wrapping());
+    assert_eq!(doc.rows_of(2), 1);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

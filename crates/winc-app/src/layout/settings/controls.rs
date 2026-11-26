@@ -35,35 +35,22 @@ pub(super) fn segmented_width() -> f32 {
     w + (n - 1.0) * SEGMENT_SPACING + 4.0
 }
 
-/// 返回一行中控件的位置：靠右、垂直居中；主题缩略图占满控件区的高度。
+/// 返回一行中控件的位置：靠右、垂直居中。
 pub(super) fn control_rect(setting: Setting, row: Rect, editing: bool) -> Rect {
     let (w, h) = match setting.control() {
         // 整行都可点击。
         SettingControl::Action | SettingControl::Search => return row,
-        // 与「外观」页同一组的模式分段控件同宽。
-        SettingControl::Font => (segmented_width(), SETTINGS_CONTROL_H),
-        SettingControl::Choice if setting == Setting::Language => {
-            (segmented_width(), SETTINGS_CONTROL_H)
-        }
-        // 格式化命令带参数，编辑时换成更宽的输入框；其余命令编辑时宽度不变。
-        SettingControl::Command
-            if editing && matches!(setting, Setting::FormatCommand(_) | Setting::FixCommand(_)) =>
-        {
-            (SETTINGS_COMMAND_W, SETTINGS_CONTROL_H)
-        }
+        SettingControl::Font => (SETTINGS_CHOICE_W, SETTINGS_CONTROL_H),
         SettingControl::Command | SettingControl::Choice | SettingControl::Link => {
             (SETTINGS_CHOICE_W, SETTINGS_CONTROL_H)
         }
+        SettingControl::Number => (SETTINGS_NUMBER_W, SETTINGS_CONTROL_H),
         // 产品信息铺满整行。
         SettingControl::Product => return row,
         SettingControl::Button => (SETTINGS_BUTTON_W, SETTINGS_CONTROL_H),
         SettingControl::Beta => (52.0, SETTINGS_CONTROL_H),
         SettingControl::Switch => (SETTINGS_SWITCH_W, SETTINGS_SWITCH_H),
         SettingControl::Stepper => (SETTINGS_STEP_W * 2.0 + SETTINGS_VALUE_W, SETTINGS_CONTROL_H),
-        // 没有名称（组标题就是名称），缩略图排满整行。
-        SettingControl::ThemeList => {
-            return row.inset(SETTINGS_INSET, THEME_GRID_PAD);
-        }
         SettingControl::Themes => (segmented_width(), SETTINGS_CONTROL_H),
     };
     // 控件宽度不超过行宽减去左右内边距，并给左侧名称至少留出 80 像素。
@@ -113,44 +100,6 @@ impl StepperParts {
         );
         StepperParts { minus, value, plus }
     }
-}
-
-/// 主题缩略图每排几张。
-///
-/// 浅色、深色两组用同一个格子，上下两组的缩略图对齐。
-pub const THEME_COLUMNS: usize = 4;
-/// 主题缩略图之间横竖的间距（逻辑像素，经验值）：留出能分清两张缩略图的缝，同时保证一行
-/// 装得下 `THEME_COLUMNS` 张。
-pub(super) const THEME_GRID_GAP: f32 = 14.0;
-/// 主题缩略图和组上下边的距离（逻辑像素）：与行内控件的 `SETTINGS_INSET` 相仿，组的上沿不贴
-/// 住缩略图。
-pub(super) const THEME_GRID_PAD: f32 = 14.0;
-/// 缩略图下面一行名称的高度（逻辑像素，含与缩略图之间的空）：够放下一行说明文字。
-const THEME_NAME_H: f32 = 24.0;
-
-/// 宽 `width` 的格子里一张主题缩略图（连同下方的名称）的宽和高；缩略图是 16∶10。
-pub(super) fn theme_tile_size(width: f32) -> (f32, f32) {
-    let columns = THEME_COLUMNS as f32;
-    let w = ((width - (columns - 1.0) * THEME_GRID_GAP) / columns).floor();
-    (w, (w * 0.625).round() + THEME_NAME_H)
-}
-
-/// 返回主题格子 `control` 里第 `index` 张缩略图（从 0 起，连同下方一行名称）占的区域。
-pub fn theme_tile(control: Rect, index: usize) -> Rect {
-    let (w, h) = theme_tile_size(control.w);
-    let col = (index % THEME_COLUMNS) as f32;
-    let row = (index / THEME_COLUMNS) as f32;
-    Rect::new(
-        control.x + col * (w + THEME_GRID_GAP),
-        control.y + row * (h + THEME_GRID_GAP),
-        w,
-        h,
-    )
-}
-
-/// 返回缩略图本身（不含名称）的区域，位于 `tile` 的上部。
-pub fn theme_thumb(tile: Rect) -> Rect {
-    Rect::new(tile.x, tile.y, tile.w, tile.h - THEME_NAME_H)
 }
 
 /// 返回「模式」分段控件 `control` 里第 `index` 段的区域；底槽四周留 2 像素，相邻两段隔

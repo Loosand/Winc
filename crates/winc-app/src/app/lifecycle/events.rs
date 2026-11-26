@@ -149,14 +149,14 @@ impl ApplicationHandler<UserEvent> for App {
         };
         self.palette = self.theme_palette(dark);
 
-        let [mono, ui, terminal] = self.font_specs();
+        let [mono, ui, body, terminal] = self.font_specs();
 
         // 配置中的字体找不到或无法绘制时仍使用默认字体启动，并提示用户；否则手动修改配置时写错
         // 字体名，用户只能看到设置未生效而不知道原因。仅在配置了字体时才解析字体。
         // 列表中的字体逐个检查，提示第一个不可用的；终端字体与编辑区字体相同时不重复提示。
         let missing: Vec<String> = [
             ("editor.font", &self.config.editor_font, true),
-            ("ui.font", &self.config.ui_font, true),
+            ("markdown.bodyFont", &self.config.markdown_body_font, true),
             (
                 "terminal.font",
                 &self.config.terminal_font,
@@ -183,6 +183,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.palette.frame_bg,
                 &mono,
                 &ui,
+                &body,
                 &terminal,
                 self.font_weight(),
             ),
@@ -624,7 +625,6 @@ impl App {
             UserEvent::GitTrust(root, fingerprint, trusted) => {
                 self.answer_git_trust(&root, fingerprint, trusted);
             }
-            UserEvent::FormatterReady => self.formatter_ready(),
             UserEvent::StdinRead => self.poll_stdin(),
             UserEvent::ReopenEncoding(id, encoding) => self.reopen_with_encoding(id, encoding),
             UserEvent::ShowHex(id) => self.show_hex_now(id),

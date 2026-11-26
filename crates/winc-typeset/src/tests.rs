@@ -21,6 +21,8 @@ fn lay(markdown: &str, width: f32) -> Vec<(Out, f32)> {
         let mut cx = Cx {
             frame,
             base: 16.0,
+            line_height: BODY_LINE,
+            paragraph_gap: PARAGRAPH_GAP,
             token: &|_| TOKEN,
             surface: Color::hex(0xffffff),
             accent,

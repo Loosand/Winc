@@ -693,8 +693,7 @@ impl ViewFonts {
     /// 字号变化。
     pub fn of(config: &winc_config::Config) -> ViewFonts {
         let code = config.editor_size.unwrap_or(CODE_FONT);
-        let ui = config.ui_size.unwrap_or(UI_FONT);
-        ViewFonts::new(code, ui, config.terminal_size.unwrap_or(CODE_FONT))
+        ViewFonts::new(code, UI_FONT, config.terminal_size.unwrap_or(CODE_FONT))
     }
 }
 
@@ -870,13 +869,12 @@ pub const SETTINGS_LINK_W: f32 = 120.0;
 pub const SETTINGS_LINK_H: f32 = 30.0;
 /// 控件的高度。
 pub const SETTINGS_CONTROL_H: f32 = 28.0;
-/// 点击后弹出菜单的选择控件（工具名、排除的语言）的宽度；比字体名输入框窄，为左侧名称下方的
-/// 说明文字留出更多空间。
-pub const SETTINGS_CHOICE_W: f32 = 150.0;
+/// 点击后弹出菜单的选择控件的宽度；留出放下「自动（跟随主题）」和右侧箭头的空间。
+pub const SETTINGS_CHOICE_W: f32 = 172.0;
+/// 设置行右侧紧凑数字输入框（「编辑器字体大小」）的宽度。
+pub const SETTINGS_NUMBER_W: f32 = 68.0;
 /// 设置行右侧按钮（「检查更新」）的宽度。
 pub const SETTINGS_BUTTON_W: f32 = 96.0;
-/// 自定义格式化命令输入框的宽度；该设置平时是点击后弹出菜单的选项，选自定义命令时才换成输入框。
-pub const SETTINGS_COMMAND_W: f32 = 290.0;
 /// 加减控件中单个按钮的宽度。
 pub const SETTINGS_STEP_W: f32 = 28.0;
 /// 加减控件中数值区域的宽度。
@@ -885,9 +883,8 @@ pub const SETTINGS_VALUE_W: f32 = 36.0;
 pub const SETTINGS_SWITCH_W: f32 = 32.0;
 /// 开关的高度。
 pub const SETTINGS_SWITCH_H: f32 = 18.0;
-/// 「模式」分段控件（跟随系统、浅色、深色）每一段的宽度：按字数定，名字左右各留 10 左右，
-/// 不是三段一样宽（一样宽时两个字的那两段左右空得太多）。
-pub const SETTINGS_SEGMENT_W: [f32; 3] = [68.0, 44.0, 44.0];
+/// 「外观」分段控件（自动、浅色、深色）每一段的宽度。
+pub const SETTINGS_SEGMENT_W: [f32; 3] = [48.0, 48.0, 48.0];
 
 // 功能对话框（新建工作树）的尺寸（逻辑像素）：标题行、边距、按钮高度沿用设置浮层的值，
 // 下面几项是对话框自己的表单：左边是名称，右边是框。

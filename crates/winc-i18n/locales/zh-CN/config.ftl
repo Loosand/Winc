@@ -63,3 +63,6 @@ config-label-vim-yank-highlight = 复制后高亮的毫秒数
 config-label-repository-scan-depth = 仓库扫描深度
 config-label-lines = 行数
 config-label-contrast = 对比度
+config-label-line-height = 行高
+config-label-content-width = 内容宽度
+config-label-paragraph-spacing = 段落间距

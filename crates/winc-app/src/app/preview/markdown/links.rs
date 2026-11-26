@@ -122,7 +122,6 @@ impl App {
                 TABLE,
                 TASK,
                 winc_preview::markdown::properties::PROPERTY,
-                crate::app::workspace::note_links::footer::CONTROL,
             ]
             .iter()
             .any(|prefix| url.starts_with(prefix))
@@ -134,9 +133,6 @@ impl App {
         let Some((rect, url)) = self.hits.markdown_links.get(index).cloned() else {
             return;
         };
-        if self.press_note_footer(&url) {
-            return;
-        }
         if url == crate::app::preview::markdown::laid::EXPAND {
             self.open_diagram_view();
             return;

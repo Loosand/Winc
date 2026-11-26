@@ -390,7 +390,19 @@ fn draw_file_drop(app: &App, frame: &mut Frame<'_>) {
             l.top_bar.w,
             l.editor.bottom() - l.top_bar.y,
         ),
-        Some(DropZone::Tree(_) | DropZone::NotebookSwitch) | None => return,
+        Some(DropZone::NotebookSwitch) => {
+            if l.sidebar.w > 0.0 {
+                l.sidebar
+            } else {
+                Rect::new(
+                    l.top_bar.x,
+                    l.top_bar.y,
+                    l.top_bar.w,
+                    l.editor.bottom() - l.top_bar.y,
+                )
+            }
+        }
+        Some(DropZone::Tree(_)) | None => return,
     };
     let area = area.inset(6.0, 6.0);
     frame.rect_clipped(area, app.palette.drop_target, RADIUS_ISLAND - 4.0, area);

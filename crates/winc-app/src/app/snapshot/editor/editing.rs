@@ -120,10 +120,10 @@ fn copying_without_a_selection_copies_and_pastes_whole_lines() {
 }
 
 #[test]
-fn right_clicking_the_text_offers_format_cut_copy_paste() {
+fn right_clicking_the_text_offers_cut_copy_paste() {
     use MenuCommand::{
-        AddBookmark, Copy, CopyReference, Cut, FindReferences, Fix, Format, FormatSelection,
-        GoToDefinition, ListBookmarks, Paste, RemoveBookmark,
+        AddBookmark, Copy, CopyReference, Cut, FindReferences, GoToDefinition, ListBookmarks,
+        Paste, RemoveBookmark,
     };
 
     let dir = search_folder("editor-menu");
@@ -158,9 +158,6 @@ fn right_clicking_the_text_offers_format_cut_copy_paste() {
             (AddBookmark, true),
             (RemoveBookmark, false),
             (ListBookmarks, true),
-            (Format, true),
-            (FormatSelection, true),
-            (Fix, true),
             (Cut, true),
             (Copy, true),
             (Paste, true),
@@ -207,7 +204,7 @@ fn right_clicking_the_text_offers_format_cut_copy_paste() {
     right_click(&mut app, (bar.x + bar.w / 2.0, bar.y + bar.h / 2.0));
     assert!(app.overlays.context_menu.is_none());
 
-    // 只读文档：格式化、修复、剪切、粘贴不可用，转到定义、查找引用和复制仍可用。
+    // 只读文档：剪切、粘贴不可用，转到定义、查找引用和复制仍可用。
     app.editor.active_mut().unwrap().readonly = true;
     right_click_text(&mut app, 0, 0);
     assert_eq!(
@@ -218,8 +215,6 @@ fn right_clicking_the_text_offers_format_cut_copy_paste() {
             (AddBookmark, true),
             (RemoveBookmark, false),
             (ListBookmarks, true),
-            (Format, false),
-            (Fix, false),
             (Cut, false),
             (Copy, true),
             (Paste, false),

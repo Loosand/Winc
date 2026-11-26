@@ -131,6 +131,24 @@ impl App {
                 subtitle: None,
                 tooltip: None,
             },
+            MenuCommand::LineHeight(Some(i)) => MenuLabel::plain(
+                &crate::layout::LINE_HEIGHT_OPTIONS
+                    .get(i)
+                    .map(|&v| crate::layout::line_height_label(Some(v)))
+                    .unwrap_or_default(),
+            ),
+            MenuCommand::ContentWidth(Some(i)) => MenuLabel::plain(
+                &crate::layout::CONTENT_WIDTH_OPTIONS
+                    .get(i)
+                    .map(|&v| crate::layout::content_width_label(Some(v)))
+                    .unwrap_or_default(),
+            ),
+            MenuCommand::ParagraphSpacing(Some(i)) => MenuLabel::plain(
+                &crate::layout::PARAGRAPH_SPACING_OPTIONS
+                    .get(i)
+                    .map(|&v| crate::layout::paragraph_spacing_label(Some(v)))
+                    .unwrap_or_default(),
+            ),
             MenuCommand::DefaultShell(Some(i)) => {
                 let shell = self.terminal.shells.get(i);
                 MenuLabel {
@@ -161,7 +179,6 @@ impl App {
                     ..label
                 }
             }
-            MenuCommand::ToolAuto | MenuCommand::ToolPreset(_) => self.tool_label(command),
             MenuCommand::LogCheckout | MenuCommand::LogCherryPick | MenuCommand::LogNewWorktree => {
                 self.log_commit_label(command)
             }
@@ -317,48 +334,6 @@ impl App {
         MenuLabel {
             title,
             subtitle,
-            tooltip: None,
-        }
-    }
-
-    /// 返回格式化（修复）工具菜单中一项的文字：「自动」下方写着当前自动选中的工具；
-    /// 预设下方写着该预设的命令，没装的在名字后面注明「（未安装）」。
-    fn tool_label(&self, command: MenuCommand) -> MenuLabel {
-        let preset = match command {
-            MenuCommand::ToolPreset(i) => PRESETS.get(i),
-            _ => None,
-        };
-        let Some(preset) = preset else {
-            let (task, auto) = match &self.overlays.context_menu {
-                Some(ContextMenu {
-                    target: MenuTarget::Tool(task, id),
-                    ..
-                }) => {
-                    let row = self.settings.tool_row(tool_setting(*task, id));
-                    (*task, row.and_then(|r| r.auto.clone()))
-                }
-                _ => (Task::Format, None),
-            };
-            let subtitle = auto.unwrap_or_else(|| {
-                match task {
-                    Task::Format => t!("menu-tool-auto-format-desc"),
-                    Task::Fix => t!("menu-tool-auto-fix-desc"),
-                }
-                .to_owned()
-            });
-            return MenuLabel {
-                title: command.label().to_owned(),
-                subtitle: Some(subtitle),
-                tooltip: None,
-            };
-        };
-        let title = match self.format.formatter.has(preset.program()) {
-            Some(false) => t!("menu-tool-not-installed", name = preset.name),
-            _ => preset.name.to_owned(),
-        };
-        MenuLabel {
-            title,
-            subtitle: Some(preset.command.to_owned()),
             tooltip: None,
         }
     }

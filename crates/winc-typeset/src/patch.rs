@@ -16,8 +16,8 @@ use super::block::{
     list_item_content_hash, table_row_content_hash,
 };
 use super::{
-    BODY_LINE, Cx, Env, Item, LIST_GAP, LaidBlock, Out, Para, Raw, RawKind, TABLE_RADIUS,
-    TABLE_TEXT, blanks, is_fence, rounded_frame,
+    Cx, Env, Item, LIST_GAP, LaidBlock, Out, Para, Raw, RawKind, TABLE_RADIUS, TABLE_TEXT, blanks,
+    is_fence, rounded_frame,
 };
 
 /// 把新排出的项中的字符偏移统一加上 `char_offset`。
@@ -453,7 +453,7 @@ impl Cx<'_, '_> {
             (None, None) => self.bullet(content_x, item_top, baseline, env, &mut item_out.items),
         }
         let new_h = flow.height.max(if item.blocks.is_empty() {
-            (base * BODY_LINE).round()
+            (base * self.line_height).round()
         } else {
             0.0
         });

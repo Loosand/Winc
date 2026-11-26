@@ -239,7 +239,7 @@ impl Cx<'_, '_> {
             size: self.base,
             bold: false,
             color: env.color,
-            line: BODY_LINE,
+            line: self.line_height,
             align: Align::None,
             keep_spaces: false,
         }

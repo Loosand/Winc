@@ -394,7 +394,7 @@ impl GlyphCache {
         left: char,
         right: char,
     ) -> f32 {
-        if !matches!(kind, FontKind::Ui | FontKind::Math) {
+        if !matches!(kind, FontKind::Ui | FontKind::Body | FontKind::Math) {
             return 0.0;
         }
         let is_latin = |c: char| {

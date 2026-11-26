@@ -19,6 +19,9 @@ settings-page-terminal = Terminal
 settings-page-modules = Modules
 settings-page-keys = Shortcuts
 settings-page-about = About
+settings-section-theme = Theme
+settings-section-fonts = Fonts
+settings-section-typography = Typography
 settings-section-format-tools = Formatters
 settings-section-fix-tools = Fixers
 settings-section-spelling = Spelling
@@ -117,9 +120,19 @@ settings-syntax-custom-formats-desc = Wrap selected text in reusable HTML or Mar
 
 ## Setting names.
 
-settings-theme = Color Mode
+settings-theme = Appearance
 settings-light-theme = Light Theme
 settings-dark-theme = Dark Theme
+settings-theme-default = Default
+settings-follow-theme = Auto (Follow Theme)
+settings-body-font = Body Font
+settings-code-font = Code Font
+settings-custom-font-size = Use Custom Font Size
+settings-markdown-font-size = Editor Font Size
+settings-line-height = Line Height
+settings-content-width = Content Width
+settings-content-width-desc = Only affects the editor window, not exported files.
+settings-paragraph-spacing = Paragraph Spacing
 settings-ui-font = Interface Font
 settings-ui-size = Interface Font Size
 settings-font-weight = Global Font Weight

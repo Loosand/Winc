@@ -26,26 +26,23 @@ fn search_finds_settings_on_every_page() {
     app.config.terminal_enabled = Some(true);
     app.open_settings();
 
-    // 名称含「字号」的设置项分布在外观、编辑器、终端三页：按页分组，以页名为标题，选中第一条。
+    // 名称含「字号」的设置项分布在编辑器、终端两页：按页分组，以页名为标题，选中第一条。
     search(&mut app, "字号");
     assert!(app.settings_layout().searching);
     let (rows, titles) = listed(&app);
-    assert_eq!(
-        rows,
-        [Setting::UiSize, Setting::EditorSize, Setting::TerminalSize]
-    );
-    assert_eq!(titles, ["外观", "编辑器", "终端"]);
-    assert_eq!(app.settings.selected, Setting::UiSize);
+    assert_eq!(rows, [Setting::EditorSize, Setting::TerminalSize]);
+    assert_eq!(titles, ["编辑器", "终端"]);
+    assert_eq!(app.settings.selected, Setting::EditorSize);
 
-    // 说明也参与匹配，不区分大小写：「lint」只出现在「保存时修复问题」的说明中。
-    search(&mut app, "LINT");
-    assert_eq!(listed(&app).0, [Setting::FixOnSave]);
+    // 说明也参与匹配，不区分大小写：「导出」出现在外观页「内容宽度」的说明中。
+    search(&mut app, "导出");
+    assert!(listed(&app).0.contains(&Setting::ContentWidth));
 
-    // 有标题的组保留原标题：主题缩略图仍在「浅色主题」「深色主题」之下。
+    // 有标题的组保留原标题：主题项仍在「主题」分组之下。
     search(&mut app, "主题");
     let (rows, titles) = listed(&app);
     assert!(rows.contains(&Setting::LightTheme) && rows.contains(&Setting::DarkTheme));
-    assert!(titles.contains(&"浅色主题") && titles.contains(&"深色主题"));
+    assert!(titles.contains(&"主题"));
 
     // Vim、Markdown 预览的设置项名称都带前缀：按前缀一次搜到同类的全部设置项。
     search(&mut app, "vim");
@@ -64,7 +61,6 @@ fn search_finds_settings_on_every_page() {
     let (rows, _) = listed(&app);
     for setting in [
         Setting::RemoteImages,
-        Setting::TextWidth,
         Setting::MarkdownLineNumbers,
         Setting::MarkdownShortcuts,
         Setting::MarkdownFocus,
@@ -82,7 +78,7 @@ fn search_finds_settings_on_every_page() {
     // 终端模块关闭时不列出终端页的设置项。
     app.config.terminal_enabled = Some(false);
     search(&mut app, "字号");
-    assert_eq!(listed(&app).0, [Setting::UiSize, Setting::EditorSize]);
+    assert_eq!(listed(&app).0, [Setting::EditorSize]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -122,10 +118,10 @@ fn keyboard_and_clicks_move_in_and_out_of_search() {
     app.settings_show_page(SettingsPage::Keys);
     search(&mut app, "字号");
     assert!(app.settings_layout().searching);
-    click_part(&mut app, SettingsPart::Page(SettingsPage::Format));
+    click_part(&mut app, SettingsPart::Page(SettingsPage::Markdown));
     let layout = app.settings_layout();
     assert!(!layout.searching);
-    assert_eq!(layout.page, SettingsPage::Format);
+    assert_eq!(layout.page, SettingsPage::Markdown);
     assert!(app.settings.search.text().is_empty());
 
     // 重新打开设置时搜索框为空。

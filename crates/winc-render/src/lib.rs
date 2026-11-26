@@ -461,10 +461,11 @@ impl Renderer {
         background: Color,
         mono: &[FontSpec],
         ui: &[FontSpec],
+        body: &[FontSpec],
         terminal: &[FontSpec],
         weight: u16,
     ) -> Result<Renderer, String> {
-        let fonts = Fonts::load(mono, ui, terminal, weight)?;
+        let fonts = Fonts::load(mono, ui, body, terminal, weight)?;
         Self::with_glyphs(window, background, SharedGlyphs(new_glyphs(fonts)))
     }
 
@@ -528,6 +529,7 @@ impl Renderer {
             glyphs: new_glyphs(Fonts::load(
                 mono.cloned().as_slice(),
                 ui.cloned().as_slice(),
+                &[],
                 &[],
                 FONT_WEIGHT_NORMAL,
             )?),
@@ -618,10 +620,11 @@ impl Renderer {
         &mut self,
         mono: &[FontSpec],
         ui: &[FontSpec],
+        body: &[FontSpec],
         terminal: &[FontSpec],
         weight: u16,
     ) -> Result<(), String> {
-        let fonts = Fonts::load(mono, ui, terminal, weight)?;
+        let fonts = Fonts::load(mono, ui, body, terminal, weight)?;
         self.glyphs.borrow_mut().set_fonts(fonts);
         Ok(())
     }
