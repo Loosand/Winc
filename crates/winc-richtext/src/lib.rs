@@ -5,23 +5,33 @@
 //! - [`decorations`]：非侵入式装饰层（[`DecorationSet`]、区间标记、行内虚文字与块级虚拟区块）；
 //! - [`layout`]：排版与几何层（[`Laid`] 整篇块级缓存排版与视图坐标 ↔ 原文位置双向定位）；
 //! - [`session`]：编辑会话状态与可见光标导航（[`LiveState`]、隐藏标记跳过、折行归属与竖直导航）；
-//! - [`commands`]：无副作用的结构化编辑命令与智能粘贴规划器（[`EditPlan`]、[`EnterPlan`] 等）。
+//! - [`commands`]：无副作用的结构化编辑命令、按键路由与写作命令规划器；
+//! - [`input_rules`]：可单步撤销的两段式输入规则引擎（[`InputRulePlan`]）；
+//! - [`clipboard`]：隐藏标记选区扩展、富文本复制载荷与智能粘贴改写规划器。
 
+pub mod clipboard;
 pub mod commands;
 pub mod decorations;
+pub mod input_rules;
 pub mod layout;
 pub mod mapping;
 pub mod session;
 
-pub use commands::{BackspaceAction, DeleteAction, EditPlan, EnterPlan, PasteSpot, TableStepPlan};
+pub use clipboard::{CopyPayload, PasteSpot};
+pub use commands::{
+    BackspaceAction, DeleteAction, EditPlan, EnterPlan, LiveKey, LiveKeyAction, LiveKeyModifiers,
+    TableStepPlan, WritingCommand,
+};
 pub use decorations::{
     Decoration, DecorationId, DecorationKind, DecorationLayer, DecorationSet, MarkStyle,
     WidgetStyle,
 };
+pub use input_rules::{FenceEnterRule, InputRulePlan};
 pub use layout::{
     BASE_RATIO, Before, COPY, DETAILS, EXPAND, Fading, Key, LAYOUT_BUDGET, Laid, LaidWidget, Later,
-    LayoutInput, Leaving, LiveKey, LiveLeaf, MAX_WIDTH, Memo, Moves, NEAR_BLOCKS, Near, PAD,
-    PAD_NARROW, Point, SHED_BLOCKS, TABLE, TASK, WIDE_WIDTH, WIDGET_GAP, interpolate, line_box,
+    LayoutInput, Leaving, LiveKey as LayoutLiveKey, LiveLeaf, MAX_WIDTH, Memo, Moves, NEAR_BLOCKS,
+    Near, PAD, PAD_NARROW, Point, SHED_BLOCKS, TABLE, TASK, WIDE_WIDTH, WIDGET_GAP, interpolate,
+    line_box,
 };
 pub use mapping::{
     Assoc, ChangeMap, ChangeSeq, Fenced, SourceBridge, fenced_lines, in_fence, is_image_url,

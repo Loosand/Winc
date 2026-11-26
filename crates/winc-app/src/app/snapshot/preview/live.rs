@@ -490,3 +490,79 @@ fn task_items_can_be_typed() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// 输入规则（任务框简写、第三个围栏字符自动闭合、围栏开行回车自动闭合）必须支持单步撤销：
+/// 第 1 次撤销仅退回自动转换并保留用户原始输入，第 2 次撤销才撤回原始输入；组字期间不触发。
+#[test]
+fn input_rules_support_single_step_undo_and_respect_ime_preedit() {
+    use winc_editor::Command;
+    use winit::keyboard::{Key, NamedKey};
+
+    let space = Key::Character(" ".into());
+    let tick = Key::Character("`".into());
+    let enter = Key::Named(NamedKey::Enter);
+
+    // 1. 空格任务框规则：`[]` + 空格 -> `- [ ] ` -> 1 次 Undo -> `[] ` -> 2 次 Undo -> `[]`。
+    {
+        let (mut app, dir) = live_doc("md-rule-undo-task", "前文\n\n\n\n后文\n");
+        let doc = app.editor.active_mut().unwrap();
+        doc.selection = winc_core::Selection::point(4);
+        settle(&mut app);
+        app.run(Command::Insert("[]".into()));
+        paint(&mut app);
+        assert!(app.markdown_key(&space, false));
+        assert_eq!(with_caret(&app), "前文\n\n- [ ] |\n\n后文\n");
+
+        app.run(Command::Undo);
+        assert_eq!(with_caret(&app), "前文\n\n[] |\n\n后文\n");
+        app.run(Command::Undo);
+        assert_eq!(with_caret(&app), "前文\n\n[]|\n\n后文\n");
+        app.run(Command::Redo);
+        assert_eq!(with_caret(&app), "前文\n\n[] |\n\n后文\n");
+        app.run(Command::Redo);
+        assert_eq!(with_caret(&app), "前文\n\n- [ ] |\n\n后文\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 2. 第三个反引号自动闭围栏：`` + ` -> ```|\n``` -> 1 次 Undo -> ```| -> 2 次 Undo -> ``|。
+    {
+        let (mut app, dir) = live_doc("md-rule-undo-fence-char", "前文\n\n\n\n后文\n");
+        let doc = app.editor.active_mut().unwrap();
+        doc.selection = winc_core::Selection::point(4);
+        settle(&mut app);
+        app.run(Command::Insert("``".into()));
+        paint(&mut app);
+        assert!(app.markdown_key(&tick, false));
+        assert_eq!(with_caret(&app), "前文\n\n```|\n```\n\n后文\n");
+
+        app.run(Command::Undo);
+        assert_eq!(with_caret(&app), "前文\n\n```|\n\n后文\n");
+        app.run(Command::Undo);
+        assert_eq!(with_caret(&app), "前文\n\n``|\n\n后文\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 3. 围栏开行回车自动闭围栏：```rust + Enter -> ```rust\n|\n``` -> 1 次 Undo -> ```rust\n| -> 2 次 Undo -> ```rust|。
+    {
+        let (mut app, dir) = live_doc("md-rule-undo-fence-enter", "前文\n\n```rust\n\n后文\n");
+        put_caret(&mut app, "```rust", true);
+        assert!(app.markdown_key(&enter, false));
+        assert_eq!(with_caret(&app), "前文\n\n```rust\n|\n```\n\n后文\n");
+
+        app.run(Command::Undo);
+        assert_eq!(with_caret(&app), "前文\n\n```rust\n|\n\n后文\n");
+        app.run(Command::Undo);
+        assert_eq!(with_caret(&app), "前文\n\n```rust|\n\n后文\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 4. IME 组字期间不得触发空格任务框或围栏输入规则。
+    {
+        let (mut app, dir) = live_doc("md-rule-ime-guard", "前文\n\n[]\n\n后文\n");
+        put_caret(&mut app, "[]", true);
+        app.ime.preedit = "kong".into();
+        assert!(!app.markdown_key(&space, false));
+        assert_eq!(doc_text(&app), "前文\n\n[]\n\n后文\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

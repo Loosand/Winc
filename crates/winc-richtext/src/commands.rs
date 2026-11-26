@@ -1,4 +1,4 @@
-//! 结构化编辑命令与智能粘贴规划器。
+//! 结构化编辑命令与按键意图路由。
 //!
 //! 本模块中的所有命令均基于只读原文（[`Rope`]）、解析结构（[`Markdown`]）与当前选区计算，
 //! 输出纯数据编辑方案（[`EditPlan`]、[`EnterPlan`]、[`BackspaceAction`] 等），不直接依赖宿主应用或
@@ -9,18 +9,243 @@ use std::ops::Range;
 use ropey::Rope;
 use winc_core::{Change, EditKind, LineEnding, Selection, Transaction};
 use winc_preview::markdown::{
-    self, Align, Block, Markdown,
+    Align, Block, Markdown,
     cells::{self, Change as TableChange, Step as TableStep},
-    enter::{self, Fence, NextLine},
+    enter::{self, NextLine},
     format,
-    from_html::from_html,
     paragraph::{self, Kind as ParagraphKind},
 };
 
 use crate::layout::LiveLeaf;
 use crate::mapping::{
-    Fenced, SourceBridge, fenced_lines, is_image_url, is_url, line_end, line_text,
+    Fenced, SourceBridge, fenced_lines, is_url, leaf_at_or_before, line_end, line_text,
 };
+
+/// 实时编辑预览中可由内核识别的平台无关按键。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveKey {
+    /// 左方向键。
+    ArrowLeft,
+    /// 右方向键。
+    ArrowRight,
+    /// 上方向键。
+    ArrowUp,
+    /// 下方向键。
+    ArrowDown,
+    /// 向上翻页。
+    PageUp,
+    /// 向下翻页。
+    PageDown,
+    /// 行首键。
+    Home,
+    /// 行尾键。
+    End,
+    /// 回车键。
+    Enter,
+    /// 退格键。
+    Backspace,
+    /// 向前删除键。
+    Delete,
+    /// Tab 键。
+    Tab,
+    /// 空格键。
+    Space,
+    /// 普通字符键。
+    Char(char),
+}
+
+/// 实时编辑按键的修饰键与平台上下文。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveKeyModifiers {
+    /// 主命令键（macOS 为 ⌘，其他平台为 Ctrl）。
+    pub cmd: bool,
+    /// Shift 键。
+    pub shift: bool,
+    /// Alt / Option 键。
+    pub alt: bool,
+    /// 当前是否运行在 macOS 平台（决定 ⌘← / ⌘→ 是否映射为显示行首尾）。
+    pub macos: bool,
+}
+
+/// 内核对实时编辑按键的语义路由结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveKeyAction {
+    /// 移到当前显示行的开头或末尾。
+    LineEdge {
+        /// 为真时移到行尾，为假时移到行首。
+        end: bool,
+    },
+    /// 在已闭合的围栏代码块或公式块之后另起一段。
+    LeaveFenced,
+    /// 执行表格结构工具命令（如 `"row"`、`"delete-row"`）。
+    TableTool(&'static str),
+    /// 切换表格单元格，若不在表格中则回退到列表项缩进调整。
+    TabOrListShift {
+        /// 是否反向（⇧Tab）。
+        reverse: bool,
+    },
+    /// 正文、表格或围栏中的回车键（不带 Shift 时先尝试表格下行）。
+    Enter {
+        /// 是否按住 Shift（段内硬换行）。
+        shift: bool,
+    },
+    /// 退格键。
+    Backspace,
+    /// 向前删除键。
+    Delete,
+    /// 水平方向移动（跳过隐藏块标记与折叠分隔行）。
+    Horizontal {
+        /// 为真时向右，为假时向左。
+        right: bool,
+    },
+    /// 空格触发的输入规则。
+    SpaceRule,
+    /// 反引号或波浪号触发的围栏自动闭合规则。
+    FenceChar(char),
+    /// 竖直方向按显示行或翻页移动。
+    Vertical {
+        /// 为真时向下，为假时向上。
+        down: bool,
+        /// 为真时翻页，为假时逐行移动。
+        page: bool,
+    },
+}
+
+/// 根据按键、修饰键与光标是否位于表格中，路由到统一的实时编辑语义动作。
+pub fn route_live_key(
+    key: LiveKey,
+    mods: LiveKeyModifiers,
+    in_table: bool,
+) -> Option<LiveKeyAction> {
+    if mods.macos && mods.cmd && !mods.alt {
+        match key {
+            LiveKey::ArrowLeft => return Some(LiveKeyAction::LineEdge { end: false }),
+            LiveKey::ArrowRight => return Some(LiveKeyAction::LineEdge { end: true }),
+            _ => {}
+        }
+    }
+    if mods.cmd && !mods.alt {
+        if !mods.shift && key == LiveKey::Enter {
+            return Some(if in_table {
+                LiveKeyAction::TableTool("row")
+            } else {
+                LiveKeyAction::LeaveFenced
+            });
+        }
+        if in_table && mods.shift && key == LiveKey::Backspace {
+            return Some(LiveKeyAction::TableTool("delete-row"));
+        }
+        return None;
+    }
+    if mods.alt {
+        return None;
+    }
+    match key {
+        LiveKey::Tab => Some(LiveKeyAction::TabOrListShift {
+            reverse: mods.shift,
+        }),
+        LiveKey::Enter => Some(LiveKeyAction::Enter { shift: mods.shift }),
+        LiveKey::Backspace => Some(LiveKeyAction::Backspace),
+        LiveKey::Delete => Some(LiveKeyAction::Delete),
+        LiveKey::Home => Some(LiveKeyAction::LineEdge { end: false }),
+        LiveKey::End => Some(LiveKeyAction::LineEdge { end: true }),
+        LiveKey::ArrowLeft => Some(LiveKeyAction::Horizontal { right: false }),
+        LiveKey::ArrowRight => Some(LiveKeyAction::Horizontal { right: true }),
+        LiveKey::Space | LiveKey::Char(' ') if !mods.shift => Some(LiveKeyAction::SpaceRule),
+        LiveKey::Char(ch @ ('`' | '~')) => Some(LiveKeyAction::FenceChar(ch)),
+        LiveKey::ArrowUp => Some(LiveKeyAction::Vertical {
+            down: false,
+            page: false,
+        }),
+        LiveKey::ArrowDown => Some(LiveKeyAction::Vertical {
+            down: true,
+            page: false,
+        }),
+        LiveKey::PageUp => Some(LiveKeyAction::Vertical {
+            down: false,
+            page: true,
+        }),
+        LiveKey::PageDown => Some(LiveKeyAction::Vertical {
+            down: true,
+            page: true,
+        }),
+        LiveKey::Space | LiveKey::Char(_) => None,
+    }
+}
+
+/// 统一的 Markdown 写作命令，覆盖块级样式切换、插入块结构与链接/图片生成。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WritingCommand<'a> {
+    /// 切换选中各行的段落/标题/列表/引用类型。
+    Paragraph(ParagraphKind),
+    /// 将选中行包裹进围栏代码块或数学公式块。
+    Fenced(&'a str),
+    /// 插入两列 Markdown 表格。
+    Table,
+    /// 将单行选区做成链接或图片；可选带入剪贴板中的网址。
+    Link {
+        /// 剪贴板当前文本（有效网址时自动填入）。
+        clipboard_url: Option<&'a str>,
+        /// 是否插入图片语法。
+        image: bool,
+    },
+    /// 替换第 `first..=last` 行并按字节偏移设定新选区。
+    ReplaceLines {
+        /// 起始行号（含）。
+        first: usize,
+        /// 结束行号（含）。
+        last: usize,
+        /// 替换后的文本。
+        text: &'a str,
+        /// 替换后选中的字节范围（相对 `text`）。
+        select: Range<usize>,
+    },
+    /// 在第 `line` 行下方空一行插入块，光标落于 `caret_byte`。
+    InsertBelow {
+        /// 基准行号。
+        line: usize,
+        /// 插入的块文本。
+        block: &'a str,
+        /// 光标相对 `block` 起点的字节偏移。
+        caret_byte: usize,
+    },
+}
+
+/// 按统一入口规划写作命令，产出原子 [`EditPlan`]。
+pub fn plan_writing(
+    rope: &Rope,
+    selection: Selection,
+    command: WritingCommand<'_>,
+    crlf: bool,
+) -> Option<EditPlan> {
+    match command {
+        WritingCommand::Paragraph(kind) => Some(plan_paragraph_kind(rope, selection, kind, crlf)),
+        WritingCommand::Fenced(fence) => Some(plan_insert_fenced(rope, selection, fence, crlf)),
+        WritingCommand::Table => Some(plan_insert_table(rope, selection, crlf)),
+        WritingCommand::Link {
+            clipboard_url,
+            image,
+        } => plan_insert_link(rope, selection, clipboard_url, image, crlf),
+        WritingCommand::ReplaceLines {
+            first,
+            last,
+            text,
+            select,
+        } => Some(plan_replace_lines(
+            rope,
+            first,
+            last,
+            text.to_owned(),
+            select,
+            crlf,
+        )),
+        WritingCommand::InsertBelow {
+            line,
+            block,
+            caret_byte,
+        } => Some(plan_insert_below(rope, line, block, caret_byte, crlf)),
+    }
+}
 
 /// 一次富文本编辑命令产出的原子文本替换方案。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,35 +349,67 @@ pub enum DeleteAction {
     Delete(Range<usize>),
 }
 
-/// 粘贴处上下文：光标所在行中光标之前、之后的文字，以及上一行是否为空（或不存在）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PasteSpot {
-    /// 光标之前本行内容。
-    pub before: String,
-    /// 光标之后本行内容。
-    pub after: String,
-    /// 上一行是否为空行（或当前就是首行）。
-    pub blank_above: bool,
+/// 规划围栏代码块或公式块之后另起一段（⌘↩ 退出围栏）。
+pub fn plan_leave_fenced(rope: &Rope, fenced: &Fenced, crlf: bool) -> Option<EditPlan> {
+    if !fenced.closed {
+        return None;
+    }
+    let end = line_end(rope, fenced.last);
+    let added = if crlf { 4 } else { 2 };
+    Some(EditPlan {
+        replace: end..end,
+        insert: "\n\n".to_owned(),
+        selection: Selection::point(end + added),
+        paste: false,
+        slide: false,
+    })
 }
 
-impl PasteSpot {
-    /// 在当前位置插入块级 Markdown（如表格、多块 HTML）时补足前后空行分隔。
-    pub fn block(&self, text: &str, continue_after: bool) -> String {
-        let lead = if !self.before.trim().is_empty() {
-            "\n\n"
-        } else if !self.blank_above {
-            "\n"
-        } else {
-            ""
-        };
-        let text = text.trim_end_matches('\n');
-        let tail = if continue_after || !self.after.trim().is_empty() {
-            "\n\n"
-        } else {
-            ""
-        };
-        format!("{lead}{text}{tail}")
+/// 规划在文档末尾非正文块（代码块、表格、分隔线等）之后按 ↓ 时另起一段。
+///
+/// 文档为空或已以换行符结束时返回 `None`（光标可直接移到末尾空行）。
+pub fn plan_append_paragraph(
+    rope: &Rope,
+    end_prose: Option<bool>,
+    open_fence: bool,
+    crlf: bool,
+) -> Option<EditPlan> {
+    let chars = rope.len_chars();
+    if chars == 0 || rope.char(chars - 1) == '\n' || end_prose != Some(false) || open_fence {
+        return None;
     }
+    let added = if crlf { 4 } else { 2 };
+    Some(EditPlan {
+        replace: chars..chars,
+        insert: "\n\n".to_owned(),
+        selection: Selection::point(chars + added),
+        paste: false,
+        slide: false,
+    })
+}
+
+/// 规划单击正文下方空白时在文末打开一个可编辑空段；无需插入时返回 `None`。
+///
+/// 返回 `(插入起点字符偏移, 要插入的换行文本)`。
+pub fn plan_open_paragraph_below_body(
+    rope: &Rope,
+    selection: Selection,
+) -> Option<(usize, String)> {
+    let chars = rope.len_chars();
+    if selection != Selection::point(chars) {
+        return None;
+    }
+    let last = rope.len_lines().checked_sub(1)?;
+    let blank = |line| rope.line(line).chars().all(char::is_whitespace);
+    let ending = if blank(last) {
+        if last == 0 || blank(last - 1) {
+            return None;
+        }
+        "\n"
+    } else {
+        "\n\n"
+    };
+    Some((chars, ending.to_owned()))
 }
 
 /// 将 `old` 替换为 `new` 时，只切出首尾不同的最小变更段，生成对应的 [`EditPlan`]。
@@ -339,38 +596,6 @@ pub fn plan_enter(
     })
 }
 
-/// 规划围栏行末尾回车时的闭围栏自动补全。
-///
-/// - `Some(Some((head, tail)))`：需要补全闭围栏，光标留在 `head` 与 `tail` 之间；
-/// - `Some(None)`：下方已有闭围栏，交由普通换行处理；
-/// - `None`：当前位置不是围栏开行。
-pub fn plan_fence_enter(
-    rope: &Rope,
-    leaf: Option<&LiveLeaf>,
-    caret_char: usize,
-) -> Option<Option<(String, String)>> {
-    let caret = caret_char.min(rope.len_chars());
-    let line = rope.char_to_line(caret);
-    if leaf.is_some_and(|l| !l.prose && rope.byte_to_line(l.leaf.start) != line) {
-        return None;
-    }
-    let byte = rope.char_to_byte(caret);
-    let start = rope.line_to_byte(line);
-    let before = rope.byte_slice(start..byte).to_string();
-    if !before.contains(['`', '~', '$']) {
-        return None;
-    }
-    let after = line_text(rope, line)[byte - start..].to_owned();
-    let below: Vec<String> = (line + 1..rope.len_lines())
-        .map(|l| line_text(rope, l))
-        .collect();
-    let fence = enter::fence(&before, &after, below.iter().map(String::as_str))?;
-    match fence {
-        Fence::Open { head, tail } => Some(Some((head, tail))),
-        Fence::Closed => Some(None),
-    }
-}
-
 /// 规划 Tab / ⇧Tab 调整列表项缩进（连同子项与续行一起缩进）。
 ///
 /// - `None`：当前行不是列表项或跨行选区，交由普通缩进处理；
@@ -449,60 +674,6 @@ pub fn plan_list_shift(
         paste: false,
         slide: false,
     }))
-}
-
-/// 规划空格触发的输入规则（行首任务框简写 `[]` / `-[]` / `- [` -> `- [ ] `）。
-pub fn plan_space_rule(
-    rope: &Rope,
-    selection: Selection,
-    leaf: Option<&LiveLeaf>,
-) -> Option<EditPlan> {
-    if !selection.is_empty() || leaf.is_some_and(|l| !l.prose) {
-        return None;
-    }
-    let caret = rope.char_to_byte(selection.head.min(rope.len_chars()));
-    let line = rope.byte_to_line(caret);
-    let text = line_text(rope, line);
-    let at = (caret - rope.line_to_byte(line)).min(text.len());
-    let edit = enter::task(&text[..at], &text[at..])?;
-    let a = rope.byte_to_char(caret - edit.before);
-    let b = rope.byte_to_char(caret + edit.after);
-    let end_caret = a + edit.text.chars().count();
-    Some(EditPlan {
-        replace: a..b,
-        insert: edit.text,
-        selection: Selection::point(end_caret),
-        paste: false,
-        slide: false,
-    })
-}
-
-/// 规划输入第三个 `` ` `` 或 `~` 时自动补全闭围栏；返回 `(mark, tail)`。
-pub fn plan_fence_char(
-    rope: &Rope,
-    selection: Selection,
-    leaf: Option<&LiveLeaf>,
-    mark: &str,
-) -> Option<String> {
-    if !selection.is_empty() || leaf.is_some_and(|l| !l.prose) {
-        return None;
-    }
-    let caret = rope.char_to_byte(selection.head.min(rope.len_chars()));
-    let line = rope.byte_to_line(caret);
-    let current = line_text(rope, line);
-    let at = (caret - rope.line_to_byte(line)).min(current.len());
-    let typed = format!("{}{mark}", &current[..at]);
-    if typed.len() - typed.trim_end_matches(mark).len() != 3 * mark.len() {
-        return None;
-    }
-    let below: Vec<String> = (line + 1..rope.len_lines())
-        .map(|l| line_text(rope, l))
-        .collect();
-    let fence = enter::fence(&typed, &current[at..], below.iter().map(String::as_str))?;
-    match fence {
-        Fence::Open { tail, .. } => Some(tail),
-        Fence::Closed => None,
-    }
 }
 
 /// 规划围栏代码块或公式块中的退格键保护与拆块逻辑。
@@ -632,10 +803,7 @@ pub fn plan_backspace(
             let last = last.trim_end();
             let closed = parsed.and_then(|parsed| {
                 let end = rope.char_to_byte(from);
-                let i = parsed
-                    .leaves
-                    .partition_point(|leaf| leaf.range.start <= end);
-                let leaf = parsed.leaves.get(i.checked_sub(1)?)?;
+                let leaf = leaf_at_or_before(parsed, end)?;
                 if leaf.prose || leaf.table {
                     return None;
                 }
@@ -914,147 +1082,10 @@ pub fn plan_insert_link(
     })
 }
 
-/// 规划在正文中粘贴网址时的 Markdown 改写（选中文字变 `[文字](url)`，无选区图片网址变 `![](url)`）。
-pub fn plan_paste_url(rope: &Rope, selection: Selection, content: &str) -> Option<String> {
-    let url = content.trim();
-    if !is_url(url) {
-        return None;
-    }
-    let chars = rope.len_chars();
-    let (from, to) = (selection.from().min(chars), selection.to().min(chars));
-    let selected = rope.slice(from..to).to_string();
-    let link = !selected.is_empty() && !selected.contains(['\n', '`']) && !is_url(selected.trim());
-    let image = selected.is_empty() && is_image_url(url);
-    if !link && !image {
-        return None;
-    }
-    let text = if image { "" } else { selected.as_str() };
-    Some(paragraph::link(text, Some(url), image).0)
-}
-
-/// 规划在正文中粘贴制表符分隔内容（TSV）时的 GFM 表格改写。
-pub fn plan_paste_tsv(
-    selection: Selection,
-    spot: &PasteSpot,
-    content: &str,
-    live: bool,
-) -> Option<String> {
-    if !selection.is_empty() || !content.contains('\t') {
-        return None;
-    }
-    let table = cells::from_tsv(content)?;
-    Some(spot.block(&table, live))
-}
-
-/// 规划在正文中粘贴剪贴板 HTML 时的 Markdown 转换与块级分隔。
-pub fn plan_paste_html(
-    spot: &PasteSpot,
-    html: &str,
-    has_plain: bool,
-    live: bool,
-) -> Option<String> {
-    let converted = from_html(html);
-    let body = converted.text.trim_end();
-    if body.is_empty() || (!converted.rich && has_plain) {
-        return None;
-    }
-    let starts_block = ["#", "- ", "> ", "|", "```", "---", "!["]
-        .iter()
-        .any(|p| body.starts_with(p))
-        || body
-            .split_once(". ")
-            .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()));
-    if !body.contains('\n') && !starts_block {
-        return Some(body.to_owned());
-    }
-    let end_in_prose = live
-        && spot.after.trim().is_empty()
-        && body
-            .lines()
-            .next_back()
-            .is_some_and(|line| line.starts_with('|') && line.ends_with('|'))
-        && matches!(markdown::parse(body).blocks.last(), Some(Block::Table(..)));
-    Some(spot.block(&converted.text, end_in_prose))
-}
-
-/// 跨行替换/删除选区时，修复两端未被完全覆盖的简单强调标记（`*` / `**` / `~~` / `==`），
-/// 避免留下残缺语法。
-pub fn plan_repair_emphasis(
-    rope: &Rope,
-    selection: Selection,
-    range: Range<usize>,
-    replace: &str,
-    prose_at: impl Fn(usize) -> Option<bool>,
-) -> Option<Transaction> {
-    let (first, last) = (rope.char_to_line(range.start), rope.char_to_line(range.end));
-    if first == last
-        || replace.contains(['\n', '\r'])
-        || rope
-            .line(first)
-            .len_bytes()
-            .max(rope.line(last).len_bytes())
-            > 32 * 1024
-    {
-        return None;
-    }
-    let (mut a, mut b) = (rope.char_to_byte(range.start), rope.char_to_byte(range.end));
-    let (left, right) = (rope.line_to_byte(first), rope.line_to_byte(last));
-    let (before, after) = (rope.line(first).to_string(), rope.line(last).to_string());
-    let start = (prose_at(a) == Some(true))
-        .then(|| format::emphasis_boundary(&before, a - left))
-        .flatten();
-    let end = (prose_at(b) == Some(true))
-        .then(|| format::emphasis_boundary(&after, b - right))
-        .flatten();
-    if start.is_none() && end.is_none() {
-        return None;
-    }
-    if let (Some((_, l)), Some((_, r))) = (&start, &end)
-        && (l == r || replace.is_empty())
-    {
-        return None;
-    }
-    let mut inserted = String::new();
-    if let Some((span, mark)) = start {
-        let body = &before[span.start + mark.len()..a - left];
-        let kept = body.trim_end();
-        if kept.is_empty() {
-            a = left + span.start;
-        } else {
-            a -= body.len() - kept.len();
-            inserted.push_str(mark);
-        }
-        inserted.push_str(&body[kept.len()..]);
-    }
-    inserted.push_str(replace);
-    let caret = inserted.chars().count();
-    if let Some((span, mark)) = end {
-        let body = &after[b - right..span.end - mark.len()];
-        let kept = body.trim_start();
-        inserted.push_str(&body[..body.len() - kept.len()]);
-        if kept.is_empty() {
-            b = right + span.end;
-        } else {
-            b += body.len() - kept.len();
-            inserted.push_str(mark);
-        }
-    }
-    let start_char = rope.byte_to_char(a);
-    Some(Transaction::new(
-        vec![Change {
-            start: start_char,
-            removed: rope.byte_slice(a..b).to_string(),
-            inserted,
-        }],
-        selection,
-        Selection::point(start_char + caret),
-        EditKind::Other,
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use winc_preview::markdown;
 
     fn apply_plan(text: &str, plan: &EditPlan) -> String {
         let mut rope = Rope::from_str(text);
@@ -1094,20 +1125,42 @@ mod tests {
     }
 
     #[test]
-    fn space_rule_and_fence_char_trigger_expected_edits() {
-        let rope = Rope::from_str("[]");
-        let parsed = markdown::parse("[]");
-        let leaf = SourceBridge::new(&rope, &parsed, 1, Some(1)).leaf_at(2);
-        let plan = plan_space_rule(&rope, Selection::point(2), leaf.as_ref())
-            .expect("行首 [] 后按空格应转换为任务项");
-        assert_eq!(apply_plan("[]", &plan), "- [ ] ");
-
-        let fence_rope = Rope::from_str("``");
-        let fence_parsed = markdown::parse("``");
-        let fence_leaf = SourceBridge::new(&fence_rope, &fence_parsed, 1, Some(1)).leaf_at(2);
-        let tail = plan_fence_char(&fence_rope, Selection::point(2), fence_leaf.as_ref(), "`")
-            .expect("输入第三个反引号应补全闭围栏");
-        assert!(tail.contains("```"));
+    fn route_live_key_dispatches_table_fence_and_navigation_intents() {
+        let plain = LiveKeyModifiers::default();
+        let cmd_mac = LiveKeyModifiers {
+            cmd: true,
+            macos: true,
+            ..Default::default()
+        };
+        let cmd_shift = LiveKeyModifiers {
+            cmd: true,
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            route_live_key(LiveKey::ArrowLeft, cmd_mac, false),
+            Some(LiveKeyAction::LineEdge { end: false })
+        );
+        assert_eq!(
+            route_live_key(LiveKey::Enter, cmd_mac, false),
+            Some(LiveKeyAction::LeaveFenced)
+        );
+        assert_eq!(
+            route_live_key(LiveKey::Enter, cmd_mac, true),
+            Some(LiveKeyAction::TableTool("row"))
+        );
+        assert_eq!(
+            route_live_key(LiveKey::Backspace, cmd_shift, true),
+            Some(LiveKeyAction::TableTool("delete-row"))
+        );
+        assert_eq!(
+            route_live_key(LiveKey::Space, plain, false),
+            Some(LiveKeyAction::SpaceRule)
+        );
+        assert_eq!(
+            route_live_key(LiveKey::Char('`'), plain, false),
+            Some(LiveKeyAction::FenceChar('`'))
+        );
     }
 
     #[test]
@@ -1139,34 +1192,40 @@ mod tests {
     }
 
     #[test]
-    fn smart_paste_rewrites_url_and_tsv() {
-        let rope = Rope::from_str("点击这里");
-        assert_eq!(
-            plan_paste_url(&rope, Selection::new(0, 4), "https://example.com"),
-            Some("[点击这里](https://example.com)".to_owned())
-        );
-        assert_eq!(
-            plan_paste_url(&rope, Selection::point(4), "https://example.com/a.png"),
-            Some("![](https://example.com/a.png)".to_owned())
-        );
-
-        let spot = PasteSpot {
-            before: String::new(),
-            after: String::new(),
-            blank_above: true,
-        };
-        let table = plan_paste_tsv(Selection::point(0), &spot, "A\tB\n1\t2", true)
-            .expect("TSV 应转为 Markdown 表格");
-        assert!(table.contains("| A | B |"));
-    }
-
-    #[test]
-    fn paragraph_and_table_tools_produce_atomic_plans() {
+    fn writing_commands_and_fenced_exit_produce_atomic_plans() {
         let rope = Rope::from_str("普通段落");
-        let plan =
-            plan_paragraph_kind(&rope, Selection::point(2), ParagraphKind::Heading(2), false);
+        let plan = plan_writing(
+            &rope,
+            Selection::point(2),
+            WritingCommand::Paragraph(ParagraphKind::Heading(2)),
+            false,
+        )
+        .expect("应能切换为二级标题");
         assert_eq!(apply_plan("普通段落", &plan), "## 普通段落");
         assert_eq!(plan.selection, Selection::point(5));
+
+        let fenced_doc = "```rust\nlet x = 1;\n```";
+        let f_rope = Rope::from_str(fenced_doc);
+        let f_parsed = markdown::parse(fenced_doc);
+        let fence = SourceBridge::new(&f_rope, &f_parsed, 1, Some(1))
+            .fenced_at(10)
+            .expect("应识别围栏");
+        let leave = plan_leave_fenced(&f_rope, &fence, false).expect("已闭合围栏应支持 ⌘↩ 退出");
+        assert_eq!(
+            apply_plan(fenced_doc, &leave),
+            "```rust\nlet x = 1;\n```\n\n"
+        );
+
+        let append = plan_append_paragraph(&f_rope, Some(false), false, false)
+            .expect("文末非正文块按 ↓ 应追加段落");
+        assert_eq!(
+            apply_plan(fenced_doc, &append),
+            "```rust\nlet x = 1;\n```\n\n"
+        );
+
+        let below = plan_open_paragraph_below_body(&rope, Selection::point(4))
+            .expect("点击正文下方应插入双换行");
+        assert_eq!(below, (4, "\n\n".to_owned()));
 
         let md = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
         let table_rope = Rope::from_str(md);

@@ -100,22 +100,55 @@ impl App {
         let Some(rope) = doc.text().rope() else {
             return;
         };
-        let last = rope.len_lines() - 1;
-        let blank = |line| rope.line(line).chars().all(char::is_whitespace);
-        let ending = if blank(last) {
-            if last == 0 || blank(last - 1) {
-                return;
-            }
-            "\n"
-        } else {
-            "\n\n"
-        };
-        let (at, revision) = (rope.len_chars(), doc.revision);
-        if doc.selection != winc_core::Selection::point(at) {
+        let revision = doc.revision;
+        let Some((at, ending)) =
+            winc_richtext::commands::plan_open_paragraph_below_body(rope, doc.selection)
+        else {
             return;
-        }
-        self.run(winc_editor::Command::Insert(ending.into()));
+        };
+        self.run(winc_editor::Command::Insert(ending));
         self.remember_empty_paragraph(revision, at, 0);
+    }
+
+    /// 将 `winc-richtext` 产出的 [`winc_richtext::EditPlan`] 应用到当前活动文档。
+    pub(super) fn apply_edit_plan(
+        &mut self,
+        plan: winc_richtext::EditPlan,
+        record_table: bool,
+    ) -> bool {
+        if plan.slide {
+            self.preview.markdown.slide = true;
+        }
+        let previous_revision = self.editor.active().map(|d| d.revision);
+        let changed = !plan.replace.is_empty() || !plan.insert.is_empty();
+        if let Some(doc) = self.editor.active_mut() {
+            doc.collapse_selections();
+            doc.selection = winc_core::Selection::new(plan.replace.start, plan.replace.end);
+        } else {
+            return false;
+        }
+        if changed {
+            let cmd = if plan.paste {
+                winc_editor::Command::Paste(plan.insert)
+            } else {
+                winc_editor::Command::Insert(plan.insert)
+            };
+            self.run_source_edit(cmd);
+        }
+        if let Some(doc) = self.editor.active_mut() {
+            let chars = doc.text().rope().map_or(0, ropey::Rope::len_chars);
+            doc.selection = winc_core::Selection::new(
+                plan.selection.anchor.min(chars),
+                plan.selection.head.min(chars),
+            );
+            if record_table && Some(doc.revision) != previous_revision {
+                self.preview
+                    .markdown
+                    .live
+                    .record_table_edit(doc.id, doc.revision);
+            }
+        }
+        true
     }
 
     /// 文档的最后一行属于代码块、表格、分隔线等不是正文的块时，在文末另起一段并把光标移到
@@ -123,23 +156,21 @@ impl App {
     ///
     /// 文档以换行符结束时光标可以直接移到末尾的空行，不需要处理。
     pub(super) fn live_append_paragraph(&mut self) -> bool {
-        let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
+        let Some(doc) = self.editor.active() else {
             return false;
         };
-        let chars = rope.len_chars();
-        if chars == 0 || rope.char(chars - 1) == '\n' {
+        let Some(rope) = doc.text().rope() else {
             return false;
-        }
-        if self.live_prose_at(rope.len_bytes()) != Some(false)
-            || self.live_fenced().is_some_and(|fence| !fence.closed)
-        {
+        };
+        let end_prose = self.live_prose_at(rope.len_bytes());
+        let open_fence = self.live_fenced().is_some_and(|fence| !fence.closed);
+        let crlf = doc.line_ending == winc_core::LineEnding::CrLf;
+        let Some(plan) =
+            winc_richtext::commands::plan_append_paragraph(rope, end_prose, open_fence, crlf)
+        else {
             return false;
-        }
-        if let Some(doc) = self.editor.active_mut() {
-            doc.collapse_selections();
-            doc.selection = winc_core::Selection::point(chars);
-        }
-        self.run(winc_editor::Command::Insert("\n\n".to_owned()));
+        };
+        self.apply_edit_plan(plan, false);
         let doc = self.editor.active().map(|d| d.id);
         self.preview.markdown.live.finish_edit(doc, true);
         self.reset_blink();

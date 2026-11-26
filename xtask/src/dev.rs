@@ -40,10 +40,21 @@ const LAYERS: &[(&str, &[&str])] = &[
             "winc-preview",
             "winc-pty",
             "winc-render",
+            "winc-richtext",
             "winc-syntax",
             "winc-typeset",
             "winc-version",
             "winc-vim",
+        ],
+    ),
+    (
+        "winc-richtext",
+        &[
+            "winc-core",
+            "winc-preview",
+            "winc-render",
+            "winc-syntax",
+            "winc-typeset",
         ],
     ),
     (

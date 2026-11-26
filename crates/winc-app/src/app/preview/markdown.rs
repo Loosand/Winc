@@ -44,8 +44,8 @@ mod writing;
 pub(crate) use laid::{Fading, LiveLeaf, Moves};
 pub(crate) use scroll::TocListLayout;
 pub(crate) use viewer::{DiagramLaid, DiagramTool, DiagramView, MAX_ZOOM, MIN_ZOOM};
+use winc_richtext::LiveState;
 pub(crate) use winc_richtext::paragraph_lines;
-use winc_richtext::{LiveState, in_fence, line_end};
 
 /// docx、EPUB 包中的图片：Markdown 中引用的地址和图片文件的内容。
 type Media = Vec<(String, Arc<[u8]>)>;

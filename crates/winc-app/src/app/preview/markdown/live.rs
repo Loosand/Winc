@@ -1,115 +1,103 @@
-//! Markdown 预览中的实时编辑适配器：将窗口按键与菜单操作转发至 `winc_richtext::commands`。
+//! Markdown 预览中的实时编辑适配器：将窗口按键与菜单操作转发至 `winc_richtext`。
 
-use winc_richtext::{BackspaceAction, DeleteAction, EditPlan, commands};
+use winc_richtext::{
+    BackspaceAction, DeleteAction, FenceEnterRule, InputRulePlan, LiveKey, LiveKeyAction,
+    LiveKeyModifiers, commands, input_rules,
+};
 
 use super::*;
+
+/// 将 `winit` 按键转换为内核平台无关按键表示。
+fn to_live_key(key: &Key) -> Option<LiveKey> {
+    match key {
+        Key::Named(NamedKey::ArrowLeft) => Some(LiveKey::ArrowLeft),
+        Key::Named(NamedKey::ArrowRight) => Some(LiveKey::ArrowRight),
+        Key::Named(NamedKey::ArrowUp) => Some(LiveKey::ArrowUp),
+        Key::Named(NamedKey::ArrowDown) => Some(LiveKey::ArrowDown),
+        Key::Named(NamedKey::PageUp) => Some(LiveKey::PageUp),
+        Key::Named(NamedKey::PageDown) => Some(LiveKey::PageDown),
+        Key::Named(NamedKey::Home) => Some(LiveKey::Home),
+        Key::Named(NamedKey::End) => Some(LiveKey::End),
+        Key::Named(NamedKey::Enter) => Some(LiveKey::Enter),
+        Key::Named(NamedKey::Backspace) => Some(LiveKey::Backspace),
+        Key::Named(NamedKey::Delete) => Some(LiveKey::Delete),
+        Key::Named(NamedKey::Tab) => Some(LiveKey::Tab),
+        Key::Named(NamedKey::Space) => Some(LiveKey::Space),
+        Key::Character(s) => {
+            let mut chars = s.chars();
+            let ch = chars.next()?;
+            chars.next().is_none().then_some(LiveKey::Char(ch))
+        }
+        _ => None,
+    }
+}
 
 impl App {
     /// 可编辑的预览中 ↑↓ 按显示行移动光标（加 ⇧ 扩展选区），`PageUp` / `PageDown` 移动一屏；
     /// 正文里的回车、⇧ 回车见 [`App::live_enter`]。
     pub(super) fn live_key(&mut self, key: &Key, cmd: bool, area: winc_render::Rect) -> bool {
         self.parse_markdown_inline();
-        // macOS 上 ⌘← / ⌘→ 与 Home / End 相同，移到显示行的开头、末尾。
-        if cfg!(target_os = "macos") && cmd && !self.pointer.modifiers.alt_key() {
-            match key {
-                Key::Named(NamedKey::ArrowLeft) => return self.live_line_edge(false),
-                Key::Named(NamedKey::ArrowRight) => return self.live_line_edge(true),
-                _ => {}
-            }
-        }
-        // 代码块、公式中 ⌘↩ 在块之后另起一段。
-        if cmd
-            && !self.pointer.modifiers.alt_key()
-            && !self.pointer.modifiers.shift_key()
-            && *key == Key::Named(NamedKey::Enter)
-            && self.live_leave_fenced()
-        {
-            return true;
-        }
-        // 表格中 ⌘↩ 在下方插入一行，⌘⇧⌫ 删除当前行。
-        if cmd && !self.pointer.modifiers.alt_key() && self.live_leaf().is_some_and(|l| l.table) {
-            let shift = self.pointer.modifiers.shift_key();
-            match key {
-                Key::Named(NamedKey::Enter) if !shift => return self.live_table_tool("row"),
-                Key::Named(NamedKey::Backspace) if shift => {
-                    return self.live_table_tool("delete-row");
-                }
-                _ => {}
-            }
-        }
-        if cmd || self.pointer.modifiers.alt_key() {
+        let Some(live_key) = to_live_key(key) else {
             return false;
-        }
-        use winc_preview::markdown::cells::Step;
-        let shift = self.pointer.modifiers.shift_key();
-        match key {
-            Key::Named(NamedKey::Tab) => {
-                return self.live_table_step(if shift { Step::Previous } else { Step::Next })
-                    || self.live_list_shift(shift);
-            }
-            Key::Named(NamedKey::Enter) if !shift && self.live_table_step(Step::Down) => {
-                return true;
-            }
-            Key::Named(NamedKey::Enter) => return self.live_enter(shift),
-            Key::Named(NamedKey::Backspace) => return self.live_backspace(),
-            Key::Named(NamedKey::Delete) => return self.live_delete(),
-            Key::Named(NamedKey::Home) => return self.live_line_edge(false),
-            Key::Named(NamedKey::End) => return self.live_line_edge(true),
-            Key::Named(NamedKey::ArrowLeft) => return self.live_horizontal(false),
-            Key::Named(NamedKey::ArrowRight) => return self.live_horizontal(true),
-            Key::Named(NamedKey::Space) if !shift && self.live_space() => return true,
-            Key::Character(c) if c == " " && !shift && self.live_space() => return true,
-            Key::Character(c) if (c == "`" || c == "~") && self.live_fence_char(c) => {
-                return true;
-            }
-            _ => {}
-        }
-        let page = (area.h * 0.9).max(self.fonts.line_height);
-        let (down, by) = match key {
-            Key::Named(NamedKey::ArrowUp) => (false, None),
-            Key::Named(NamedKey::ArrowDown) => (true, None),
-            Key::Named(NamedKey::PageUp) => (false, Some(page)),
-            Key::Named(NamedKey::PageDown) => (true, Some(page)),
-            _ => return false,
         };
-        self.live_vertical(down, by);
-        true
+        let mods = LiveKeyModifiers {
+            cmd,
+            shift: self.pointer.modifiers.shift_key(),
+            alt: self.pointer.modifiers.alt_key(),
+            macos: cfg!(target_os = "macos"),
+        };
+        let in_table = self.live_leaf().is_some_and(|l| l.table);
+        let Some(action) = commands::route_live_key(live_key, mods, in_table) else {
+            return false;
+        };
+        use winc_preview::markdown::cells::Step;
+        match action {
+            LiveKeyAction::LineEdge { end } => self.live_line_edge(end),
+            LiveKeyAction::LeaveFenced => self.live_leave_fenced(),
+            LiveKeyAction::TableTool(op) => self.live_table_tool(op),
+            LiveKeyAction::TabOrListShift { reverse } => {
+                self.live_table_step(if reverse { Step::Previous } else { Step::Next })
+                    || self.live_list_shift(reverse)
+            }
+            LiveKeyAction::Enter { shift } => {
+                (!shift && self.live_table_step(Step::Down)) || self.live_enter(shift)
+            }
+            LiveKeyAction::Backspace => self.live_backspace(),
+            LiveKeyAction::Delete => self.live_delete(),
+            LiveKeyAction::Horizontal { right } => self.live_horizontal(right),
+            LiveKeyAction::SpaceRule => self.live_space(),
+            LiveKeyAction::FenceChar(ch) => {
+                let mut buf = [0u8; 4];
+                self.live_fence_char(ch.encode_utf8(&mut buf))
+            }
+            LiveKeyAction::Vertical { down, page } => {
+                let step = page.then(|| (area.h * 0.9).max(self.fonts.line_height));
+                self.live_vertical(down, step);
+                true
+            }
+        }
     }
 
-    /// 将 `winc-richtext` 产出的 [`EditPlan`] 应用到当前活动文档。
-    pub(super) fn apply_edit_plan(&mut self, plan: EditPlan, record_table: bool) -> bool {
-        if plan.slide {
-            self.preview.markdown.slide = true;
-        }
-        let previous_revision = self.editor.active().map(|d| d.revision);
-        let changed = !plan.replace.is_empty() || !plan.insert.is_empty();
-        if let Some(doc) = self.editor.active_mut() {
-            doc.collapse_selections();
-            doc.selection = winc_core::Selection::new(plan.replace.start, plan.replace.end);
-        } else {
+    /// 按两段式事务应用可单步撤销的输入规则（先原输入，再独立的自动结构转换事务）。
+    fn apply_input_rule(&mut self, rule: InputRulePlan) -> bool {
+        let Some((start, end)) = rule.raw_range() else {
             return false;
+        };
+        let Some(doc) = self.editor.active_mut() else {
+            return false;
+        };
+        if !doc.fits_edit(start, end) {
+            return true;
         }
-        if changed {
-            let cmd = if plan.paste {
-                winc_editor::Command::Paste(plan.insert)
-            } else {
-                winc_editor::Command::Insert(plan.insert)
-            };
-            self.run_source_edit(cmd);
-        }
-        if let Some(doc) = self.editor.active_mut() {
-            let chars = doc.text().rope().map_or(0, ropey::Rope::len_chars);
-            doc.selection = winc_core::Selection::new(
-                plan.selection.anchor.min(chars),
-                plan.selection.head.min(chars),
-            );
-            if record_table && Some(doc.revision) != previous_revision {
-                self.preview
-                    .markdown
-                    .live
-                    .record_table_edit(doc.id, doc.revision);
-            }
-        }
+        doc.collapse_selections();
+        doc.goal_cell = None;
+        doc.apply(rule.raw);
+        doc.apply(rule.transform);
+        self.relayout();
+        self.ensure_caret_visible();
+        self.finish_live_edit();
+        self.reset_blink();
+        self.request_redraw();
         true
     }
 
@@ -258,7 +246,7 @@ impl App {
         true
     }
 
-    /// 补全闭围栏：在围栏行末尾按回车时，光标移到两行围栏之间的空行。
+    /// 补全闭围栏：在围栏行末尾按回车时，先提交换行再提交可独立撤销的闭围栏事务。
     fn live_fence(&mut self) -> Option<bool> {
         let leaf = self.live_leaf();
         let doc = self.editor.active()?;
@@ -266,21 +254,15 @@ impl App {
         if !doc.selection.is_empty() || !doc.extra_selections().is_empty() {
             return None;
         }
-        let (head, tail) =
-            match commands::plan_fence_enter(rope, leaf.as_ref(), doc.selection.head)? {
-                Some(pair) => pair,
-                None => return Some(false),
-            };
-        self.run(winc_editor::Command::Insert(head));
-        let at = self.editor.active().map(|d| d.selection.head);
-        self.run(winc_editor::Command::Insert(tail));
-        if let Some(doc) = self.editor.active_mut()
-            && let Some(at) = at
-        {
-            doc.selection = winc_core::Selection::point(at);
+        match input_rules::plan_fence_enter_rule(
+            rope,
+            leaf.as_ref(),
+            doc.selection,
+            doc.line_ending,
+        )? {
+            FenceEnterRule::Closed => Some(false),
+            FenceEnterRule::AutoClose(rule) => Some(self.apply_input_rule(*rule)),
         }
-        self.finish_live_edit();
-        Some(true)
     }
 
     /// 按 Tab、⇧Tab 调整列表项的层级：缩进为上一项的子项，或退出一层。
@@ -471,7 +453,7 @@ impl App {
         true
     }
 
-    /// 处理正文中输入的空格（任务框简写转换为 `- [ ] `）。
+    /// 处理正文中输入的空格（任务框简写转换为 `- [ ] `，转换本身可单步撤销）。
     pub(super) fn live_space(&mut self) -> bool {
         if !self.preedit_at(Focus::Editor).is_empty() {
             return false;
@@ -486,15 +468,15 @@ impl App {
         let Some(rope) = doc.text().rope() else {
             return false;
         };
-        let Some(plan) = commands::plan_space_rule(rope, doc.selection, leaf.as_ref()) else {
+        let Some(rule) =
+            input_rules::plan_space_input_rule(rope, doc.selection, leaf.as_ref(), doc.line_ending)
+        else {
             return false;
         };
-        self.apply_edit_plan(plan, false);
-        self.finish_live_edit();
-        true
+        self.apply_input_rule(rule)
     }
 
-    /// 处理正文中输入的 `` ` ``、`~`：自动补全闭围栏。
+    /// 处理正文中输入的 `` ` ``、`~`：自动补全闭围栏（自动补全可单步撤销）。
     pub(super) fn live_fence_char(&mut self, mark: &str) -> bool {
         if !self.preedit_at(Focus::Editor).is_empty() {
             return false;
@@ -509,19 +491,16 @@ impl App {
         let Some(rope) = doc.text().rope() else {
             return false;
         };
-        let Some(tail) = commands::plan_fence_char(rope, doc.selection, leaf.as_ref(), mark) else {
+        let Some(rule) = input_rules::plan_fence_char_rule(
+            rope,
+            doc.selection,
+            leaf.as_ref(),
+            mark,
+            doc.line_ending,
+        ) else {
             return false;
         };
-        self.run(winc_editor::Command::Insert(mark.to_owned()));
-        let at = self.editor.active().map(|d| d.selection.head);
-        self.run(winc_editor::Command::Insert(tail));
-        if let Some(doc) = self.editor.active_mut()
-            && let Some(at) = at
-        {
-            doc.selection = winc_core::Selection::point(at);
-        }
-        self.finish_live_edit();
-        true
+        self.apply_input_rule(rule)
     }
 
     /// 处理围栏代码块、公式中的删除键。
@@ -556,18 +535,20 @@ impl App {
 
     /// 在光标所在的围栏代码块、公式之后另起一段。
     pub(super) fn live_leave_fenced(&mut self) -> bool {
-        let Some(fenced) = self.live_fenced().filter(|f| f.closed) else {
+        let Some(fenced) = self.live_fenced() else {
             return false;
         };
-        let Some(rope) = self.editor.active().and_then(|d| d.text().rope()) else {
+        let Some(doc) = self.editor.active() else {
             return false;
         };
-        let end = line_end(rope, fenced.last);
-        if let Some(doc) = self.editor.active_mut() {
-            doc.collapse_selections();
-            doc.selection = winc_core::Selection::point(end);
-        }
-        self.run(winc_editor::Command::Insert("\n\n".to_owned()));
+        let Some(rope) = doc.text().rope() else {
+            return false;
+        };
+        let crlf = doc.line_ending == winc_core::LineEnding::CrLf;
+        let Some(plan) = commands::plan_leave_fenced(rope, &fenced, crlf) else {
+            return false;
+        };
+        self.apply_edit_plan(plan, false);
         self.finish_live_edit();
         true
     }
