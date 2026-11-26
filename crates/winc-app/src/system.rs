@@ -49,11 +49,20 @@ pub fn open_with_default_app(path: &Path) -> io::Result<()> {
 }
 
 /// Locate the installed macOS Typora bundle, including the newer edition.
+///
+/// 进程内缓存一次查询结果，避免每次打开工作区菜单时在主线程同步请求 Launch Services。
 pub(crate) fn typora_app() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
-    return ["abnerworks.Typora", "io.appmakes.typora"]
-        .into_iter()
-        .find_map(crate::macos::application_path);
+    {
+        static TYPORA: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        TYPORA
+            .get_or_init(|| {
+                ["abnerworks.Typora", "io.appmakes.typora"]
+                    .into_iter()
+                    .find_map(crate::macos::application_path)
+            })
+            .clone()
+    }
     #[cfg(not(target_os = "macos"))]
     None
 }

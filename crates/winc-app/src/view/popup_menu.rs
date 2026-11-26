@@ -105,7 +105,7 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
                 row_rect
             })
             .collect();
-        draw_level(app, frame, level, workspace, popup.app_icon.as_ref());
+        draw_level(app, frame, level, workspace, popup.app_icon.as_deref());
     }
     if let Some(menu) = app.overlays.context_menu.as_mut() {
         menu.popup = Some(popup);

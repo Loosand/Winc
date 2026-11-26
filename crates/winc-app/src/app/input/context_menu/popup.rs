@@ -149,7 +149,7 @@ pub(crate) struct PopupMenu {
     pub at_checked: bool,
     /// 第一级菜单的最小宽度（逻辑像素）；没有要求时为 0。
     pub min_width: f32,
-    pub app_icon: Option<winc_preview::image::Pixels>,
+    pub app_icon: Option<std::sync::Arc<winc_preview::image::Pixels>>,
     /// 目录菜单：当前文件的路径，展开目录时据此给它的各级上层目录打勾；其他菜单为 `None`。
     pub current: Option<PathBuf>,
     /// 键入的筛选文字；没有筛选时为空。
@@ -464,11 +464,53 @@ impl App {
         self.request_redraw();
     }
 
+    /// 展开包含第三方应用图标的子菜单时，才按需加载缓存好的 32×32 图标，避免打开主菜单时阻塞。
+    fn ensure_popup_app_icon(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            if self.window.handle.is_none() {
+                return;
+            }
+            let Some(menu) = &mut self.overlays.context_menu else {
+                return;
+            };
+            let (
+                MenuTarget::NotebookWorkspaces {
+                    typora: Some(path), ..
+                },
+                Some(popup),
+            ) = (&menu.target, &mut menu.popup)
+            else {
+                return;
+            };
+            if popup.app_icon.is_some() {
+                return;
+            }
+            let needs_typora = popup.levels.iter().any(|level| {
+                level.rows.iter().any(|row| {
+                    matches!(
+                        row,
+                        PopupRow::Item {
+                            icon: Some(MenuIcon::Typora),
+                            ..
+                        }
+                    )
+                })
+            });
+            if needs_typora {
+                popup.app_icon = crate::macos::application_icon_pixels(path);
+            }
+        }
+    }
+
     /// 鼠标移到 `(x, y)`；窗口内的菜单打开时返回 `true`，此时只有菜单响应悬停。
     pub(in crate::app) fn popup_mouse_move(&mut self, x: f32, y: f32) -> bool {
         let Some(popup) = self.popup_mut() else {
             return false;
         };
+        let before_len = popup.levels.len();
+        let before_hover: Vec<(Option<usize>, Option<usize>)> =
+            popup.levels.iter().map(|l| (l.parent, l.hover)).collect();
         if let Some((level, row)) = popup.hit(x, y) {
             let same = popup.levels.len() > level + 1
                 && popup.levels[level + 1].parent == row
@@ -481,7 +523,16 @@ impl App {
             // 移出菜单：最深一级的停留取消，已经展开的子菜单留着。
             last.hover = None;
         }
-        self.request_redraw();
+        let changed = popup.levels.len() != before_len
+            || popup
+                .levels
+                .iter()
+                .map(|l| (l.parent, l.hover))
+                .ne(before_hover);
+        if changed {
+            self.ensure_popup_app_icon();
+            self.request_overlay_redraw();
+        }
         true
     }
 
@@ -522,7 +573,10 @@ impl App {
     /// 执行菜单上一次操作的结果。
     fn popup_outcome(&mut self, outcome: Outcome) {
         match outcome {
-            Outcome::Redraw => self.request_redraw(),
+            Outcome::Redraw => {
+                self.ensure_popup_app_icon();
+                self.request_overlay_redraw();
+            }
             Outcome::Choose(tag) => self.choose_popup(tag),
             Outcome::Open(path) => {
                 self.dismiss_popup();
@@ -541,8 +595,11 @@ impl App {
         if let Some((level, _)) = popup.hit(x, y) {
             let level = &mut popup.levels[level];
             let max = (level.content - level.rect.h).max(0.0);
-            level.scroll = (level.scroll - dy).clamp(0.0, max);
-            self.request_redraw();
+            let next = (level.scroll - dy).clamp(0.0, max);
+            if (next - level.scroll).abs() > 0.01 {
+                level.scroll = next;
+                self.request_overlay_redraw();
+            }
         }
         true
     }
@@ -580,7 +637,7 @@ impl App {
         };
         if let Some(query) = typed.filter(|q| !q.chars().any(char::is_control)) {
             popup.set_query(query);
-            self.request_redraw();
+            self.request_overlay_redraw();
             return true;
         }
         let level = popup.levels.len() - 1;

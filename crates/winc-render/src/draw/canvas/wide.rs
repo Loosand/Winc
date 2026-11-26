@@ -69,6 +69,15 @@ wide! {
 }
 
 wide! {
+    /// 按各自的权重 `weights` 混合 `first` 和 `second` 的对应像素并直接写入 `row`（不透明快路径）。
+    fn lerp_pairs(row: &mut [u32], first: &[u32], second: &[u32], weights: &[u32]) {
+        for (((p, &f), &s), &w) in row.iter_mut().zip(first).zip(second).zip(weights) {
+            *p = lerp(f, s, w);
+        }
+    }
+}
+
+wide! {
     /// 按各自的权重 `weights` 混合 `first` 和 `second` 的对应像素，再按权重 `a` 叠到 `row` 上。
     fn lerp_pairs_onto(
         row: &mut [u32],

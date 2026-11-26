@@ -832,14 +832,6 @@ impl App {
             if let Some(menu) = &mut self.overlays.context_menu {
                 let mut popup = PopupMenu::new(rows, at, (at_checked, right_aligned));
                 popup.min_width = min_width;
-                #[cfg(target_os = "macos")]
-                if let MenuTarget::NotebookWorkspaces {
-                    typora: Some(path), ..
-                } = &menu.target
-                    && self.window.handle.is_some()
-                {
-                    popup.app_icon = crate::macos::application_icon_pixels(path);
-                }
                 menu.popup = Some(popup);
             }
             self.request_redraw();

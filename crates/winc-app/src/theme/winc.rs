@@ -114,37 +114,37 @@ pub static WINC_SLATE: Palette = Palette::build(Tokens {
 
 /// 「Winc 晴昼」：默认的浅色主题，略带灰的白底。
 ///
-/// 砖红关键字、蓝色函数、钢青类型、深绿字符串、靛紫数字、橄榄装饰器、梅红属性名；底色不用纯白，
-/// 以降低屏幕亮度高时的眩光。
+/// 柔和炭灰正文（`#333333`）与低饱和钢蓝链接（`#4183C4`），搭配砖红关键字、蓝色函数、钢青类型、
+/// 深绿字符串、靛紫数字、橄榄装饰器、梅红属性名；底色不用纯白，以降低屏幕亮度高时的眩光。
 pub static WINC_DAY: Palette = Palette::build(Tokens {
     dark: false,
     frame: hex(0xE9EBEF),
     card: hex(0xFBFBFC),
     popup: hex(0xFFFFFF),
-    text: hex(0x24272E),
-    text_muted: hex(0x5C6370),
-    text_dim: hex(0x9AA0AB),
-    accent: hex(0x2B66D2),
-    accent_fill: hex(0x2B66D2),
-    selection: hex(0xC9DCFA),
-    gutter: [hex(0xA4AAB5), hex(0x5A606B)],
+    text: hex(0x333333),
+    text_muted: hex(0x737373),
+    text_dim: hex(0xA0A4AC),
+    accent: hex(0x4183C4),
+    accent_fill: hex(0x3673B2),
+    selection: hex(0xCFE2F8),
+    gutter: [hex(0xA8ADB7), hex(0x6E727A)],
     error: hex(0xC2373A),
     warning: hex(0x9A6200),
-    git: [hex(0x2B66D2), hex(0x16805F), hex(0xC4432F), hex(0xA43F98)],
+    git: [hex(0x3673B2), hex(0x16805F), hex(0xC4432F), hex(0xA43F98)],
     tinted_tab: true,
     syntax: [
-        hex(0x24272E),
+        hex(0x333333),
         hex(0xA43E3A),
         hex(0x156686),
         hex(0x1D691A),
         hex(0x58309D),
-        hex(0x6B717D),
+        hex(0x70747C),
         hex(0x0A59CA),
         hex(0x574504),
         hex(0x7E2166),
     ],
     ansi: [
-        hex(0x24272E),
+        hex(0x333333),
         hex(0xC23B3B),
         hex(0x2E7D32),
         hex(0x8A6400),

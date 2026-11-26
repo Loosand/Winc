@@ -197,4 +197,52 @@ fn panel_messages_match_appkit_signatures() {
         encoding(c"NSError", sel!(localizedDescription), true),
         "@@:"
     );
+
+    // 直接绘制 32×32 系统应用图标。
+    assert_eq!(encoding(c"NSWorkspace", sel!(iconForFile:), true), "@@:@");
+    assert_eq!(
+        encoding(
+            c"NSGraphicsContext",
+            sel!(graphicsContextWithBitmapImageRep:),
+            false
+        ),
+        "@@:@"
+    );
+    assert_eq!(
+        encoding(c"NSGraphicsContext", sel!(saveGraphicsState), false),
+        "v@:"
+    );
+    assert_eq!(
+        encoding(c"NSGraphicsContext", sel!(restoreGraphicsState), false),
+        "v@:"
+    );
+    assert_eq!(
+        encoding(c"NSGraphicsContext", sel!(setCurrentContext:), false),
+        "v@:@"
+    );
+    assert_eq!(
+        encoding(
+            c"NSImage",
+            sel!(drawInRect:fromRect:operation:fraction:),
+            true
+        ),
+        "v@:{CGRect={CGPoint=dd}{CGSize=dd}}{CGRect={CGPoint=dd}{CGSize=dd}}Qd"
+    );
+}
+
+#[test]
+fn application_icon_pixels_renders_32px_rgba_and_caches_by_path() {
+    let path = Path::new("/Applications");
+    let first = application_icon_pixels(path).expect("应能渲染系统目录图标");
+    assert_eq!((first.width, first.height), (32, 32));
+    assert_eq!(first.rgba.len(), 32 * 32 * 4);
+    assert!(
+        first.rgba.iter().any(|&b| b != 0),
+        "渲染出的 32×32 图标不应全空"
+    );
+    let second = application_icon_pixels(path).expect("缓存命中应返回同一份图标");
+    assert!(
+        std::sync::Arc::ptr_eq(&first, &second),
+        "同一路径第二次查询应直接复用进程内缓存"
+    );
 }

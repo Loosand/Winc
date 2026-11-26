@@ -136,17 +136,17 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
     if settings::draw_cached(app, frame) || settings::draw_scrolling(app, frame) {
         return;
     }
-    // 模态对话框或提示框稳定打开期间，若仅模态自身状态变化（悬停、勾选、切焦点、输入框选区），
-    // 直接恢复底下的静态主区快照，跳过整个侧栏、编辑区排版与状态栏的 CPU 重绘。
+    // 模态对话框、提示框或窗口内弹出菜单稳定打开期间，若仅浮层自身状态变化（悬停、展开子菜单、
+    // 勾选、滚动、输入框选区），直接恢复底下的静态主区快照，跳过侧栏、编辑区与卡片网格的 CPU 重绘。
     let dialog_open = app.overlays.form_dialog.is_some();
     let alert_open = app.overlays.alert.is_some();
-    let modal_static = (dialog_open || alert_open)
+    let popup_open = app.popup().is_some();
+    let modal_static = (dialog_open || alert_open || popup_open)
         && !app.settings.open
         && app.settings.motion.is_none()
         && app.motion.dialog_card.motion.is_none()
         && app.motion.alert_card.motion.is_none()
         && app.notice.leaving.is_none()
-        && app.popup().is_none()
         && !app.animating();
     if modal_static
         && app
@@ -165,7 +165,7 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
         }
         return;
     }
-    if !dialog_open && !alert_open {
+    if !dialog_open && !alert_open && !popup_open {
         app.frame.backdrop.clear();
     }
     app.hits.clear();

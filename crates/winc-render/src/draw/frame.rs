@@ -162,6 +162,38 @@ impl Frame<'_> {
         }
     }
 
+    /// 把快照 `snapshot` 绕画布逻辑坐标 `pivot` 缩放 `scale`、平移 `offset` 后，以圆角 `radius`
+    /// （逻辑像素）和整体不透明度 `opacity`（0–1）叠加到 `clip` 区域内。
+    ///
+    /// 用于进入/退出文件夹等全区域平滑过渡；缩放系数改变时不绘制。
+    #[allow(clippy::too_many_arguments)]
+    pub fn blend_snapshot_transformed(
+        &mut self,
+        snapshot: &Snapshot,
+        pivot: (f32, f32),
+        offset: (f32, f32),
+        scale: f32,
+        radius: f32,
+        opacity: f32,
+        clip: Rect,
+    ) {
+        if snapshot.scale != self.scale {
+            return;
+        }
+        let s = self.scale;
+        let clip = clip.intersect(self.limit).to_pixels_outer(s);
+        self.canvas.blend_layer_at(
+            snapshot.area,
+            &snapshot.px,
+            (pivot.0 * s, pivot.1 * s),
+            (offset.0 * s, offset.1 * s),
+            scale,
+            radius * s,
+            opacity * self.opacity,
+            clip,
+        );
+    }
+
     /// 返回乘以整体不透明度之后的颜色。
     fn faded(&self, color: Color) -> Color {
         let color = match self.toward {

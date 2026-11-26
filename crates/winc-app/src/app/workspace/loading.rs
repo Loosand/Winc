@@ -127,7 +127,13 @@ impl App {
             if self.disk.loads.bar.is_some_and(|b| b.id == id) {
                 self.disk.loads.bar = None;
             }
-            if self.disk.loads.since.is_some_and(|(s, _)| s == id) {
+            let load_since = self
+                .disk
+                .loads
+                .since
+                .filter(|(s, _)| *s == id)
+                .map(|(_, since)| since);
+            if load_since.is_some() {
                 self.disk.loads.since = None;
             }
             let Some(index) = self.editor.finish_load(loaded) else {
@@ -139,7 +145,7 @@ impl App {
             }
             // 不是当前标签时记录的动作保留，再次切到该标签时由 `run_when_loaded` 执行。
             if self.editor.active == Some(index) {
-                self.loaded_active();
+                self.loaded_active(load_since);
                 self.run_when_loaded();
             }
         }
@@ -151,10 +157,11 @@ impl App {
             .retain(|(id, _)| editor.index_of(*id).is_some());
     }
 
-    /// 当前标签刚读取完成：重新布局、提示只读的原因、保证光标可见并请求重绘。
-    fn loaded_active(&mut self) {
+    /// 当前标签刚读取完成：重新布局、衔接首次 Markdown 解析、提示只读的原因、保证光标可见并请求重绘。
+    fn loaded_active(&mut self, load_since: Option<Instant>) {
         self.caches.sticky_cache = None;
         self.relayout();
+        self.prepare_markdown_after_switch(load_since);
         self.announce_readonly();
         self.ensure_caret_visible();
         self.request_redraw();
@@ -262,12 +269,25 @@ impl App {
         Some(now + PROGRESS_STEP)
     }
 
-    /// 当前标签正在读取、且尚未到 [`HOLD`] 时，返回可以跳过绘制的截止时刻。
+    /// 当前标签正在读取或等待首次 Markdown 解析、且尚未到 [`HOLD`] 时，返回可以跳过绘制的截止时刻。
     pub(in crate::app) fn holding_frame(&self, now: Instant) -> Option<Instant> {
-        let (id, since) = self.disk.loads.since?;
         let active = self.editor.active()?;
-        let until = since + HOLD;
-        (active.id == id && active.is_pending() && now < until).then_some(until)
+        if let Some((id, since)) = self.disk.loads.since
+            && active.id == id
+            && active.is_pending()
+        {
+            let until = since + HOLD;
+            if now < until {
+                return Some(until);
+            }
+        }
+        if let Some(since) = self.markdown_holding_first_parse(active.id) {
+            let until = since + HOLD;
+            if now < until {
+                return Some(until);
+            }
+        }
+        None
     }
 }
 

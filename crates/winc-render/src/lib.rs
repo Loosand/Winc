@@ -434,10 +434,10 @@ fn is_dark(background: Color) -> bool {
 
 /// 按背景亮度生成覆盖率映射表。
 ///
-/// 深色背景（[`is_dark`]）取指数 1.25，其余取 1.1；指数越大，半透明的覆盖率提升越多，
-/// 文字越粗。两个指数取自调参。
+/// 深色背景（[`is_dark`]）取指数 1.25，以补偿深底浅字在 sRGB 下显得偏细的问题；浅色背景取 1.0
+/// （保持原始几何覆盖率），避免浅底深字的抗锯齿边缘被额外加浓。
 fn gamma_for(background: Color) -> [u8; 256] {
-    let exponent = if is_dark(background) { 1.25 } else { 1.1 };
+    let exponent = if is_dark(background) { 1.25 } else { 1.0 };
 
     std::array::from_fn(|i| {
         let coverage = i as f32 / 255.0;

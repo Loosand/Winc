@@ -311,9 +311,11 @@ impl App {
     /// 设置浮层打开时只认设置页的滚动条，浮层下方的区域不响应。
     pub(in crate::app) fn update_scrollbar_hover(&mut self, x: f32, y: f32) {
         let settings = self.settings.open;
-        let dialog = self.overlays.form_dialog.is_some();
+        let modal = self.overlays.form_dialog.is_some()
+            || self.overlays.alert.is_some()
+            || self.popup().is_some();
         let hovered = ScrollArea::ALL.into_iter().find(|&area| {
-            if dialog || settings != (area == ScrollArea::Settings) {
+            if modal || settings != (area == ScrollArea::Settings) {
                 return false;
             }
             // 鼠标在展开了完整名称的一行上：不唤出文件树的滚动条。

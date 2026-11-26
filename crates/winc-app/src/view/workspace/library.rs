@@ -1,12 +1,14 @@
 //! 笔记库主页：侧栏入口、目录导航和只绘制可见行的卡片网格。
 
+use std::path::Path;
+
 use winc_i18n::t;
 use winc_render::{Faux, Stroke};
 
 use super::*;
 use crate::app::workspace::library::{
-    AttachmentPreview, CardContent, FolderPose, FolderPreview, Grid, JsonExcerpt, Library,
-    LibraryTarget, PreviewLine,
+    AttachmentPreview, Card, CardContent, FolderPose, FolderPreview, Grid, IncomingLayer,
+    JsonExcerpt, LibraryTarget, NavDirection, OutgoingLayer, OutgoingLibrary, PreviewLine,
 };
 
 pub(super) fn draw_home_button(app: &App, frame: &mut Frame<'_>) {
@@ -33,21 +35,343 @@ pub(super) fn draw_home_button(app: &App, frame: &mut Frame<'_>) {
 
 pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let area = app.layout.editor;
+    let root = app.library_root().map(Path::to_path_buf);
+
+    if app.library.transition.is_some() {
+        draw_transition(app, frame, area, root.as_deref());
+        return;
+    }
+
+    draw_live_grid(app, frame, area, root.as_deref(), true, true);
+    // 按下文件夹卡片期间顺手截取画面快照：松开进入子目录时直接复用，免去首帧重绘整个网格。
+    if app.library.pressed.is_some() {
+        let snap = match app.library.press_shot.take() {
+            Some((_, mut existing)) => {
+                frame.snapshot_into(area, &mut existing);
+                existing
+            }
+            None => frame.snapshot(area),
+        };
+        app.library.press_shot = Some((area, snap));
+    } else if app.library.press_shot.is_some() {
+        app.library.press_shot = None;
+    }
+}
+
+/// 文件夹进入/返回/切换期间的纯快照焦点缩放管线：每帧仅做多线程 SIMD 像素合成，
+/// 不重复折行与重绘文件夹/笔记卡片，保障 2× Retina 下稳定高帧率与零双影残影。
+fn draw_transition(app: &mut App, frame: &mut Frame<'_>, area: Rect, root: Option<&Path>) {
+    let p = app.palette;
+
+    // 1. 若旧画面尚未截取（例如从侧栏或后退按钮触发），首帧绘制一次并立即释放旧卡片内存。
+    if app
+        .library
+        .transition
+        .as_ref()
+        .is_some_and(|t| matches!(t.outgoing, OutgoingLayer::Pending(_)))
+    {
+        let pending = app.library.transition.as_mut().and_then(|t| {
+            match std::mem::replace(&mut t.outgoing, OutgoingLayer::None) {
+                OutgoingLayer::Pending(old) => Some(old),
+                other => {
+                    t.outgoing = other;
+                    None
+                }
+            }
+        });
+        if let Some(old) = pending {
+            frame.within(area, |frame| {
+                draw_outgoing_snapshot(app, frame, area, root, &old);
+            });
+            let snap = frame.snapshot(area);
+            frame.rect(area, p.editor_bg);
+            if let Some(transition) = app.library.transition.as_mut() {
+                transition.outgoing = OutgoingLayer::Captured(snap);
+            }
+        }
+    }
+
+    // 2. 等待首批真实卡片摘要就绪（本地目录通常 2-6 ms，上限 50 ms），期间稳住旧画面零跳帧。
+    let waiting = app
+        .library
+        .transition
+        .as_ref()
+        .is_some_and(|t| t.is_waiting() && !t.wait_expired());
+    if waiting && !app.library.incoming_ready() {
+        if let Some(transition) = app.library.transition.as_ref()
+            && let OutgoingLayer::Captured(snap) = &transition.outgoing
+            && snap.covers(area, frame.scale())
+        {
+            frame.restore_tinted(snap, Color::hex(0).alpha(0.0));
+        }
+        return;
+    }
+
+    // 首批内容已就绪：正式起表（保证第一动画帧严格从 t = 0 开始平滑加速）。
+    if let Some(transition) = app.library.transition.as_mut() {
+        transition.start_now();
+    }
+
+    let grid = Grid::new(area, &app.library.cards);
+    let scroll = app
+        .library
+        .scroll
+        .min(grid.max_scroll(app.library.cards.len()));
+
+    // 3. 返回上级目录时，在父网格中定位刚离开的子文件夹卡片作为收缩锚点。
+    if let Some(transition) = app.library.transition.as_mut()
+        && transition.direction == NavDirection::Exit
+        && transition.origin.is_none()
+        && !app.library.cards.is_empty()
+        && let Some(from) = transition.from_folder.as_deref()
+        && let Some(idx) = app.library.cards.iter().position(|c| {
+            matches!(c.content, CardContent::Folder(_))
+                && (c.path == from || from.starts_with(&c.path))
+        })
+    {
+        let r = grid.card(idx, scroll, true);
+        let pad = 24.0;
+        let cx = (r.x + r.w * 0.5).clamp(
+            grid.body.x + pad,
+            (grid.body.right() - pad).max(grid.body.x + pad),
+        );
+        let cy = (r.y + r.h * 0.5).clamp(
+            grid.body.y + pad,
+            (grid.body.bottom() - pad).max(grid.body.y + pad),
+        );
+        transition.origin = Some((cx, cy));
+    }
+
+    // 4. 始终更新新目录的点击命中表，保证过渡途中即可立刻二次点击，不阻塞操作。
+    for index in grid.visible(app.library.cards.len(), scroll) {
+        let is_folder = matches!(app.library.cards[index].content, CardContent::Folder(_));
+        let clip = grid.card(index, scroll, is_folder).intersect(grid.body);
+        if clip.w > 0.0 && clip.h > 0.0 {
+            app.hits.library.push((clip, LibraryTarget::Card(index)));
+        }
+    }
+
+    // 5. 若新目录快照尚未截取（或批次摘要刚更新 / 窗口缩放 / 滚动变化），无悬停高亮重捕一次。
+    let scale = frame.scale();
+    let need_incoming = app
+        .library
+        .transition
+        .as_ref()
+        .is_some_and(|t| match &t.incoming {
+            IncomingLayer::Dirty => true,
+            IncomingLayer::Captured {
+                snap,
+                scroll: cached,
+            } => !snap.covers(area, scale) || (cached - scroll).abs() > 0.5,
+        });
+    if need_incoming {
+        draw_live_grid(app, frame, area, root, false, false);
+        let snap = frame.snapshot(area);
+        frame.rect(area, p.editor_bg);
+        if let Some(transition) = app.library.transition.as_mut() {
+            transition.incoming = IncomingLayer::Captured { snap, scroll };
+        }
+    }
+
+    // 6. 同向焦点缩放合成：先铺新目录（从焦点同向放大/回落），再在前半段利落淡出旧目录。
+    let fallback_anchor = (
+        grid.body.x + grid.body.w * 0.5,
+        grid.body.y + grid.body.h * 0.38,
+    );
+    let anchor = app
+        .library
+        .transition
+        .as_ref()
+        .and_then(|t| t.origin)
+        .unwrap_or(fallback_anchor);
+    if let Some(transition) = app.library.transition.as_ref() {
+        if let IncomingLayer::Captured { snap, .. } = &transition.incoming
+            && snap.covers(area, scale)
+            && let Some(style) = transition.incoming_style(anchor)
+        {
+            frame.blend_snapshot_transformed(
+                snap,
+                style.pivot,
+                style.offset,
+                style.scale,
+                style.radius,
+                style.opacity,
+                area,
+            );
+        }
+        if let OutgoingLayer::Captured(snap) = &transition.outgoing
+            && snap.covers(area, scale)
+            && let Some(style) = transition.outgoing_style(anchor)
+        {
+            frame.blend_snapshot_transformed(
+                snap,
+                style.pivot,
+                style.offset,
+                style.scale,
+                style.radius,
+                style.opacity,
+                area,
+            );
+        }
+    }
+    draw_grid_scrollbar(app, frame);
+}
+
+fn draw_live_grid(
+    app: &mut App,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    root: Option<&Path>,
+    show_hover: bool,
+    record_hits: bool,
+) {
     let grid = Grid::new(area, &app.library.cards);
     let p = app.palette;
     let x = grid.body.x;
-    let folder = app.library.folder.as_deref();
+    let title_rect = Rect::new(x, area.y + 12.0, grid.body.w, 36.0).intersect(area);
+    let animate = app.animations_on();
+    let phase = if animate {
+        app.library.loading_phase()
+    } else {
+        0.0
+    };
+
+    frame.within(area, |frame| {
+        draw_header(
+            app,
+            frame,
+            area,
+            &grid,
+            app.library.folder.as_deref(),
+            root,
+            0.0,
+        );
+        if app.library.loading_visual() {
+            draw_loading_status(app, frame, title_rect, animate);
+        }
+
+        if app.library.cards.is_empty() {
+            if app.library.loading() {
+                draw_skeleton_grid(frame, p, area, phase, animate);
+                return;
+            }
+            let msg = if let Some(error) = &app.library.error {
+                t!("workspace-library-failed", error = error.as_str())
+            } else {
+                t!("workspace-library-empty").to_owned()
+            };
+            let row = Rect::new(x, grid.body.y + 8.0, grid.body.w, 30.0).intersect(area);
+            let msg = ellipsize(frame, &msg, app.fonts.ui, row.w);
+            ui_text(frame, app, x, row, &msg, p.text_muted, row);
+            return;
+        }
+
+        let scroll = app
+            .library
+            .scroll
+            .min(grid.max_scroll(app.library.cards.len()));
+        let folder_clip = Rect::new(area.x, grid.body.y - 6.0, area.w, grid.body.h + 6.0);
+        for index in grid.visible(app.library.cards.len(), scroll) {
+            let c = &app.library.cards[index];
+            let is_folder = matches!(c.content, CardContent::Folder(_));
+            let rect = grid.card(index, scroll, is_folder);
+            let clip = rect.intersect(grid.body);
+            if clip.w <= 0.0 || clip.h <= 0.0 {
+                continue;
+            }
+            let target = LibraryTarget::Card(index);
+            let hover = show_hover
+                && matches!(app.pointer.hover, Hover::Library(
+                    LibraryTarget::Card(i)
+                    | LibraryTarget::NewInFolder(i)
+                    | LibraryTarget::FolderMenu(i)
+                ) if i == index);
+            let paint_clip = if is_folder {
+                rect.inset(-6.0, -6.0).intersect(folder_clip)
+            } else {
+                clip
+            };
+            let brush = CardBrush {
+                p,
+                clip: paint_clip,
+                shadow_clip: folder_clip,
+                hot: hover,
+            };
+            let pose = if show_hover {
+                app.library.folder_pose(index)
+            } else {
+                FolderPose::default()
+            };
+            draw_card_content(
+                frame,
+                &brush,
+                rect,
+                c,
+                index,
+                phase,
+                animate,
+                pose,
+                |path| app.library.attachment_preview(path),
+            );
+            if is_folder && show_hover {
+                // Same footer controls as Quiet MD, drawn before the card hit so they win.
+                let reveal = pose.flap.clamp(0.0, 1.0);
+                if reveal > 0.01 {
+                    let size = 28.0;
+                    let y = rect.bottom() - 14.0 + pose.lift() - size;
+                    let right = rect.right() - 14.0;
+                    for (bx, btn_target) in [
+                        (right - size * 2.0 - 8.0, LibraryTarget::NewInFolder(index)),
+                        (right - size, LibraryTarget::FolderMenu(index)),
+                    ] {
+                        let button = Rect::new(bx, y, size, size);
+                        if button.x >= rect.x && button.intersect(clip).h > 0.0 {
+                            brush.folder_button(
+                                frame,
+                                button,
+                                btn_target,
+                                app.pointer.hover,
+                                reveal,
+                            );
+                            if record_hits && hover && reveal >= 0.20 {
+                                app.hits.library.push((button.intersect(clip), btn_target));
+                            }
+                        }
+                    }
+                }
+            }
+            if record_hits {
+                app.hits.library.push((clip, target));
+            }
+        }
+        if record_hits {
+            draw_grid_scrollbar(app, frame);
+        }
+    });
+}
+
+fn draw_header(
+    app: &App,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    grid: &Grid,
+    folder: Option<&Path>,
+    root: Option<&Path>,
+    dy: f32,
+) {
+    let p = app.palette;
+    let x = grid.body.x;
     let name = folder
         .map(|path| winc_editor::display_name(path).into_owned())
         .unwrap_or_default();
-    let is_root = folder == app.library_root();
+    let is_root = folder.is_some() && folder == root;
     let title = if is_root {
         t!("workspace-library-home").into()
     } else {
         name.clone()
     };
     let title_size = app.fonts.ui * 1.65;
-    let title_rect = Rect::new(x, area.y + 12.0, grid.body.w, 36.0).intersect(area);
+    let title_rect = Rect::new(x, area.y + 12.0 + dy, grid.body.w, 36.0).intersect(area);
     let title = ellipsize(frame, &title, title_size, title_rect.w);
     frame.text_faux(
         FontKind::Ui,
@@ -64,50 +388,76 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         let label = ellipsize(frame, &name, app.fonts.ui, subtitle.w);
         ui_text(frame, app, x, subtitle, &label, p.text_muted, subtitle);
     }
+}
 
-    let animate = app.animations_on();
-    let phase = if animate {
-        app.library.loading_phase()
-    } else {
-        0.0
-    };
-    if app.library.loading_visual() {
-        draw_loading_status(app, frame, title_rect, animate);
-    }
-
-    if app.library.cards.is_empty() {
-        if app.library.loading() {
-            draw_skeleton_grid(frame, p, area, phase, animate);
-            return;
+#[allow(clippy::too_many_arguments)]
+fn draw_card_content<'a>(
+    frame: &mut Frame<'_>,
+    brush: &CardBrush<'_>,
+    rect: Rect,
+    card: &Card,
+    index: usize,
+    phase: f32,
+    animate: bool,
+    pose: FolderPose,
+    attachment: impl Fn(&Path) -> Option<&'a AttachmentPreview>,
+) {
+    match &card.content {
+        CardContent::Note(lines) => {
+            brush.sheet(frame, rect, brush.edge(), 16.0);
+            brush.page(frame, rect, &card.name, lines, true);
         }
-        let msg = if let Some(error) = &app.library.error {
+        CardContent::PendingNote => {
+            brush.sheet(frame, rect, brush.edge(), 16.0);
+            brush.pending_page(
+                frame,
+                rect,
+                &card.name,
+                skeleton_wave(phase, index, animate),
+            );
+        }
+        CardContent::File | CardContent::Attachment(_) => {
+            brush.sheet(frame, rect, brush.edge(), 16.0);
+            brush.attachment(frame, rect, &card.name, attachment(&card.path), false);
+        }
+        CardContent::Folder(info) => {
+            brush.folder(frame, rect, &card.name, info.as_ref(), pose, attachment);
+        }
+    }
+}
+
+fn draw_outgoing_snapshot(
+    app: &App,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    root: Option<&Path>,
+    old: &OutgoingLibrary,
+) {
+    let p = app.palette;
+    let grid = Grid::new(area, &old.cards);
+    draw_header(app, frame, area, &grid, old.folder.as_deref(), root, 0.0);
+    if old.cards.is_empty() {
+        let msg = if let Some(error) = &old.error {
             t!("workspace-library-failed", error = error.as_str())
         } else {
             t!("workspace-library-empty").to_owned()
         };
-        let row = Rect::new(x, grid.body.y + 8.0, grid.body.w, 30.0).intersect(area);
+        let row = Rect::new(grid.body.x, grid.body.y + 8.0, grid.body.w, 30.0).intersect(area);
         let msg = ellipsize(frame, &msg, app.fonts.ui, row.w);
-        ui_text(frame, app, x, row, &msg, p.text_muted, row);
+        ui_text(frame, app, grid.body.x, row, &msg, p.text_muted, row);
         return;
     }
-
-    let scroll = app
-        .library
-        .scroll
-        .min(grid.max_scroll(app.library.cards.len()));
+    let scroll = old.scroll.min(grid.max_scroll(old.cards.len()));
     let folder_clip = Rect::new(area.x, grid.body.y - 6.0, area.w, grid.body.h + 6.0);
-    for index in grid.visible(app.library.cards.len(), scroll) {
-        let c = &app.library.cards[index];
-        let rect = grid.card(index, scroll, matches!(c.content, CardContent::Folder(_)));
+    for index in grid.visible(old.cards.len(), scroll) {
+        let c = &old.cards[index];
+        let is_folder = matches!(c.content, CardContent::Folder(_));
+        let rect = grid.card(index, scroll, is_folder);
         let clip = rect.intersect(grid.body);
         if clip.w <= 0.0 || clip.h <= 0.0 {
             continue;
         }
-        let target = LibraryTarget::Card(index);
-        let hover = matches!(app.pointer.hover, Hover::Library(
-            LibraryTarget::Card(i) | LibraryTarget::NewInFolder(i) | LibraryTarget::FolderMenu(i)
-        ) if i == index);
-        let paint_clip = if matches!(c.content, CardContent::Folder(_)) {
+        let paint_clip = if is_folder {
             rect.inset(-6.0, -6.0).intersect(folder_clip)
         } else {
             clip
@@ -116,54 +466,13 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
             p,
             clip: paint_clip,
             shadow_clip: folder_clip,
-            hot: hover,
+            hot: false,
         };
-        match &c.content {
-            CardContent::Note(lines) => {
-                brush.sheet(frame, rect, brush.edge(), 16.0);
-                brush.page(frame, rect, &c.name, lines, true);
-            }
-            CardContent::PendingNote => {
-                brush.sheet(frame, rect, brush.edge(), 16.0);
-                brush.pending_page(frame, rect, &c.name, skeleton_wave(phase, index, animate));
-            }
-            CardContent::File | CardContent::Attachment(_) => {
-                brush.sheet(frame, rect, brush.edge(), 16.0);
-                brush.attachment(
-                    frame,
-                    rect,
-                    &c.name,
-                    app.library.attachment_preview(&c.path),
-                    false,
-                );
-            }
-            CardContent::Folder(info) => {
-                let pose = app.library.folder_pose(index);
-                brush.folder(frame, rect, &c.name, info.as_ref(), pose, &app.library);
-                // Same footer controls as Quiet MD, drawn before the card hit so they win.
-                let reveal = pose.flap.clamp(0.0, 1.0);
-                if reveal > 0.01 {
-                    let size = 28.0;
-                    let y = rect.bottom() - 14.0 + pose.lift() - size;
-                    let right = rect.right() - 14.0;
-                    for (x, target) in [
-                        (right - size * 2.0 - 8.0, LibraryTarget::NewInFolder(index)),
-                        (right - size, LibraryTarget::FolderMenu(index)),
-                    ] {
-                        let button = Rect::new(x, y, size, size);
-                        if button.x >= rect.x && button.intersect(clip).h > 0.0 {
-                            brush.folder_button(frame, button, target, app.pointer.hover, reveal);
-                            if hover && reveal >= 0.20 {
-                                app.hits.library.push((button.intersect(clip), target));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        app.hits.library.push((clip, target));
+        let pose = old.poses.get(index).copied().unwrap_or_default();
+        draw_card_content(frame, &brush, rect, c, index, 0.0, false, pose, |path| {
+            old.attachments.get(path)
+        });
     }
-    draw_grid_scrollbar(app, frame);
 }
 
 pub(super) fn draw_grid_scrollbar(app: &mut App, frame: &mut Frame<'_>) {
@@ -663,14 +972,14 @@ impl CardBrush<'_> {
     }
 
     /// 文件夹后板、逐张展开的叠纸、折下的前袋和底部名称。
-    fn folder(
+    fn folder<'a>(
         &self,
         frame: &mut Frame<'_>,
         rect: Rect,
         title: &str,
         info: Option<&FolderPreview>,
         pose: FolderPose,
-        library: &Library,
+        attachment: impl Fn(&Path) -> Option<&'a AttachmentPreview>,
     ) {
         // 背板和前袋轮廓来自 Quiet MD home_folder.rs；MIT 署名见 NOTICE。
         let base = Rect::new(rect.x, rect.y + pose.lift(), rect.w, rect.h);
@@ -711,13 +1020,7 @@ impl CardBrush<'_> {
                     if let CardContent::Note(lines) = &card.content {
                         self.page(frame, sheet, &card.name, lines, false);
                     } else {
-                        self.attachment(
-                            frame,
-                            sheet,
-                            &card.name,
-                            library.attachment_preview(&card.path),
-                            true,
-                        );
+                        self.attachment(frame, sheet, &card.name, attachment(&card.path), true);
                     }
                 }
             }

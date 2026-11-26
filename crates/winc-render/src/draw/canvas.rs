@@ -694,6 +694,205 @@ impl Canvas<'_> {
         }
     }
 
+    /// 把图层 `layer`（`area` 大小的物理像素，按行排列）绕物理坐标锚点 `pivot` 缩放 `scale`、
+    /// 平移 `offset` 后，以圆角 `radius`（物理像素）和整体不透明度 `opacity`（0–1）叠加到 `clip` 区域内。
+    ///
+    /// 用于视图缩放切换（如进入/退出文件夹时的焦点缩放过渡），圆角与外边界自动抗锯齿，内部列走 SIMD 批量混合。
+    #[allow(clippy::too_many_arguments)]
+    pub fn blend_layer_at(
+        &mut self,
+        area: IRect,
+        layer: &[u32],
+        pivot: (f32, f32),
+        offset: (f32, f32),
+        scale: f32,
+        radius: f32,
+        opacity: f32,
+        clip: IRect,
+    ) {
+        let (w, h) = (area.width(), (area.y1 - area.y0).max(0) as usize);
+        if area.is_empty() || layer.len() != w * h {
+            return;
+        }
+        let opacity = opacity.clamp(0.0, 1.0);
+        let full = (opacity * 256.0).round() as u32;
+        if full == 0 {
+            return;
+        }
+        let clip = clip.intersect(IRect::new(0, 0, self.width as i32, self.height as i32));
+        if clip.is_empty() {
+            return;
+        }
+        let scale = scale.max(0.01);
+        let inv_scale = 1.0 / scale;
+        let (dst_x0, dst_x1) = (
+            pivot.0 + (area.x0 as f32 - pivot.0) * scale + offset.0,
+            pivot.0 + (area.x1 as f32 - pivot.0) * scale + offset.0,
+        );
+        let (dst_y0, dst_y1) = (
+            pivot.1 + (area.y0 as f32 - pivot.1) * scale + offset.1,
+            pivot.1 + (area.y1 as f32 - pivot.1) * scale + offset.1,
+        );
+        let x_start = (dst_x0.floor() as i32 - 1).max(clip.x0);
+        let x_end = (dst_x1.ceil() as i32 + 1).min(clip.x1);
+        let y_start = (dst_y0.floor() as i32 - 1).max(clip.y0);
+        let y_end = (dst_y1.ceil() as i32 + 1).min(clip.y1);
+        if x_start >= x_end || y_start >= y_end {
+            return;
+        }
+
+        let (dcx, dcy) = ((dst_x0 + dst_x1) * 0.5, (dst_y0 + dst_y1) * 0.5);
+        let (hw, hh) = ((dst_x1 - dst_x0) * 0.5, (dst_y1 - dst_y0) * 0.5);
+        let r = (radius * scale).clamp(0.0, hw.min(hh));
+        let scaled = (scale - 1.0).abs() >= 1e-4
+            || (offset.0 - offset.0.round()).abs() >= 1e-4
+            || (offset.1 - offset.1.round()).abs() >= 1e-4;
+
+        let cols = (x_end - x_start) as usize;
+        let mut xs: Vec<(usize, usize, u32)> = Vec::with_capacity(cols);
+        let mut weights: Vec<u32> = Vec::with_capacity(cols);
+        let max_x = (w - 1) as f32;
+        let max_y = (h - 1) as f32;
+        for x in x_start..x_end {
+            let sx = (pivot.0 + (x as f32 + 0.5 - offset.0 - pivot.0) * inv_scale
+                - area.x0 as f32
+                - 0.5)
+                .clamp(0.0, max_x);
+            let x0 = sx.floor() as usize;
+            let x1 = (x0 + 1).min(w - 1);
+            let fx = ((sx - x0 as f32) * 256.0) as u32;
+            xs.push((x0, x1, fx));
+            weights.push(fx);
+        }
+
+        let edge = |px: f32, py: f32| {
+            let qx = px - (hw - r);
+            let qy = py - (hh - r);
+            let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r;
+            (opacity * (0.5 - d).clamp(0.0, 1.0) * 256.0).round() as u32
+        };
+
+        let stride = self.stride;
+        let xs_ref = &xs;
+        let weights_ref = &weights;
+        let process_band = |dst_band: &mut [u32], band_y0: i32| {
+            let band_rows = dst_band.len() / stride;
+            let mut blended = vec![0u32; if scaled { w } else { 0 }];
+            let mut before = vec![0u32; if scaled { cols } else { 0 }];
+            let mut after = vec![0u32; if scaled { cols } else { 0 }];
+
+            for local_y in 0..band_rows {
+                let y = band_y0 + local_y as i32;
+                let py = (y as f32 + 0.5 - dcy).abs();
+                if py > hh + 1.0 {
+                    continue;
+                }
+                let sy = (pivot.1 + (y as f32 + 0.5 - offset.1 - pivot.1) * inv_scale
+                    - area.y0 as f32
+                    - 0.5)
+                    .clamp(0.0, max_y);
+                let y0 = sy.floor() as usize;
+                let y1 = (y0 + 1).min(h - 1);
+                let fy = ((sy - y0 as f32) * 256.0) as u32;
+
+                let half = if py >= hh - 1.0 {
+                    0.0
+                } else if py < hh - r - 1.0 {
+                    hw - 1.0
+                } else {
+                    hw - r - 1.0
+                };
+                let inner = if half > 0.0 {
+                    let from = ((dcx - half - 0.5).floor() as i32 + 1).clamp(x_start, x_end);
+                    let to = ((dcx + half - 0.5).ceil() as i32).clamp(from, x_end);
+                    ((from - x_start) as usize, (to - x_start) as usize)
+                } else {
+                    (cols, cols)
+                };
+
+                let source: &[u32] = if scaled {
+                    if fy == 0 || y0 == y1 {
+                        &layer[y0 * w..][..w]
+                    } else {
+                        let (top, bottom) = (&layer[y0 * w..][..w], &layer[y1 * w..][..w]);
+                        wide::lerp_rows(&mut blended, top, bottom, fy);
+                        &blended
+                    }
+                } else {
+                    &layer[y0 * w..][..w]
+                };
+
+                let row = &mut dst_band[local_y * stride + x_start as usize..][..cols];
+                let (left, rest) = row.split_at_mut(inner.0);
+                let (middle, right) = rest.split_at_mut(inner.1 - inner.0);
+
+                if !middle.is_empty() {
+                    if !scaled && xs_ref[inner.0].0 + middle.len() <= w {
+                        let sx0 = xs_ref[inner.0].0;
+                        if full == 256 {
+                            middle.copy_from_slice(&source[sx0..sx0 + middle.len()]);
+                        } else {
+                            wide::lerp_onto(middle, &source[sx0..sx0 + middle.len()], full);
+                        }
+                    } else {
+                        let (span, fxs) =
+                            (&xs_ref[inner.0..inner.1], &weights_ref[inner.0..inner.1]);
+                        if before.len() < span.len() {
+                            before.resize(span.len(), 0);
+                            after.resize(span.len(), 0);
+                        }
+                        let (first, second) = (&mut before[..span.len()], &mut after[..span.len()]);
+                        for ((a, b), &(x0, x1, _)) in first.iter_mut().zip(&mut *second).zip(span) {
+                            (*a, *b) = (source[x0], source[x1]);
+                        }
+                        if full == 256 {
+                            wide::lerp_pairs(middle, first, second, fxs);
+                        } else {
+                            wide::lerp_pairs_onto(middle, first, second, fxs, full);
+                        }
+                    }
+                }
+
+                for (part, base_idx) in [(left, 0), (right, inner.1)] {
+                    for (p, idx) in part.iter_mut().zip(base_idx..) {
+                        let x = x_start + idx as i32;
+                        let px = (x as f32 + 0.5 - dcx).abs();
+                        if px > hw + 1.0 {
+                            continue;
+                        }
+                        let a = edge(px, py);
+                        if a > 0 {
+                            let c = if scaled {
+                                let (x0, x1, fx) = xs_ref[idx];
+                                lerp(source[x0], source[x1], fx)
+                            } else {
+                                source[xs_ref[idx].0]
+                            };
+                            *p = if a == 256 { c } else { lerp(*p, c, a) };
+                        }
+                    }
+                }
+            }
+        };
+
+        let total_rows = (y_end - y_start) as usize;
+        let dst_all = &mut self.px[y_start as usize * stride..y_end as usize * stride];
+        let pixels = total_rows * cols;
+        if pixels >= 200_000 && total_rows >= 32 {
+            let threads = std::thread::available_parallelism().map_or(4, |n| n.get().clamp(2, 6));
+            let chunk_rows = total_rows.div_ceil(threads);
+            let chunk_len = chunk_rows * stride;
+            std::thread::scope(|scope| {
+                for (band_idx, dst_band) in dst_all.chunks_mut(chunk_len).enumerate() {
+                    let band_y0 = y_start + (band_idx * chunk_rows) as i32;
+                    scope.spawn(move || process_band(dst_band, band_y0));
+                }
+            });
+        } else {
+            process_band(dst_all, y_start);
+        }
+    }
+
     /// 用 `color` 填充整个画布；alpha 强制为不透明。
     pub fn fill(&mut self, color: u32) {
         let n = (self.stride * self.height).min(self.px.len());

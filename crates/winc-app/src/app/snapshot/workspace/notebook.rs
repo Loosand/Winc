@@ -270,8 +270,21 @@ fn notebook_menu_has_a_full_width_trigger_and_a_single_workspace_path_row() {
         .position(|row| matches!(row, PopupRow::Submenu { .. }))
         .unwrap();
     let at = level.row_rects[open_with];
+    let reuses_before = app.frame.backdrop.reuses();
+    app.frame.dirty = false;
     app.on_mouse_move(at.x + 17.0, at.y + at.h / 2.0);
+    assert!(app.frame.dirty, "移动到新的菜单项时应触发浮层重绘");
     paint(&mut app);
+    assert!(
+        app.frame.backdrop.reuses() > reuses_before,
+        "工作区菜单内切换悬停与展开子菜单应复用底层静态快照"
+    );
+    app.frame.dirty = false;
+    app.on_mouse_move(at.x + 25.0, at.y + at.h / 2.0);
+    assert!(
+        !app.frame.dirty,
+        "在同一菜单项内微移鼠标不应触发多余重绘"
+    );
     assert!(matches!(
         app.popup().unwrap().levels[1].rows[0],
         PopupRow::Item {
@@ -282,6 +295,12 @@ fn notebook_menu_has_a_full_width_trigger_and_a_single_workspace_path_row() {
     assert!(super::menu_commands(&app).contains(&(MenuCommand::NotebookTypora, true)));
     app.run_menu_command(MenuCommand::NotebookTypora);
     assert_eq!(app.library_root(), Some(root.as_path()));
+    app.dismiss_popup();
+    paint(&mut app);
+    assert!(
+        !app.frame.backdrop.is_valid(),
+        "关闭工作区菜单后应释放底层静态快照"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 

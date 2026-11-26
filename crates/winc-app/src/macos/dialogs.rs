@@ -270,16 +270,108 @@ unsafe fn fill_menu(
     checked
 }
 
-pub(crate) fn application_icon_pixels(path: &Path) -> Option<winc_preview::image::Pixels> {
+/// 按需获取应用路径 `path` 的 32×32 图标（非预乘 RGBA8），结果按路径在进程内缓存。
+///
+/// 直接通过 `NSGraphicsContext` 将 `NSImage` 绘制到 32×32 `NSBitmapImageRep`，避免
+/// `TIFFRepresentation` 序列化全部多分辨率图标（数十 MB）再转 PNG 与重新解码带来的主线程卡顿。
+pub(crate) fn application_icon_pixels(
+    path: &Path,
+) -> Option<std::sync::Arc<winc_preview::image::Pixels>> {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<Arc<winc_preview::image::Pixels>>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock()
+        && let Some(cached) = guard.get(path)
+    {
+        return cached.clone();
+    }
+
+    let pixels = render_application_icon_32(path).map(Arc::new);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(path.to_path_buf(), pixels.clone());
+    }
+    pixels
+}
+
+/// 将 `path` 对应的系统图标直接栅格化为 32×32 非预乘 RGBA8 像素；须在主线程调用。
+fn render_application_icon_32(path: &Path) -> Option<winc_preview::image::Pixels> {
+    const SIZE: usize = 32;
+    const NS_COMPOSITING_OPERATION_COPY: usize = 1;
+
     let file = ns_string(path.to_str()?)?;
-    // SAFETY: NSWorkspace owns the returned NSImage, and the TIFF data lives in this autorelease pool.
-    let png = unsafe {
+    let rgb = ns_string("NSDeviceRGBColorSpace")?;
+    // SAFETY: 调用 AppKit 公开 API（主线程）：`NSWorkspace` 返回自动释放的 `NSImage`，
+    // `NSBitmapImageRep` 分配的 `SIZE × SIZE × 4` 像素缓冲由 `Retained` 持有直至拷贝完成；
+    // 仅在取得有效的 `NSGraphicsContext` 后成对调用 `saveGraphicsState` / `restoreGraphicsState`。
+    unsafe {
         let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
         let icon: *mut AnyObject = msg_send![workspace.as_ref()?, iconForFile: &*file];
-        let tiff: *mut AnyObject = msg_send![icon.as_ref()?, TIFFRepresentation];
-        super::pasteboard::tiff_png(tiff.as_ref()?)?
-    };
-    winc_preview::image::decode_thumbnail(path, &png, 32).ok()
+        let icon = icon.as_ref()?;
+
+        let rep: *mut AnyObject = msg_send![class!(NSBitmapImageRep), alloc];
+        let planes = std::ptr::null_mut::<*mut u8>();
+        let rep: *mut AnyObject = msg_send![
+            rep,
+            initWithBitmapDataPlanes: planes,
+            pixelsWide: SIZE as isize,
+            pixelsHigh: SIZE as isize,
+            bitsPerSample: 8isize,
+            samplesPerPixel: 4isize,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: &*rgb,
+            bytesPerRow: (SIZE * 4) as isize,
+            bitsPerPixel: 32isize
+        ];
+        let rep = Retained::from_raw(rep)?;
+
+        let ctx: *mut AnyObject =
+            msg_send![class!(NSGraphicsContext), graphicsContextWithBitmapImageRep: &*rep];
+        let ctx = ctx.as_ref()?;
+        let () = msg_send![class!(NSGraphicsContext), saveGraphicsState];
+        let () = msg_send![class!(NSGraphicsContext), setCurrentContext: ctx];
+        let dst = CGRect::new(
+            CGPoint::new(0.0, 0.0),
+            CGSize::new(SIZE as f64, SIZE as f64),
+        );
+        let src = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(0.0, 0.0));
+        let () = msg_send![
+            icon,
+            drawInRect: dst,
+            fromRect: src,
+            operation: NS_COMPOSITING_OPERATION_COPY,
+            fraction: 1.0f64
+        ];
+        let () = msg_send![class!(NSGraphicsContext), restoreGraphicsState];
+
+        let data: *const u8 = msg_send![&*rep, bitmapData];
+        if data.is_null() {
+            return None;
+        }
+        let len = SIZE * SIZE * 4;
+        let bytes = std::slice::from_raw_parts(data, len);
+        // `NSGraphicsContext` 绘制进位图的结果为预乘 alpha，还原为渲染器要求的非预乘 RGBA8。
+        let mut rgba = Vec::with_capacity(len);
+        for &[r, g, b, a] in bytes.as_chunks::<4>().0 {
+            let (r, g, b) = if a == 0 || a == 255 {
+                (r, g, b)
+            } else {
+                let unpremul = |c: u8| {
+                    ((u16::from(c) * 255 + u16::from(a) / 2) / u16::from(a)).min(255) as u8
+                };
+                (unpremul(r), unpremul(g), unpremul(b))
+            };
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+        Some(winc_preview::image::Pixels {
+            width: SIZE as u32,
+            height: SIZE as u32,
+            rgba,
+        })
+    }
 }
 
 /// 把图标转成 NSImage：像素拷贝进一张 sRGB 位图，图片的大小取逻辑尺寸，Retina 屏上按位图的

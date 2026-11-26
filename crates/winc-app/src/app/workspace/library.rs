@@ -17,7 +17,9 @@ mod attachment;
 mod motion;
 pub(crate) use attachment::{AttachmentKind, AttachmentPreview, JsonExcerpt};
 use motion::FolderMotion;
-pub(crate) use motion::FolderPose;
+pub(crate) use motion::{
+    FolderPose, FolderTransition, IncomingLayer, NavDirection, OutgoingLayer, OutgoingLibrary,
+};
 
 pub(in crate::app) const HOME_ROW: f32 = 34.0;
 const GRID_TOP: f32 = 78.0;
@@ -188,7 +190,11 @@ pub(crate) struct Library {
     pub(crate) error: Option<String>,
     pub(crate) scroll: f32,
     folders: FolderMotion,
-    pressed: Option<PathBuf>,
+    /// 进入、退出或切换文件夹时的双快照焦点缩放过渡；结束时立即释放快照内存。
+    pub(crate) transition: Option<FolderTransition>,
+    /// 鼠标按下文件夹卡片瞬间顺手保存的画面快照，松开进入时直接复用，免去首帧重绘 9-12 张文件夹卡片。
+    pub(crate) press_shot: Option<(Rect, winc_render::Snapshot)>,
+    pub(crate) pressed: Option<PathBuf>,
     /// Changes only on navigation. Same-directory refreshes are queued without canceling the scan.
     generation: Arc<AtomicU64>,
     queued: bool,
@@ -206,6 +212,8 @@ impl Default for Library {
             error: None,
             scroll: 0.0,
             folders: FolderMotion::default(),
+            transition: None,
+            press_shot: None,
             pressed: None,
             generation: Arc::default(),
             queued: false,
@@ -246,12 +254,50 @@ impl Library {
     }
 
     pub(in crate::app) fn animating(&self) -> bool {
-        self.folders.moving()
+        self.folders.moving() || self.transition.is_some()
+    }
+
+    pub(in crate::app) fn settle_animations(&mut self) {
+        if self.transition.as_ref().is_some_and(FolderTransition::done) {
+            self.transition = None;
+        }
+    }
+
+    /// 首屏目录内容是否已就绪（扫描完成，或首批可见卡片均已填好真实摘要而非占位卡片）。
+    pub(crate) fn incoming_ready(&self) -> bool {
+        if !self.loading() {
+            return true;
+        }
+        !self.cards.is_empty()
+            && !self
+                .cards
+                .iter()
+                .take(12)
+                .any(|c| matches!(c.content, CardContent::PendingNote))
     }
 
     #[cfg(test)]
     pub(in crate::app) fn freeze_folder_motion(&mut self, card: usize, open: bool, millis: u64) {
         self.folders.freeze(card, open, millis);
+    }
+
+    #[cfg(test)]
+    pub(in crate::app) fn start_test_transition(
+        &mut self,
+        direction: NavDirection,
+        elapsed: std::time::Duration,
+        origin: Option<(f32, f32)>,
+        from_folder: Option<PathBuf>,
+        outgoing: OutgoingLayer,
+    ) {
+        let clock = crate::app::animation::Clock::stopped(direction.duration(), elapsed);
+        self.transition = Some(FolderTransition::new_running(
+            direction,
+            clock,
+            origin,
+            from_folder,
+            outgoing,
+        ));
     }
 }
 
@@ -315,7 +361,7 @@ impl App {
         self.browse_library_folder(root, Focus::Editor);
     }
 
-    pub(super) fn browse_library_folder(&mut self, folder: PathBuf, focus: Focus) {
+    pub(in crate::app) fn browse_library_folder(&mut self, folder: PathBuf, focus: Focus) {
         self.remember_workspace_visit();
         if self.writing_workspace() && !self.library_shown() && !self.prepare_writing_switch(None) {
             return;
@@ -323,7 +369,8 @@ impl App {
         if self.notebook_sidebar() && focus == Focus::Editor {
             self.reveal_path(&folder);
         }
-        self.set_library_folder(folder);
+        let was_shown = self.library_shown();
+        self.set_library_folder(folder, was_shown);
         if !self.library_shown() {
             let tab = self
                 .editor
@@ -485,7 +532,7 @@ impl App {
                 .as_deref()
                 .is_none_or(|path| !path.starts_with(root))
         {
-            self.set_library_folder(root.to_path_buf());
+            self.set_library_folder(root.to_path_buf(), false);
         }
     }
 
@@ -497,23 +544,70 @@ impl App {
         self.library.error = None;
         self.library.scroll = 0.0;
         self.library.folders = FolderMotion::default();
+        self.library.transition = None;
+        self.library.press_shot = None;
         self.library.pressed = None;
         self.library.generation.fetch_add(1, Ordering::Relaxed);
         self.library.queued = false;
         self.library.loading_since = None;
     }
 
-    fn set_library_folder(&mut self, folder: PathBuf) {
+    fn set_library_folder(&mut self, folder: PathBuf, animate_from_visible: bool) {
         if self.library.folder.as_ref() == Some(&folder) {
             return;
         }
+        let direction = NavDirection::between(self.library.folder.as_deref(), &folder);
+        // 借用 `self.clock` 校验动态效果开关并同步当前显示器的帧间隔（如 120Hz ProMotion）。
+        let animate = self.clock(direction.duration()).is_some();
+        let old_folder = self.library.folder.take();
+        let old_cards = std::mem::take(&mut self.library.cards);
+        let old_attachments = std::mem::take(&mut self.library.attachments);
+        let old_error = self.library.error.take();
+        let old_scroll = self.library.scroll;
+        let old_folders = std::mem::take(&mut self.library.folders);
+        let press_shot = self.library.press_shot.take();
+
+        self.library.transition = animate.then(|| {
+            let mut origin = None;
+            let outgoing = if animate_from_visible && old_folder.is_some() {
+                if direction == NavDirection::Enter && self.layout.editor.w > 0.0 {
+                    let grid = Grid::new(self.layout.editor, &old_cards);
+                    let clamped = old_scroll.min(grid.max_scroll(old_cards.len()));
+                    origin = old_cards
+                        .iter()
+                        .enumerate()
+                        .find(|(_, c)| {
+                            c.is_folder() && (c.path == folder || folder.starts_with(&c.path))
+                        })
+                        .map(|(i, _)| {
+                            let r = grid.card(i, clamped, true);
+                            (r.x + r.w * 0.5, r.y + r.h * 0.5)
+                        });
+                }
+                if let Some((rect, snap)) = press_shot
+                    && rect == self.layout.editor
+                {
+                    OutgoingLayer::Captured(snap)
+                } else {
+                    let poses = (0..old_cards.len()).map(|i| old_folders.pose(i)).collect();
+                    OutgoingLayer::Pending(Box::new(OutgoingLibrary {
+                        folder: old_folder.clone(),
+                        cards: old_cards,
+                        attachments: old_attachments,
+                        scroll: old_scroll,
+                        poses,
+                        error: old_error,
+                    }))
+                }
+            } else {
+                OutgoingLayer::None
+            };
+            FolderTransition::new_waiting(direction, origin, old_folder, outgoing)
+        });
+
         self.library.generation.fetch_add(1, Ordering::Relaxed);
         self.library.folder = Some(folder);
-        self.library.cards.clear();
-        self.library.attachments.clear();
-        self.library.error = None;
         self.library.scroll = 0.0;
-        self.library.folders = FolderMotion::default();
         self.library.pressed = None;
         self.library.loading_since = Some(std::time::Instant::now());
         self.hits.library.clear();
@@ -568,6 +662,9 @@ impl App {
         }
         library.cards = snapshot.cards;
         library.attachments = snapshot.attachments;
+        if let Some(transition) = library.transition.as_mut() {
+            transition.invalidate_incoming();
+        }
         self.set_pane_scroll(ScrollTarget::Library, self.library.scroll);
         self.request_redraw();
     }
@@ -586,6 +683,9 @@ impl App {
             }
         }
         self.library.attachments.extend(attachments);
+        if let Some(transition) = self.library.transition.as_mut() {
+            transition.invalidate_incoming();
+        }
         self.request_redraw();
     }
 
@@ -662,6 +762,9 @@ impl App {
                     if version == current && self.library.cards.is_empty() {
                         self.library.cards = cards;
                         self.library.error = None;
+                        if let Some(transition) = self.library.transition.as_mut() {
+                            transition.invalidate_incoming();
+                        }
                         self.set_pane_scroll(ScrollTarget::Library, self.library.scroll);
                         self.request_redraw();
                     }
@@ -679,6 +782,9 @@ impl App {
                     self.library.running = false;
                     if version == current {
                         self.library.loading_since = None;
+                        if let Some(transition) = self.library.transition.as_mut() {
+                            transition.invalidate_incoming();
+                        }
                         self.request_redraw();
                     }
                 }

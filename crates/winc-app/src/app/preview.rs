@@ -123,6 +123,7 @@ impl App {
         if let Some(line) = top {
             self.scroll_text_to(line);
         }
+        self.prepare_markdown_after_switch(None);
         self.request_redraw();
     }
 }

@@ -342,6 +342,7 @@ impl App {
         self.ensure_caret_visible();
         self.reset_blink();
         self.remember_workspace_visit();
+        self.prepare_markdown_after_switch(None);
         self.request_redraw();
         true
     }
@@ -643,6 +644,7 @@ impl App {
         self.note_recent_file();
         self.relayout();
         self.reveal_active();
+        self.prepare_markdown_after_switch(None);
         self.request_redraw();
     }
 

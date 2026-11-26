@@ -711,6 +711,44 @@ mod composite_bench {
             c.blend_layer(area, &layer, 0.6, 1.0, 24.0);
         }
         println!("不缩放合成 {:?}", start.elapsed() / 10);
+        let (rw, rh) = (1800usize, 2160usize);
+        let mut rpx = vec![0xff20_2020u32; rw * rh];
+        let mut rc = Canvas {
+            px: &mut rpx,
+            width: rw,
+            height: rh,
+            stride: rw,
+        };
+        let rarea = IRect::new(0, 0, rw as i32, rh as i32);
+        let (rarea, rlayer) = rc.copy(rarea);
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            rc.blend_layer_at(
+                rarea,
+                &rlayer,
+                (500.0, 420.0),
+                (0.0, 0.0),
+                0.94,
+                8.0,
+                1.0,
+                rarea,
+            );
+        }
+        println!("Retina 1800x2160 不透明缩放 {:?}", start.elapsed() / 10);
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            rc.blend_layer_at(
+                rarea,
+                &rlayer,
+                (500.0, 420.0),
+                (0.0, 0.0),
+                1.08,
+                0.0,
+                0.5,
+                rarea,
+            );
+        }
+        println!("Retina 1800x2160 半透明缩放 {:?}", start.elapsed() / 10);
     }
 }
 

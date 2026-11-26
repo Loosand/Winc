@@ -70,6 +70,12 @@ pub(crate) const PDF_MOTION: Duration = TREE_ANIMATION;
 pub(super) const DIALOG_IN: Duration = Duration::from_millis(220);
 /// 设置浮层消失的时长（取自调参），短于 [`DIALOG_IN`]。
 pub(super) const DIALOG_OUT: Duration = Duration::from_millis(150);
+/// 笔记库进入子文件夹时的焦点缩放过渡时长（临界阻尼弹簧曲线）。
+pub(crate) const LIBRARY_ENTER_ANIMATION: Duration = Duration::from_millis(360);
+/// 笔记库返回上级文件夹时的收缩回落过渡时长。
+pub(crate) const LIBRARY_EXIT_ANIMATION: Duration = Duration::from_millis(340);
+/// 笔记库同级切换目录或从笔记返回目录时的过渡时长。
+pub(crate) const LIBRARY_SWITCH_ANIMATION: Duration = Duration::from_millis(280);
 
 /// 返回浮层卡片（设置、`⌘P` 面板、输入条）出现、消失途中的（不透明度，缩放）。
 ///
@@ -162,7 +168,7 @@ pub struct Clock {
 
 impl Clock {
     /// 创建从当前时刻开始、时长为 `duration` 的时钟。
-    pub(super) fn new(duration: Duration) -> Clock {
+    pub(crate) fn new(duration: Duration) -> Clock {
         Clock {
             start: Instant::now(),
             duration,
@@ -375,6 +381,7 @@ impl App {
         settle(&mut self.panels.outline.motion, |m| m.1);
         settle(&mut self.panels.outline.fold, |f| f.clock);
         self.preview.markdown.settle_animations();
+        self.library.settle_animations();
         settle(&mut self.git.commit.card.motion, |m| m.1);
         settle(&mut self.git.commit.undo.motion, |m| m.1);
         settle(&mut self.panels.global.field_motion, |m| m.2);

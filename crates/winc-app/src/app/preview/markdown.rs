@@ -75,6 +75,13 @@ pub(crate) use winc_typeset::ImageSlot;
 /// 在后台解析，解析完成之前按上一版的结构显示。
 const INLINE_PARSE: std::time::Duration = std::time::Duration::from_millis(4);
 
+/// 首次切换到 Markdown 文档时，在界面线程上直接同步解析的体积上限（字节）。
+///
+/// 64 KB 以内的常见笔记通常在 1 ms 内解析完成（远低于 [`INLINE_PARSE`] 预算），
+/// 直接同步解析即可在当帧一次性绘制新文档，避免切页时先闪出一帧空白；更大的文档仍在后台解析，
+/// 并由 [`App::holding_frame`] 在首次解析完成前保留上一帧。
+pub(crate) const INLINE_FIRST_PARSE_BYTES: usize = 64 * 1024;
+
 /// 一张图片最多保留的已绘制尺寸数（种）；超出时移除最早绘制的尺寸。
 const SIZES: usize = 4;
 
@@ -114,6 +121,9 @@ pub(crate) struct MarkdownPreview {
     checked: Option<u64>,
     /// 正在后台解析的版本号（`revision`）。
     pending: Option<u64>,
+    /// 首次为当前文档发起后台解析的时刻：在该文档拿到第一份解析结果前，用于配合
+    /// [`App::holding_frame`] 保留上一帧，避免大文档切换时闪出一帧空白。
+    pub(crate) first_parse_since: Option<(DocumentId, std::time::Instant)>,
     /// 最近一次解析当前文档所用的时间（含拼接整段文字）；尚未解析过时为 `None`。
     ///
     /// 决定可编辑的预览是否在界面线程上解析，见 [`INLINE_PARSE`]。
@@ -277,6 +287,7 @@ impl Default for MarkdownPreview {
             parse_serial: 0,
             checked: None,
             pending: None,
+            first_parse_since: None,
             cost: None,
             scrolls: HashMap::new(),
             layout: None,
@@ -389,6 +400,7 @@ impl MarkdownPreview {
         self.parse_serial = self.parse_serial.wrapping_add(1);
         self.checked = None;
         self.pending = None;
+        self.first_parse_since = None;
         self.cost = None;
         self.layout = None;
         self.live.reset_doc();
@@ -544,6 +556,51 @@ impl App {
         false
     }
 
+    /// 当前标签已读好且需要显示 Markdown 预览、但还没有第一份解析结果时，立即同步解析（常规文档）
+    /// 或启动后台解析并记录起始时刻（供 [`App::holding_frame`] 在首次解析完成前保留上一帧）。
+    pub(in crate::app) fn prepare_markdown_after_switch(
+        &mut self,
+        hold_since: Option<std::time::Instant>,
+    ) {
+        if self.settings.standalone || self.settings.open || self.library_shown() {
+            return;
+        }
+        if self.editor.active().is_none_or(|d| d.is_pending()) {
+            return;
+        }
+        self.poll_markdown();
+        let Some(id) = self.editor.active().map(|d| d.id) else {
+            return;
+        };
+        if self.markdown_shown_area().is_none() {
+            return;
+        }
+        let md = &self.preview.markdown;
+        let needs_first = md.doc != Some(id) || (md.parsed.is_none() && md.failed.is_none());
+        if needs_first {
+            self.advance_markdown_with_since(hold_since);
+        }
+    }
+
+    /// 当前文档正在等待首次 Markdown 解析完成时，返回开始等待的时刻（供 [`App::holding_frame`] 使用）。
+    pub(in crate::app) fn markdown_holding_first_parse(
+        &self,
+        id: DocumentId,
+    ) -> Option<std::time::Instant> {
+        if self.settings.standalone || self.settings.open || self.library_shown() {
+            return None;
+        }
+        self.markdown_shown_area()?;
+        let md = &self.preview.markdown;
+        let (doc, since) = md.first_parse_since?;
+        (doc == id
+            && md.doc == Some(id)
+            && md.parsed.is_none()
+            && md.failed.is_none()
+            && md.pending.is_some())
+        .then_some(since)
+    }
+
     /// 当前标签显示 Markdown 预览且解析结果落后于文字时，在后台解析最新的文字。
     ///
     /// 不再显示预览时释放预览占用的内存，见 [`MarkdownPreview::reset`]。
@@ -551,6 +608,10 @@ impl App {
     /// 编辑器核心 · 解析调度：每次绘制前检查版本。后台解析读取原文快照，不写回文档；
     /// 输入赶在结果之前时，光标所在块仍可参考当前原文即时排版。
     pub(crate) fn advance_markdown(&mut self) {
+        self.advance_markdown_with_since(None);
+    }
+
+    fn advance_markdown_with_since(&mut self, hold_since: Option<std::time::Instant>) {
         let shown = self.markdown_shown_area().is_some();
         let Some(doc) = self.editor.active().filter(|_| shown) else {
             if self.preview.markdown.doc.is_some() {
@@ -578,6 +639,9 @@ impl App {
                 return;
             };
             md.pending = Some(revision);
+            if md.parsed.is_none() && md.first_parse_since.is_none_or(|(s, _)| s != id) {
+                md.first_parse_since = Some((id, hold_since.unwrap_or_else(std::time::Instant::now)));
+            }
             let (sender, proxy) = (md.sender.clone(), self.link.proxy.clone());
             winc_editor::background::spawn(move || {
                 let result = match kind {
@@ -605,7 +669,27 @@ impl App {
             Some(winc_editor::Reading::Ready(text)) => Some(Arc::clone(text)),
             _ => None,
         };
+        // 非可编辑预览（只读、分栏、阅读标签）在首次切换且体积较小时同样同步解析，
+        // 保证当帧即可直接绘制完整内容，不闪出空白帧。
+        let bytes = reading
+            .as_ref()
+            .map_or_else(|| rope.len_bytes(), |text| text.len());
+        if md.parsed.is_none() && md.cost.is_none() && bytes <= INLINE_FIRST_PARSE_BYTES {
+            let started = std::time::Instant::now();
+            let text = reading.map_or_else(|| rope.to_string(), |text| text.to_string());
+            let parsed = crate::frame_log::time_parse(|| markdown::parse(&text));
+            md.cost = Some(started.elapsed());
+            md.pending = None;
+            md.first_parse_since = None;
+            md.checked = Some(revision);
+            md.parsed = Some(Arc::new(parsed));
+            md.parse_serial = md.parse_serial.wrapping_add(1);
+            return;
+        }
         md.pending = Some(revision);
+        if md.parsed.is_none() && md.first_parse_since.is_none_or(|(s, _)| s != id) {
+            md.first_parse_since = Some((id, hold_since.unwrap_or_else(std::time::Instant::now)));
+        }
         let (sender, proxy) = (md.sender.clone(), self.link.proxy.clone());
         winc_editor::background::spawn(move || {
             let started = std::time::Instant::now();
@@ -622,8 +706,9 @@ impl App {
 
     /// 可编辑的预览中解析结果落后于文字时，在界面线程上解析最新的文字，返回是否已解析。
     ///
-    /// 只在上一次解析不超过 [`INLINE_PARSE`] 时进行：输入、点击、移动光标之后的排版和按键
-    /// 处理都依据当前文字的结构，不显示按上一版结构推算的中间帧。正在后台解析的旧版本作废。
+    /// 在首次切换且体积不超过 [`INLINE_FIRST_PARSE_BYTES`]，或上一次解析不超过 [`INLINE_PARSE`] 时进行：
+    /// 切页、输入、点击、移动光标之后的排版和按键处理都依据当前文字的结构，不显示空白帧或按上一版
+    /// 结构推算的中间帧。正在后台解析的旧版本作废。
     pub(crate) fn parse_markdown_inline(&mut self) -> bool {
         if !self.markdown_live() {
             return false;
@@ -663,16 +748,21 @@ impl App {
         if incremental_ok {
             md.parse_serial = md.parse_serial.wrapping_add(1);
             md.pending = None;
+            md.first_parse_since = None;
             md.checked = Some(revision);
             return true;
         }
-        if md.cost.is_none_or(|c| c > INLINE_PARSE) {
+        let first_small = md.parsed.is_none()
+            && md.cost.is_none()
+            && rope.len_bytes() <= INLINE_FIRST_PARSE_BYTES;
+        if !first_small && md.cost.is_none_or(|c| c > INLINE_PARSE) {
             return false;
         }
         let started = std::time::Instant::now();
         let parsed = crate::frame_log::time_parse(|| markdown::parse(&rope.to_string()));
         md.cost = Some(started.elapsed());
         md.pending = None;
+        md.first_parse_since = None;
         md.checked = Some(revision);
         md.parsed = Some(Arc::new(parsed));
         md.parse_serial = md.parse_serial.wrapping_add(1);
@@ -693,6 +783,7 @@ impl App {
                     }
                     md.cost = Some(cost);
                     md.pending = None;
+                    md.first_parse_since = None;
                     md.checked = Some(revision);
                     md.parsed = Some(Arc::new(parsed));
                     md.parse_serial = md.parse_serial.wrapping_add(1);
@@ -702,6 +793,7 @@ impl App {
                         continue;
                     }
                     md.pending = None;
+                    md.first_parse_since = None;
                     md.checked = Some(revision);
                     converted = true;
                     md.forget_images();

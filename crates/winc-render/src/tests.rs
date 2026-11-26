@@ -765,3 +765,32 @@ fn emoji_are_rasterized_once_whatever_the_pen_position() {
     assert_eq!(draw(&mut renderer, "😀"), 1);
     assert_eq!(draw(&mut renderer, "👍\u{1f3fd}"), 1);
 }
+
+#[test]
+fn blend_snapshot_transformed_anchors_pivot_and_respects_clip() {
+    let bg = Color::hex(0x101010);
+    let accent = Color::hex(0xee3322);
+    let outside = Color::hex(0x224488);
+    let mut renderer = Renderer::offscreen(60.0, 40.0, 1.0, bg, None, None).unwrap();
+    let clip = Rect::new(10.0, 5.0, 40.0, 30.0);
+
+    // 在 clip 内以 (24, 18) 为中心画一个 6×6 红色色块并截取快照，随后放大 1.5 倍绕 (24, 18) 叠加。
+    renderer.draw(|frame| {
+        frame.rect(frame.bounds(), bg);
+        frame.rect(Rect::new(21.0, 15.0, 6.0, 6.0), accent);
+        let snap = frame.snapshot(clip);
+        frame.rect(frame.bounds(), outside);
+        frame.rect(clip, bg);
+        frame.blend_snapshot_transformed(&snap, (24.0, 18.0), (0.0, 0.0), 1.5, 0.0, 1.0, clip);
+    });
+    let img = renderer.image().unwrap();
+    let at = |x: usize, y: usize| img.pixels[y * img.width as usize + x] & 0x00ff_ffff;
+    // 锚点正中心仍为红色，且红块半径按 1.5× 放大到 4.5 像素（24 ± 4 均为红）。
+    assert_eq!(at(24, 18), 0xee3322);
+    assert_eq!(at(20, 18), 0xee3322);
+    assert_eq!(at(27, 18), 0xee3322);
+    // clip 之外的像素保持蓝底，绝不溢出。
+    assert_eq!(at(4, 18), 0x224488);
+    assert_eq!(at(55, 18), 0x224488);
+    assert_eq!(at(24, 2), 0x224488);
+}

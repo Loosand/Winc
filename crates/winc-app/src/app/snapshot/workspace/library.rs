@@ -664,3 +664,100 @@ fn pending_note_cards_render_skeletons_and_open_immediately_on_click() {
     assert_eq!(app.editor.active().unwrap().path.as_ref(), Some(&note));
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn folder_entry_and_exit_transitions_capture_animate_and_settle() {
+    use crate::app::workspace::library::{NavDirection, OutgoingLayer, OutgoingLibrary};
+    use std::time::Duration;
+
+    let (mut app, root) = note_app("library-folder-transition");
+    let recipes = root.join("Recipes");
+    let empty_sub = recipes.join("EmptySub");
+    std::fs::create_dir(&empty_sub).unwrap();
+    paint(&mut app);
+
+    // 1. 进入子目录 Recipes：首帧自动把 Pending 旧网格截取为像素快照并立即释放旧卡片，
+    // 动画期间点击新卡片仍然立即可用。
+    let folder_card = hit(&app, LibraryTarget::Card(0));
+    let origin = (
+        folder_card.x + folder_card.w * 0.5,
+        folder_card.y + folder_card.h * 0.5,
+    );
+    let old = OutgoingLibrary {
+        folder: app.library.folder.clone(),
+        cards: std::mem::take(&mut app.library.cards),
+        attachments: Default::default(),
+        scroll: app.library.scroll,
+        poses: vec![Default::default(); 2],
+        error: None,
+    };
+    app.browse_library_folder(recipes.clone(), Focus::Editor);
+    paint(&mut app);
+    app.library.start_test_transition(
+        NavDirection::Enter,
+        Duration::from_millis(80),
+        Some(origin),
+        Some(root.clone()),
+        OutgoingLayer::Pending(Box::new(old)),
+    );
+    assert!(app.animating());
+    paint(&mut app);
+    assert!(matches!(
+        app.library.transition.as_ref().map(|t| &t.outgoing),
+        Some(OutgoingLayer::Captured(_))
+    ));
+    assert!(matches!(
+        app.library.transition.as_ref().map(|t| &t.incoming),
+        Some(crate::app::workspace::library::IncomingLayer::Captured { .. })
+    ));
+    // 动画途中子目录卡片命中区域仍立即可点击。
+    let child_hit = hit(&app, LibraryTarget::Card(0));
+    assert!(child_hit.w > 0.0 && child_hit.h > 0.0);
+
+    // 2. 进入空子目录时同样正常完成绘制不提前跳过旧画面叠加。
+    app.browse_library_folder(empty_sub.clone(), Focus::Editor);
+    paint(&mut app);
+    app.library.start_test_transition(
+        NavDirection::Enter,
+        Duration::from_millis(70),
+        Some(origin),
+        Some(recipes.clone()),
+        OutgoingLayer::None,
+    );
+    paint(&mut app);
+    assert!(app.library.cards.is_empty());
+
+    // 3. 返回父目录 root：Exit 过渡自动在父网格中定位刚离开的 Recipes 卡片作为收缩锚点，
+    // 到点后由 settle_animations 清理并停止调度帧。
+    app.browse_library_folder(root.clone(), Focus::Editor);
+    paint(&mut app);
+    app.library.start_test_transition(
+        NavDirection::Exit,
+        Duration::from_millis(70),
+        None,
+        Some(recipes),
+        OutgoingLayer::None,
+    );
+    paint(&mut app);
+    assert!(
+        app.library
+            .transition
+            .as_ref()
+            .and_then(|t| t.origin)
+            .is_some(),
+        "返回父目录时应自动定位对应文件夹卡片作为收缩锚点"
+    );
+
+    app.library.start_test_transition(
+        NavDirection::Exit,
+        NavDirection::Exit.duration(),
+        None,
+        None,
+        OutgoingLayer::None,
+    );
+    app.library.settle_animations();
+    assert!(app.library.transition.is_none());
+    assert!(!app.library.animating());
+
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}

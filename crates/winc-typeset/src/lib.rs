@@ -632,8 +632,8 @@ impl Item {
 
 /// 排版用到的颜色，由配色推出来，换主题时跟着变。
 ///
-/// 边框、底色都是正文色的低不透明度值：深色主题取 20%/12%/5%/3%，浅色主题取
-/// 16%/8%/4%/2.5%。
+/// 边框、底色都是正文色的低不透明度值：深色主题取 20%/12%/5%/6%，浅色主题取
+/// 13%/6%/3%/3%。
 #[derive(Clone, Copy)]
 pub struct Colors {
     /// 正文和标题的颜色。
@@ -664,12 +664,12 @@ impl Colors {
             text,
             muted,
             link: accent,
-            border: text.alpha(if dark { 0.2 } else { 0.16 }),
-            code_inline: text.alpha(if dark { 0.12 } else { 0.08 }),
-            code_block: text.alpha(if dark { 0.05 } else { 0.04 }),
-            table_head: text.alpha(if dark { 0.06 } else { 0.04 }),
-            table_frame: text.alpha(if dark { 0.14 } else { 0.11 }),
-            table_line: text.alpha(if dark { 0.09 } else { 0.07 }),
+            border: text.alpha(if dark { 0.2 } else { 0.13 }),
+            code_inline: text.alpha(if dark { 0.12 } else { 0.06 }),
+            code_block: text.alpha(if dark { 0.05 } else { 0.03 }),
+            table_head: text.alpha(if dark { 0.06 } else { 0.03 }),
+            table_frame: text.alpha(if dark { 0.14 } else { 0.10 }),
+            table_line: text.alpha(if dark { 0.09 } else { 0.06 }),
         }
     }
 
