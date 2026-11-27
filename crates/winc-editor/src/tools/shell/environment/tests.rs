@@ -5,7 +5,7 @@ use super::*;
 #[cfg(unix)]
 use crate::test_util::scratch;
 #[cfg(unix)]
-use crate::tools::format::tests::{TOOL_TIMEOUT, fake_tool};
+use crate::tools::shell::tests::{TOOL_TIMEOUT, fake_tool};
 
 #[test]
 fn only_what_is_between_the_markers_counts() {

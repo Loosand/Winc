@@ -13,7 +13,6 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use crate::shell::environment;
 use crate::shell::process::{self, Cancel};
 
 /// 访问发行版文件系统的主机名：`wsl.localhost` 是当前的写法，`wsl$` 是早期的写法，两者均可用。
@@ -34,19 +33,8 @@ LANGUAGE";
 pub(crate) const ASKPASS_ENV: &str = "GIT_ASKPASS/pu:SSH_ASKPASS/pu:SSH_ASKPASS_REQUIRE/u:\
 WINC_GIT_ASKPASS:SSH_ASKPASS_PROMPT/w";
 
-/// 通过 `WSLENV` 传给发行版内格式化工具的环境变量。
-pub(crate) const FORMAT_ENV: &str = "WINC_FILE:NO_COLOR";
-
-/// 用用户的 shell 以交互式登录方式运行 `$0` 的脚本。
-///
-/// 版本管理工具（如 nvm）的初始化通常写在只有交互式 shell 才读取的文件中。
-const LOGIN_SHELL: &str = r#"exec "${SHELL:-/bin/sh}" -i -l -c "$0""#;
-
 /// 运行 Windows 路径 `$0` 处的 Linux 程序的脚本：`wslpath` 按发行版的挂载配置换算路径。
 const RUN_WINDOWS_FILE: &str = r#"exec "$(wslpath -u "$0")" "$@""#;
-
-/// 已查询过的各发行版用户 `PATH`：（发行版名称，值）；查询失败时值为 `None`。
-static LOGIN_PATHS: Mutex<Vec<(String, Option<String>)>> = Mutex::new(Vec::new());
 
 /// 已查询过的各发行版用户主目录：（发行版名称，发行版内的路径）；查询失败时值为 `None`。
 static HOMES: Mutex<Vec<(String, Option<String>)>> = Mutex::new(Vec::new());
@@ -242,49 +230,6 @@ pub(crate) fn enter(command: &mut Command, distro: &str) {
     command.args(["-d", distro]).env("WSL_UTF8", "1");
 }
 
-/// 返回发行版 `distro` 中用户配置的 `PATH`；无法取得时返回 `None`。
-///
-/// 运行用户的 shell 可能较慢，启动脚本还可能等到 [`QUERY_TIMEOUT`]，因此每个发行版在进程内只查询
-/// 一次，失败的结果同样保留。
-pub(crate) fn login_path(distro: &str) -> Option<String> {
-    remembered(&LOGIN_PATHS, distro, || {
-        let mut command = Command::new("wsl.exe");
-        enter(&mut command, distro);
-        command
-            .args([
-                "--exec",
-                "sh",
-                "-c",
-                LOGIN_SHELL,
-                &environment::print_script(),
-            ])
-            // 用户的启动脚本可据此跳过只应在打开终端时运行的内容（启动 tmux、代理进程等）。
-            .env("WINC_RESOLVING_ENVIRONMENT", "1")
-            .env("WSLENV", "WINC_RESOLVING_ENVIRONMENT")
-            .stderr(Stdio::null());
-        process::run(&mut command, Vec::new(), QUERY_TIMEOUT, &Cancel::default())
-            .ok()
-            .and_then(|output| environment::path_in(&output.stdout))
-    })
-}
-
-/// 让 `command`（`wsl.exe`）在 `path` 下运行随后的 shell 脚本和参数；`path` 是 `None` 时由登录
-/// shell 提供 `PATH`。
-fn enter_shell(command: &mut Command, path: Option<&str>) {
-    match path {
-        Some(path) => command.args(["--exec", "env", &format!("PATH={path}"), "sh", "-c"]),
-        None => command.args(["--exec", "sh", "-lc"]),
-    };
-}
-
-/// 让 `command`（`wsl.exe`）在发行版的目录 `dir` 中，以 `path` 运行随后追加的程序和参数。
-pub(crate) fn enter_login(command: &mut Command, distro: &str, dir: &str, path: Option<&str>) {
-    enter(command, distro);
-    command.args(["--cd", dir]);
-    enter_shell(command, path);
-    command.arg(r#"exec "$0" "$@""#);
-}
-
 /// 返回发行版 `distro` 的根目录：优先使用 `wsl.localhost`，早期系统只有 `wsl$`。
 #[must_use]
 pub fn distro_root(distro: &str) -> PathBuf {
@@ -309,20 +254,6 @@ pub fn from_distro(distro: &str, path: PathBuf) -> PathBuf {
     }
 }
 
-/// 在发行版 `distro` 中查找程序 `name` 的绝对路径；未找到或查询失败时返回 `None`。
-pub(crate) fn find_program(distro: &str, path: Option<&str>, name: &str) -> Option<PathBuf> {
-    let mut command = Command::new("wsl.exe");
-    enter(&mut command, distro);
-    enter_shell(&mut command, path);
-    command.args([r#"command -v "$0""#, name]);
-    let output = process::run(&mut command, Vec::new(), QUERY_TIMEOUT, &Cancel::default()).ok()?;
-    output
-        .status
-        .success()
-        .then(|| linux_program(&output.stdout))
-        .flatten()
-}
-
 /// 返回发行版内的监视程序 `winc-watch` 的路径（在主程序旁边）；不存在时返回 `None`。
 ///
 /// 环境变量 `WINC_WATCH` 可以指定其他路径，用于开发时运行。
@@ -343,16 +274,6 @@ pub(crate) fn watch_command(place: &Location, helper: &Path) -> Command {
         .arg(helper)
         .arg(&place.path);
     command
-}
-
-/// 从 `command -v` 的输出中取出发行版内的程序路径。
-///
-/// 启动脚本可能输出其他内容，结果在最后一行。`/mnt/` 下的是 WSL 从 Windows 的 `PATH` 带来的 Windows
-/// 程序，它们无法处理发行版内的路径，按未找到处理。
-fn linux_program(output: &[u8]) -> Option<PathBuf> {
-    let text = String::from_utf8_lossy(output);
-    let last = text.lines().next_back()?.trim();
-    (last.starts_with('/') && !last.starts_with("/mnt/")).then(|| PathBuf::from(last))
 }
 
 /// `path` 所在的位置当前能否访问：发行版中的路径取决于发行版的根目录，其他路径总是返回 `true`。

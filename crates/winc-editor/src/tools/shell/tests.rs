@@ -4,7 +4,20 @@ use super::*;
 #[cfg(unix)]
 use crate::test_util::scratch;
 #[cfg(unix)]
-use crate::tools::format::tests::fake_tool;
+use std::time::Duration;
+
+/// 不测试超时的地方给模拟工具的时间（60 秒）。
+#[cfg(unix)]
+pub(crate) const TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 在 `dir` 里写一个模拟外部程序的 `#!/bin/sh` 脚本。
+#[cfg(unix)]
+pub(crate) fn fake_tool(dir: &Path, name: &str, body: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(name);
+    winc_backend::testing::write_script(&path, &format!("#!/bin/sh\n{body}\n"));
+    path
+}
 
 #[cfg(unix)] // 用不带扩展名的脚本冒充工具；Windows 上程序要带 PATHEXT 中的扩展名
 #[test]

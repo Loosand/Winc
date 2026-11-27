@@ -174,8 +174,6 @@ enum OpenedContent {
     Epub(Option<Stamp>),
     /// PDF：只有修改时间，读取和渲染另外做。
     Pdf(Option<Stamp>),
-    /// 十六进制视图：打开的文件，字节按需读取。
-    Hex(Box<crate::hex::HexView>),
     /// 文本，或者打不开的原因。
     Text(Result<Loaded, OpenError>),
 }
@@ -497,16 +495,6 @@ impl Document {
             return DiskSync::Done(DiskChange::Unchanged);
         };
 
-        // 十六进制视图被其他程序修改：读过的字节作废，下次读取时重新打开文件。
-        if let Some(view) = &mut self.hex {
-            let Some(metadata) = metadata.filter(|m| view.outdated(m)) else {
-                return DiskSync::Done(DiskChange::Unchanged);
-            };
-            view.refresh(metadata);
-            self.revision += 1;
-            return DiskSync::Done(DiskChange::Reloaded);
-        }
-
         // 图片、工作簿、docx、EPUB、PDF 被其他程序修改：重新读取。递增 `revision` 使正在进行的
         // 那次读取结果被丢弃（见 `set_picture`、`set_table`），工作簿随后按新版本重新读
         // （`table_to_load`），docx、EPUB、PDF 由界面按新版本重新转换、渲染。
@@ -715,21 +703,9 @@ impl Document {
         document
     }
 
-    /// 创建尚未读取的文档（见 [`Document::pending`]），读取时打开成十六进制视图。
-    pub(crate) fn pending_hex(id: DocumentId, path: PathBuf) -> Self {
-        let mut document = Self::pending(id, path);
-        document.pending_hex = true;
-        document
-    }
-
-    /// 尚未读取的文档读取时是否打开成十六进制视图（见 [`Document::pending_hex`]）。
-    pub(crate) fn reads_as_hex(&self) -> bool {
-        self.pending_hex
-    }
-
-    /// 文本是否就是文件的内容：已经读取，不是十六进制视图，也不是打不开的文件的占位标签。
+    /// 文本是否就是文件的内容：已经读取，也不是打不开的文件的占位标签。
     pub fn holds_file_text(&self) -> bool {
-        !self.pending && self.hex.is_none() && self.unsupported.is_none()
+        !self.pending && self.unsupported.is_none()
     }
 
     /// 尚未读取的文档读取时用的编码：用户选的（见 `Document::chosen`），没有选时为 `None`。
@@ -779,14 +755,6 @@ impl Document {
         Self::read(path, false, None, None)
     }
 
-    /// 打开文件 `path` 的十六进制视图（会访问磁盘，在后台线程上调用）。
-    pub(crate) fn read_hex(path: &Path) -> Opened {
-        Opened {
-            config: FileConfig::default(),
-            content: OpenedContent::Hex(Box::new(crate::hex::HexView::open(path))),
-        }
-    }
-
     /// 与 [`Document::read_any`] 相同；`as_text` 为 `true` 时图片和二进制文件也按文本读入
     /// （「以文本方式打开」），读过的字节计入 `progress`。
     pub(crate) fn read(
@@ -818,10 +786,8 @@ impl Document {
                 OpenedContent::Text(load_with(path, as_text, Encoding::Utf8, progress))
             }
         };
-        // 远端的文件：内容和 `.editorconfig` 各要一次往返，互不依赖，同时进行。
-        let remote = winc_backend::is_remote(path);
-        let lookup = || editorconfig::lookup(path);
-        let (config, content) = crate::background::both(remote, lookup, content);
+        let config = editorconfig::lookup(path);
+        let content = content();
         Opened { config, content }
     }
 
@@ -857,10 +823,6 @@ impl Document {
                 document.readonly = true;
                 document.unsupported = Some(Unsupported::Pdf);
                 document.disk_mtime = mtime;
-            }
-            OpenedContent::Hex(view) => {
-                document.readonly = true;
-                document.hex = Some(view);
             }
             OpenedContent::Text(Ok(loaded)) => document.set_content(loaded),
             OpenedContent::Text(Err(e)) => {

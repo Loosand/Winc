@@ -71,16 +71,9 @@ fn login_shell(shell: &OsStr, timeout: Duration) -> Result<Vars, String> {
     parse(&output.stdout).ok_or_else(|| "shell 未输出环境变量".to_owned())
 }
 
-/// 返回让 shell 打印环境的脚本，输出由 [`path_in`] 或 [`parse`] 解析。
+/// 返回让 shell 打印环境的脚本，输出由 [`parse`] 解析。
 pub(crate) fn print_script() -> String {
     format!("printf '{MARKER}'; command env -0; printf '{MARKER}'")
-}
-
-/// 返回 [`print_script`] 的输出 `output` 中 `PATH` 的值；没有可用的环境时返回 `None`。
-pub(crate) fn path_in(output: &[u8]) -> Option<String> {
-    let vars = parse(output)?;
-    let (_, path) = vars.into_iter().find(|(name, _)| name == "PATH")?;
-    path.into_string().ok()
 }
 
 /// 返回 `env -0` 输出中两个标记之间的环境变量；缺少标记，或环境中没有 `PATH` 时返回 `None`。

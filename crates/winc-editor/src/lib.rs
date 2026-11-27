@@ -13,7 +13,6 @@ pub mod backup;
 pub mod diff_view;
 mod document;
 pub mod git;
-pub mod hex;
 mod navigation;
 pub mod panes;
 pub mod proxy;
@@ -61,9 +60,9 @@ pub use document::{
     PreviewMode, Reading, TabSurface, TableState, TableView, Unsupported, looks_binary, size_text,
 };
 pub use document::{editorconfig, encoding};
-pub use navigation::{definition, keypath, symbols, usages};
+pub use navigation::{keypath, symbols};
 pub use tools::copying::Copying;
-pub use tools::{format, host, remote_env, shell, wsl};
+pub use tools::{host, shell, wsl};
 pub use workspace::picker::{FileIndex, IndexedFile, MAX_RESULTS as PICKER_MAX_RESULTS};
 pub use workspace::project_search::{
     FileResult, LineMatch, MAX_RESULTS, MAX_THREADS as MAX_SEARCH_THREADS, ProjectSearch, Query,
@@ -257,7 +256,6 @@ impl Editor {
             id: doc.id,
             path: doc.path.clone()?,
             as_text: doc.reads_as_text(),
-            hex: doc.reads_as_hex(),
             encoding: doc.reads_with(),
             progress: ReadProgress::default(),
         })
@@ -314,39 +312,7 @@ impl Editor {
         true
     }
 
-    /// 把第 `index` 个标签换成它的文件的十六进制视图（尚未读取，读取见 [`Editor::begin_load`]），
-    /// 返回是否换了；没有对应的文件、已经是十六进制视图时不换。
-    pub fn show_hex(&mut self, index: usize) -> bool {
-        let Some(doc) = self.documents.get_mut(index).filter(|d| d.hex.is_none()) else {
-            return false;
-        };
-        let Some(path) = doc
-            .path
-            .clone()
-            .filter(|_| doc.log.is_none() && doc.diff.is_none())
-        else {
-            return false;
-        };
-        replace_document(doc, Document::pending_hex(doc.id, path));
-        true
-    }
-
-    /// 把第 `index` 个十六进制视图的标签改回尚未读取的文本，按 `encoding` 解码（二进制内容也
-    /// 按文本读入）；返回是否改动。读取见 [`Editor::begin_load`]。
-    pub fn show_text(&mut self, index: usize, encoding: Encoding) -> bool {
-        let Some(doc) = self.documents.get_mut(index).filter(|d| d.hex.is_some()) else {
-            return false;
-        };
-        let Some(path) = doc.path.clone() else {
-            return false;
-        };
-        let mut fresh = Document::pending_as_text(doc.id, path);
-        fresh.keep_chosen(Some(encoding));
-        replace_document(doc, fresh);
-        true
-    }
-
-    /// 在只读标签中显示一段文本（格式化工具的输出），标签标题为 `title`，并切换到该标签。
+    /// 在只读标签中显示一段文本，标签标题为 `title`，并切换到该标签。
     ///
     /// 已存在标题相同且没有对应文件的标签时，替换其内容而不新开标签。返回标签序号（从 0 起）。
     pub fn show_output(&mut self, title: &str, text: &str) -> usize {
@@ -778,8 +744,6 @@ pub struct LoadJob {
     path: PathBuf,
     /// 是否把图片和二进制文件也按文本读入（「以文本方式打开」）。
     as_text: bool,
-    /// 是否打开成十六进制视图。
-    hex: bool,
     /// 用户选的编码；有时按它解码。
     encoding: Option<Encoding>,
     progress: ReadProgress,
@@ -799,15 +763,12 @@ impl LoadJob {
     /// 读取文件；耗时与文件大小成正比，在后台线程上调用。
     pub fn run(self) -> LoadedFile {
         LoadedFile {
-            opened: match self.hex {
-                true => Document::read_hex(&self.path),
-                false => Document::read(
-                    &self.path,
-                    self.as_text,
-                    self.encoding,
-                    Some(&self.progress),
-                ),
-            },
+            opened: Document::read(
+                &self.path,
+                self.as_text,
+                self.encoding,
+                Some(&self.progress),
+            ),
             id: self.id,
             path: self.path,
             encoding: self.encoding,
@@ -838,13 +799,6 @@ fn replace_document(slot: &mut Document, mut fresh: Document) {
 
 /// 返回用于显示的名称：路径的最后一段；没有最后一段（如根目录）时返回整个路径。
 pub fn display_name(path: &Path) -> Cow<'_, str> {
-    // 远端路径：名字按远端的写法显示，根目录显示为 `目标:/`。
-    if let Some(remote) = winc_backend::locate(path) {
-        return match remote.name() {
-            [] => winc_backend::display(path).unwrap_or_default().into(),
-            name => String::from_utf8_lossy(name).into_owned().into(),
-        };
-    }
     path.file_name()
         .map_or_else(|| path.to_string_lossy(), |n| n.to_string_lossy())
 }
@@ -852,13 +806,10 @@ pub fn display_name(path: &Path) -> Cow<'_, str> {
 /// 返回用于显示的路径。
 ///
 /// 位于 `root` 之下时返回相对路径；位于用户主目录（环境变量 `HOME`）之下时返回 `~/…`；
-/// 其余情况返回完整路径。远端主机上的路径不在 `root` 之下时写成 `目标:/路径`。
+/// 其余情况返回完整路径。
 pub fn display_path(path: &Path, root: Option<&Path>) -> String {
-    if let Some(relative) = root.and_then(|root| winc_backend::relative_lossy(path, root)) {
-        return relative;
-    }
-    if let Some(remote) = winc_backend::display(path) {
-        return remote;
+    if let Some(relative) = root.and_then(|root| path.strip_prefix(root).ok()) {
+        return relative.to_string_lossy().into_owned();
     }
 
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)

@@ -37,8 +37,6 @@ const LIMITED: u8 = 4;
 pub(super) struct Helper {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
-    /// 远端主机上的监视：释放时经它结束。
-    remote: Option<winc_backend::remote::Stopper>,
     state: Arc<AtomicU8>,
 }
 
@@ -70,27 +68,7 @@ impl Helper {
         Ok(Helper {
             child: Some(child),
             stdin: Some(stdin),
-            remote: None,
             state: read(stdout, to_local, record)?,
-        })
-    }
-
-    /// 读取远端主机上的监视 `running` 的输出，其余同 [`Helper::spawn`]。不能另外监视其他目录。
-    ///
-    /// # Errors
-    ///
-    /// 无法创建读取的线程时返回错误。
-    pub(super) fn remote(
-        running: winc_backend::remote::Running,
-        to_local: impl Fn(&str) -> PathBuf + Send + 'static,
-        record: impl Fn(Report) + Send + 'static,
-    ) -> io::Result<Helper> {
-        let stopper = running.stopper();
-        Ok(Helper {
-            child: None,
-            stdin: None,
-            remote: Some(stopper),
-            state: read(running, to_local, record)?,
         })
     }
 
@@ -136,12 +114,8 @@ impl Helper {
 
 impl Drop for Helper {
     /// 关闭标准输入让程序自行退出，超时后才强制结束：结束 `wsl.exe` 不一定能结束发行版内的进程。
-    /// 远端主机上的监视由服务进程结束。
     fn drop(&mut self) {
         self.state.store(EXITED, Ordering::Relaxed);
-        if let Some(remote) = self.remote.take() {
-            remote.stop();
-        }
         drop(self.stdin.take());
         let Some(mut child) = self.child.take() else {
             return;

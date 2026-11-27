@@ -51,31 +51,26 @@ impl Workspace {
         !self.extra.is_empty() && self.folders().any(|folder| folder == path)
     }
 
-    /// 目录 `path` 是否可以加为附加的文件夹：是可读的目录，不与已有的文件夹重叠，并与根目录在
-    /// 同一个系统上。
+    /// 目录 `path` 是否可以加为附加的文件夹：是可读的目录，且不与已有的文件夹重叠。
     pub fn can_add_folder(&self, path: &Path) -> bool {
         let Ok(path) = winc_config::files::canonicalize(path) else {
             return false;
         };
         let overlaps = |folder: &Path| path.starts_with(folder) || folder.starts_with(&path);
-        let place = |path: &Path| winc_backend::locate(path).map(|at| at.target);
-        winc_backend::fs::is_dir(&path)
-            && !self.folders().any(overlaps)
-            && place(&path) == place(&self.root)
+        winc_backend::fs::is_dir(&path) && !self.folders().any(overlaps)
     }
 
     /// 把目录 `path` 加为附加的文件夹并展开，返回规范化后的路径。
     ///
     /// # Errors
     ///
-    /// `path` 不是可读的目录时返回对应的 `std::io::Error`；已在某个文件夹之内、包含某个文件夹，
-    /// 或与根目录不在同一个系统（本机、同一个连接）时返回 `InvalidInput`。
+    /// `path` 不是可读的目录时返回对应的 `std::io::Error`；已在某个文件夹之内或包含某个文件夹时
+    /// 返回 `InvalidInput`。
     pub fn add_folder(&mut self, path: &Path) -> io::Result<PathBuf> {
         let path = winc_config::files::canonicalize(path)?;
         list_dir(&path)?;
         let overlaps = |folder: &Path| path.starts_with(folder) || folder.starts_with(&path);
-        let place = |path: &Path| winc_backend::locate(path).map(|at| at.target);
-        if self.folders().any(overlaps) || place(&path) != place(&self.root) {
+        if self.folders().any(overlaps) {
             return Err(io::ErrorKind::InvalidInput.into());
         }
         self.expanded.insert(path.clone());

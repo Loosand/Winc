@@ -647,10 +647,10 @@ pub struct Askpass {
 }
 
 impl Git {
-    /// 仓库 `root` 是否有可用的 `git`：本机的仓库需要本机的 `git`，发行版和远端主机上的仓库
-    /// 使用各自系统中的 `git`。
+    /// 仓库 `root` 是否有可用的 `git`：本机的仓库需要本机的 `git`，发行版上的仓库使用其系统中的
+    /// `git`。
     pub fn reaches(&self, root: &Path) -> bool {
-        self.local || winc_backend::is_remote(root) || crate::wsl::locate_here(root).is_some()
+        self.local || crate::wsl::locate_here(root).is_some()
     }
 
     /// 在仓库 `root` 里运行 `git status`。
@@ -675,16 +675,9 @@ impl Git {
             "--ignored=matching",
             "--ignore-submodules=dirty",
         ]);
-        // 正在进行的操作从 `.git` 里的标记文件看出，与 `git status` 互不依赖：远端的仓库上
-        // 同时进行。
-        let marks = || {
-            let dir = git_dir(root);
-            let operation = dir.as_deref().and_then(Operation::detect);
-            (dir, operation)
-        };
-        let run = || self.run(&mut command, STATUS_TIMEOUT, cancel);
-        let remote = winc_backend::is_remote(root);
-        let ((dir, operation), stdout) = crate::background::both(remote, marks, run);
+        let dir = git_dir(root);
+        let operation = dir.as_deref().and_then(Operation::detect);
+        let stdout = self.run(&mut command, STATUS_TIMEOUT, cancel);
         let mut status = parse_status(&stdout?, root)
             .ok_or_else(|| winc_i18n::t!("git-status-unreadable").to_owned())?;
         if operation == Some(Operation::Rebase) {
@@ -921,10 +914,10 @@ impl Git {
     ) -> Result<String, String> {
         let mut command = self.command(root);
         self.ask_through(root, &mut command);
-        // 本机的 `git`（不是远端主机和 WSL 里的）在联网的命令上跟随系统的代理设置；暂存、提交
-        // 这些不联网的命令不读系统设置，不为它们多跑一个进程。
+        // 本机的 `git`（不是 WSL 里的）在联网的命令上跟随系统的代理设置；暂存、提交这些不联网的
+        // 命令不读系统设置，不为它们多跑一个进程。
         let online = online(args.iter().map(AsRef::as_ref));
-        if online && !winc_backend::is_remote(root) && crate::wsl::locate_here(root).is_none() {
+        if online && crate::wsl::locate_here(root).is_none() {
             crate::proxy::apply(&mut command);
         }
         prepare(&mut command);
@@ -1146,14 +1139,6 @@ impl Git {
     /// 环境中的 [`REPOSITORY_ENV`] 不传给 `git`：仓库由 `root` 决定，调用方需要时（例如临时暂存区）
     /// 在返回的命令上另行设置。
     pub(super) fn at(&self, root: &Path) -> Command {
-        // 远端主机上的仓库：以仓库为工作目录运行远端的 `git`，按名字在远端的 `PATH` 中查找
-        // （本机 `git` 的路径和本机 shell 的环境在远端没有意义）。命令经 `process::run` 在该
-        // 目录所在的主机上运行。
-        if winc_backend::is_remote(root) {
-            let mut command = Command::new("git");
-            command.current_dir(root);
-            return command;
-        }
         let mut command = match crate::wsl::locate_here(root) {
             None => {
                 let mut command = self.shell.command(&self.program);
@@ -1283,17 +1268,6 @@ impl LogStream {
 /// 各段按原样的字节拼接，不经有损转换：Unix 上文件名可以不是 UTF-8，替换成 U+FFFD 以后指向的
 /// 是另一个（通常不存在的）文件。
 fn slash_path(root: &Path, path: &Path) -> Result<OsString, String> {
-    // 远端主机上的仓库：按远端的原始字节计算，虚拟路径中为本机所做的换算不能传给远端的 `git`。
-    if let (Some(root), Some(path)) = (winc_backend::locate(root), winc_backend::locate(path)) {
-        let relative = path
-            .relative_to(&root)
-            .ok_or_else(|| winc_i18n::t!("git-file-outside-repository"))?;
-        #[cfg(unix)]
-        return Ok(std::os::unix::ffi::OsStringExt::from_vec(relative.to_vec()));
-        // Windows 的字符串无法表示不是有效 UTF-8 的文件名，这样的文件在远端的 `git` 中找不到。
-        #[cfg(not(unix))]
-        return Ok(String::from_utf8_lossy(relative).into_owned().into());
-    }
     let relative = path
         .strip_prefix(root)
         .map_err(|_| winc_i18n::t!("git-file-outside-repository"))?;
@@ -1364,13 +1338,7 @@ const SCAN_ENTRIES: usize = 4096;
 ///
 /// 只查文件系统，不运行 `git`。
 pub fn find_root(dir: &Path) -> Option<PathBuf> {
-    // 远端的目录只在那台主机的根目录以内向上查找：再往上就是本机的文件系统。
-    let remote = winc_backend::is_remote(dir);
-    let ancestors: Vec<&Path> = dir
-        .ancestors()
-        .take_while(|d| !remote || winc_backend::is_remote(d))
-        .collect();
-    // 各级的 `.git` 一次查完：远端的目录只需一次往返。
+    let ancestors: Vec<&Path> = dir.ancestors().collect();
     let markers: Vec<PathBuf> = ancestors.iter().map(|d| d.join(".git")).collect();
     let found = winc_backend::fs::metadata_many(&markers);
     (ancestors.into_iter().zip(found))

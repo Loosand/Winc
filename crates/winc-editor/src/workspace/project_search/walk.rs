@@ -25,7 +25,6 @@ impl ProjectSearch {
         let walk = Walk {
             root: self.root.clone(),
             extra: Arc::clone(&self.labelled),
-            literal: self.query.as_ref().and_then(literal),
             matcher: matcher.clone(),
             file_names: self.query.as_ref().is_some_and(|query| query.file_names),
             source,
@@ -39,60 +38,6 @@ impl ProjectSearch {
         crate::background::spawn(move || Arc::new(walk).run(sender));
         self.job = Some(job);
     }
-}
-
-/// 返回 `query` 的每处匹配都含有的一段文字，以及比较时是否区分大小写；无法确定时返回 `None`。
-///
-/// 按字面查找时就是查找的文本；正则查找时用调用方给出的，没有给出时从表达式里取（见
-/// [`regex_literal`]）。文字跨行、或不区分大小写而含有 ASCII 以外的字符时不用：远端的 `grep`
-/// 按行比较，大小写的规则也随它的语言环境变化，可能漏掉文件。
-fn literal(query: &Query) -> Option<(String, bool)> {
-    if query.file_names {
-        return None;
-    }
-    let found;
-    let text = if !query.required.is_empty() {
-        &query.required
-    } else if !query.regex {
-        &query.text
-    } else {
-        found = regex_literal(&query.text)?;
-        &found
-    };
-    let single_line = !text.contains(['\n', '\r', '\0']);
-    let comparable = query.case_sensitive || text.is_ascii();
-    (single_line && comparable).then(|| (text.clone(), query.case_sensitive))
-}
-
-/// 返回正则表达式 `pattern` 的每处匹配都含有的一段文字：各种匹配共同的开头或结尾，取较长
-/// 的一个；没有、或表达式用到了这里不解析的写法（环视、反向引用）时返回 `None`。
-///
-/// 表达式按区分大小写解析：不区分大小写的查找由调用方按不区分大小写比较这段文字。表达式
-/// 自己用 `(?i)` 关掉大小写的部分没有共同的文字，不会被取出。
-fn regex_literal(pattern: &str) -> Option<String> {
-    use regex_syntax::hir::literal::{ExtractKind, Extractor};
-
-    let hir = regex_syntax::parse(pattern).ok()?;
-    let common = |suffix: bool| {
-        let mut extractor = Extractor::new();
-        extractor.kind(match suffix {
-            true => ExtractKind::Suffix,
-            false => ExtractKind::Prefix,
-        });
-        let found = extractor.extract(&hir);
-        let bytes = match suffix {
-            true => found.longest_common_suffix(),
-            false => found.longest_common_prefix(),
-        };
-        String::from_utf8(bytes?.to_vec()).ok()
-    };
-    let (start, end) = (common(false), common(true));
-    let longer = match (start, end) {
-        (Some(start), Some(end)) if end.len() > start.len() => end,
-        (Some(start), _) => start,
-        (None, end) => end?,
-    };
-    (!longer.is_empty()).then_some(longer)
 }
 
 /// 后台搜索哪些文件。
@@ -145,9 +90,6 @@ pub(super) struct Walk {
     root: PathBuf,
     /// 一并搜索的附加目录：相对路径中的前缀和目录。
     extra: Arc<[(String, PathBuf)]>,
-    /// 每处匹配都含有的一段文字及是否区分大小写（见 [`literal`]）；远端的目录用它先筛出
-    /// 候选的文件。
-    literal: Option<(String, bool)>,
     matcher: Matcher,
     file_names: bool,
     source: Source,
@@ -185,28 +127,6 @@ impl Walk {
         };
 
         let paths: Box<dyn Iterator<Item = PathBuf> + '_> = match &self.source {
-            // 远端的目录：由远端的一条命令给出要搜索的文件。能确定每处匹配都含有某段文字时
-            // 只取含有它的文件，匹配仍由下面的工作线程按相同的规则完成，结果与本机一致。
-            Source::Tree(overrides, ignored) if winc_backend::is_remote(&self.root) => {
-                let containing = self.literal.as_ref().map(|(text, case_sensitive)| {
-                    crate::workspace::remote_files::Containing {
-                        text,
-                        case_sensitive: *case_sensitive,
-                    }
-                });
-                let stop = || self.cancel.load(Relaxed);
-                let found = crate::workspace::remote_files::list(
-                    &self.root,
-                    *ignored,
-                    containing.as_ref(),
-                    &stop,
-                );
-                Box::new(
-                    (found.into_iter())
-                        .map(|relative| winc_backend::join(&self.root, &relative))
-                        .filter(|path| !overrides.matched(path, false).is_ignore()),
-                )
-            }
             // 各个目录依次遍历，各自按所在的仓库判断忽略规则。
             Source::Tree(overrides, ignored) => Box::new(
                 (std::iter::once(&self.root).chain(self.extra.iter().map(|(_, dir)| dir)))
@@ -230,37 +150,13 @@ impl Walk {
             Source::Files(files) => Box::new(files.iter().cloned()),
             Source::Dependencies => {
                 let roots = std::iter::once(&self.root).chain(self.extra.iter().map(|(_, d)| d));
-                let containing = self.literal.as_ref().map(|(text, case_sensitive)| {
-                    crate::workspace::remote_files::Containing {
-                        text,
-                        case_sensitive: *case_sensitive,
-                    }
-                });
                 let folders: Vec<PathBuf> = roots.flat_map(|dir| dependency_folders(dir)).collect();
-                let cancel = Arc::clone(&self.cancel);
                 Box::new(folders.into_iter().flat_map(move |dir| {
-                    let files: Box<dyn Iterator<Item = PathBuf>> = if winc_backend::is_remote(&dir)
-                    {
-                        let stop = || cancel.load(Relaxed);
-                        let found = crate::workspace::remote_files::list(
-                            &dir,
-                            true,
-                            containing.as_ref(),
-                            &stop,
-                        );
-                        let joined = found.into_iter().map(|r| winc_backend::join(&dir, &r));
-                        Box::new(joined.collect::<Vec<_>>().into_iter())
-                    } else {
-                        Box::new(
-                            (walker_with_ignored(&dir).build().flatten())
-                                .filter(|entry| {
-                                    (entry.file_type())
-                                        .is_some_and(|t| is_listed_file(t, entry.path()))
-                                })
-                                .map(ignore::DirEntry::into_path),
-                        )
-                    };
-                    files
+                    (walker_with_ignored(&dir).build().flatten())
+                        .filter(|entry| {
+                            (entry.file_type()).is_some_and(|t| is_listed_file(t, entry.path()))
+                        })
+                        .map(ignore::DirEntry::into_path)
                 }))
             }
         };
@@ -447,29 +343,5 @@ impl<'a> Worker<'a> {
     fn remaining(&self) -> Option<usize> {
         let left = MAX_RESULTS.saturating_sub(self.walk.count.load(Relaxed));
         (left > 0).then_some(left)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::regex_literal;
-
-    #[test]
-    fn a_regex_gives_the_text_every_match_contains() {
-        let found = |pattern| regex_literal(pattern);
-        assert_eq!(found(r"fn \w+").as_deref(), Some("fn "));
-        assert_eq!(found(r"\w+_test\(\)").as_deref(), Some("_test()"));
-        assert_eq!(found(r"\bTODO\b").as_deref(), Some("TODO"));
-        // 开头和结尾都有时取较长的。
-        assert_eq!(found(r"ab\d+cdef").as_deref(), Some("cdef"));
-        // 各种匹配没有共同的文字，或表达式自己关掉了大小写。
-        assert_eq!(found(r"foo|bar"), None);
-        assert_eq!(found(r"\d+"), None);
-        assert_eq!(found(r"(?i)todo"), None);
-        // 共同的开头仍然可用。
-        assert_eq!(found(r"foo(bar|baz)").as_deref(), Some("fooba"));
-        // 这里不解析的写法。
-        assert_eq!(found(r"(?<=x)y"), None);
-        assert_eq!(found(r"(a)\1"), None);
     }
 }

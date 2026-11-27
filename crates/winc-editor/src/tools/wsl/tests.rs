@@ -83,51 +83,6 @@ fn only_windows_uses_the_conversion() {
 }
 
 #[test]
-fn programs_run_through_a_login_shell_in_the_directory() {
-    let mut command = Command::new("wsl.exe");
-    enter_login(&mut command, "Ubuntu", "/home/me/app", None);
-    let args: Vec<_> = command.get_args().collect();
-    assert_eq!(
-        args,
-        [
-            "-d",
-            "Ubuntu",
-            "--cd",
-            "/home/me/app",
-            "--exec",
-            "sh",
-            "-lc",
-            r#"exec "$0" "$@""#,
-        ]
-    );
-    let utf8 = command.get_envs().find(|(name, _)| *name == "WSL_UTF8");
-    assert_eq!(utf8.and_then(|(_, value)| value), Some("1".as_ref()));
-}
-
-#[test]
-fn programs_use_the_path_of_the_login_shell_when_known() {
-    let mut command = Command::new("wsl.exe");
-    enter_login(
-        &mut command,
-        "Ubuntu",
-        "/app",
-        Some("/usr/bin:/home/me/.nvm/bin"),
-    );
-    let args: Vec<_> = command.get_args().collect();
-    assert_eq!(
-        args[4..],
-        [
-            "--exec",
-            "env",
-            "PATH=/usr/bin:/home/me/.nvm/bin",
-            "sh",
-            "-c",
-            r#"exec "$0" "$@""#,
-        ]
-    );
-}
-
-#[test]
 fn the_watcher_runs_from_the_windows_installation() {
     let place = locate(Path::new(r"\\wsl.localhost\Ubuntu\home\me\my app")).unwrap();
     let command = watch_command(&place, Path::new(r"C:\Program Files\winc\winc-watch"));
@@ -176,26 +131,6 @@ fn the_run_script_converts_the_path_and_keeps_the_arguments() {
 }
 
 #[test]
-fn windows_programs_on_the_windows_path_do_not_count() {
-    let found = |text: &[u8]| linux_program(text);
-    assert_eq!(
-        found(b"/usr/bin/prettier\n"),
-        Some(PathBuf::from("/usr/bin/prettier"))
-    );
-    // 启动脚本的输出排在结果之前。
-    assert_eq!(
-        found(b"hello\n/usr/bin/git\n"),
-        Some(PathBuf::from("/usr/bin/git"))
-    );
-    assert_eq!(
-        found(b"/mnt/c/Users/me/AppData/Roaming/npm/prettier\n"),
-        None
-    );
-    assert_eq!(found(b"prettier\n"), None);
-    assert_eq!(found(b""), None);
-}
-
-#[test]
 fn absolute_paths_given_in_a_distribution_stay_inside_it() {
     let path = from_distro("Ubuntu", PathBuf::from("/home/me/a.rs"));
     let place = locate(&path).unwrap();
@@ -207,29 +142,6 @@ fn absolute_paths_given_in_a_distribution_stay_inside_it() {
         from_distro("Ubuntu", PathBuf::from("a.rs")),
         Path::new("a.rs")
     );
-}
-
-// 交互式登录 shell 读取的配置决定 `PATH`；`bash` 是发行版中最常见的默认 shell。
-#[cfg(target_os = "linux")]
-#[test]
-fn the_login_shell_reports_the_path_from_the_user_profile() {
-    let dir = crate::test_util::scratch("wsl-login-shell");
-    std::fs::write(
-        dir.join(".profile"),
-        "echo 欢迎\nexport PATH=/from/profile:$PATH\n",
-    )
-    .unwrap();
-    let output = Command::new("sh")
-        .args(["-c", LOGIN_SHELL, &environment::print_script()])
-        .env("SHELL", "bash")
-        .env("HOME", &dir)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .unwrap();
-    let path = environment::path_in(&output.stdout).unwrap();
-    assert!(path.starts_with("/from/profile:"), "{path}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // `stat -c` 是 Linux 上 `stat` 的写法，与发行版内运行脚本的环境相同。

@@ -6,6 +6,5 @@
 
 pub(crate) mod picker;
 pub(crate) mod project_search;
-mod remote_files;
 pub(crate) mod tree;
 pub(crate) mod watch;

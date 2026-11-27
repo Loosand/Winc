@@ -3,10 +3,6 @@
 //! 没有读者时，程序写满管道缓冲区（64 KB 左右）就阻塞在写操作上，不继续计算，也不多占内存；
 //! 需要下一段时继续读取，不必像 `--skip` 那样从头重新执行；释放（`Drop`）时连同它启动的子进程
 //! 一起终止并回收，不留僵尸进程。
-//!
-//! 工作目录在远端主机上的程序在那台主机上运行（见 `winc_backend::remote::spawn`）：输出经连接
-//! 随到随读，释放时通知远端结束它。远端不等读取就持续发送，尚未读取的部分留在本机的内存中，
-//! 上限同样是 [`MAX_OUTPUT`]。
 
 use std::io::{self, BufRead, BufReader, Read};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -16,7 +12,7 @@ use std::time::Duration;
 
 use winc_i18n::t;
 
-use super::{MAX_OUTPUT, RunError, kill_group, remote_exec};
+use super::{MAX_OUTPUT, RunError, kill_group};
 
 /// [`Stream::read_records`] 失败的原因。
 #[derive(Debug)]
@@ -29,25 +25,14 @@ pub(crate) enum StreamError {
 
 /// 一直开着、按需读输出的程序。
 pub(crate) struct Stream {
-    source: Source,
+    child: Child,
+    stdout: BufReader<ChildStdout>,
+    /// 在另一个线程上读完的标准错误（最多 [`MAX_OUTPUT`] 字节）：程序退出以后用来说明失败的原因。
+    ///
+    /// 不同时读，程序写满标准错误的管道时会停住，标准输出也就读不到了。
+    stderr: Option<thread::JoinHandle<Vec<u8>>>,
     /// 标准输出读完了。
     eof: bool,
-}
-
-/// 程序在哪里运行。
-enum Source {
-    /// 本机的子进程。
-    Local {
-        child: Child,
-        stdout: BufReader<ChildStdout>,
-        /// 在另一个线程上读完的标准错误（最多 [`MAX_OUTPUT`] 字节）：程序退出以后用来说明失败
-        /// 的原因。
-        ///
-        /// 不同时读，程序写满标准错误的管道时会停住，标准输出也就读不到了。
-        stderr: Option<thread::JoinHandle<Vec<u8>>>,
-    },
-    /// 远端主机上的命令。
-    Remote(winc_backend::remote::Running),
 }
 
 /// 从 `reader` 读取以 `separator` 结尾的记录追加到 `out`，直到读够 `count` 条或输出结束
@@ -79,22 +64,12 @@ fn read_some(
 impl Stream {
     /// 启动 `command`：标准输入接空设备，标准输出、标准错误接管道；进程自成一个进程组
     /// （与 [`super::run`] 相同）。启动前去掉 `WSLENV` 中命令上没有设置的变量（见
-    /// `wsl::drop_unset`）。工作目录在远端主机上时在那台主机上启动。
+    /// `wsl::drop_unset`）。
     ///
     /// # Errors
     ///
     /// 程序无法启动时返回 [`RunError::Spawn`]。
     pub(crate) fn spawn(command: &mut Command) -> Result<Self, RunError> {
-        if let Some(dir) = command.get_current_dir()
-            && winc_backend::is_remote(dir)
-        {
-            let exec = remote_exec(command, Vec::new()).limit(MAX_OUTPUT);
-            let running = winc_backend::remote::spawn(dir, &exec).map_err(RunError::Spawn)?;
-            return Ok(Self {
-                source: Source::Remote(running),
-                eof: false,
-            });
-        }
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(command, 0);
         #[cfg(windows)]
@@ -118,11 +93,9 @@ impl Stream {
             })
         });
         Ok(Self {
-            source: Source::Local {
-                child,
-                stdout,
-                stderr,
-            },
+            child,
+            stdout,
+            stderr,
             eof: false,
         })
     }
@@ -142,39 +115,7 @@ impl Stream {
         timeout: Duration,
     ) -> Result<(Vec<u8>, bool), StreamError> {
         let mut out = Vec::new();
-        let (child, stdout, stderr) = match &mut self.source {
-            Source::Local {
-                child,
-                stdout,
-                stderr,
-            } => (child, stdout, stderr),
-            Source::Remote(running) => {
-                // 远端的命令没有本机的进程可以终止：到时读取返回超时，释放时通知远端结束它。
-                return match running.read_records(separator, count, timeout, &mut out) {
-                    Err(e) if e.kind() == io::ErrorKind::TimedOut => {
-                        self.eof = true;
-                        Err(StreamError::Run(RunError::Timeout))
-                    }
-                    Err(e) if e.kind() == io::ErrorKind::FileTooLarge => {
-                        self.eof = true;
-                        Err(StreamError::Run(RunError::TooLarge))
-                    }
-                    Err(e) => {
-                        self.eof = true;
-                        Err(StreamError::Run(RunError::Spawn(e)))
-                    }
-                    Ok(eof) => {
-                        self.eof = eof;
-                        if self.eof && running.code() != Some(Some(0)) {
-                            Err(StreamError::Exited(running.stderr().to_vec()))
-                        } else {
-                            Ok((out, self.eof))
-                        }
-                    }
-                };
-            }
-        };
-        let pid = child.id();
+        let pid = self.child.id();
         // 定时线程：到时间还没读够就终止程序，读管道的一端随即读到文件结尾。读完时释放 `done`，
         // 该线程立即返回；返回之前等它结束，保证程序已被回收，不会再终止一个可能被复用的进程号。
         let (done, wait) = mpsc::channel::<()>();
@@ -189,7 +130,7 @@ impl Stream {
             expired
         });
 
-        let failed = read_some(stdout, separator, count, &mut out, &mut self.eof);
+        let failed = read_some(&mut self.stdout, separator, count, &mut out, &mut self.eof);
         drop(done);
         let expired = watchdog.join().unwrap_or(false);
         if expired {
@@ -199,11 +140,12 @@ impl Stream {
             return Err(StreamError::Run(RunError::Spawn(e)));
         }
         if self.eof {
-            let status = child
+            let status = self
+                .child
                 .wait()
                 .map_err(|e| StreamError::Run(RunError::Spawn(e)))?;
             if !status.success() {
-                let stderr = stderr.take().and_then(|t| t.join().ok());
+                let stderr = self.stderr.take().and_then(|t| t.join().ok());
                 return Err(StreamError::Exited(stderr.unwrap_or_default()));
             }
         }
@@ -213,14 +155,10 @@ impl Stream {
 
 impl Drop for Stream {
     fn drop(&mut self) {
-        // 远端的命令由 `Running` 在释放时通知远端结束。
-        let Source::Local { child, .. } = &mut self.source else {
-            return;
-        };
         // 已经退出、回收过的不再终止：进程号可能已经给了别的程序。
-        if child.try_wait().is_ok_and(|s| s.is_none()) {
-            kill_group(child.id());
+        if self.child.try_wait().is_ok_and(|s| s.is_none()) {
+            kill_group(self.child.id());
         }
-        let _ = child.wait();
+        let _ = self.child.wait();
     }
 }

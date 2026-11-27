@@ -29,8 +29,6 @@ pub enum TabSurface<'a> {
     Diff,
     /// Git 日志视图。
     Log,
-    /// 十六进制字节视图。
-    Hex,
     /// 正在后台读取中的占位标签。
     Loading,
     /// 无法作为文本打开的文件说明页。
@@ -81,9 +79,6 @@ impl Document {
         if self.log.is_some() {
             return TabSurface::Log;
         }
-        if self.hex.is_some() {
-            return TabSurface::Hex;
-        }
         if self.pending {
             return TabSurface::Loading;
         }
@@ -112,7 +107,6 @@ impl Document {
             && !self.json_preview
             && self.diff.is_none()
             && self.log.is_none()
-            && self.hex.is_none()
             && self.reading.is_none()
     }
 

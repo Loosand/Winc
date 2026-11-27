@@ -107,7 +107,7 @@ fn copy_tree(
         let entry = entry?;
         copy_tree(
             &entry.path(),
-            &to.join(winc_backend::carry_name(&entry.name, from, to)),
+            &to.join(&entry.name),
             entry.kind,
             links,
             copying,

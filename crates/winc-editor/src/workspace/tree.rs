@@ -258,15 +258,10 @@ impl Workspace {
             || root.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-        // 远端主机上和 WSL 发行版中的目录在名称后标出所在的位置：标题栏和状态栏上可以看出
-        // 不是本机的目录。
-        let name = match winc_backend::locate(&root) {
-            None => match crate::wsl::locate_here(&root) {
-                Some(place) => in_distro(&name, &place),
-                None => name,
-            },
-            Some(at) if at.path == b"/" => format!("/ [SSH: {}]", at.target.as_str()),
-            Some(at) => format!("{name} [SSH: {}]", at.target.as_str()),
+        // WSL 发行版中的目录在名称后标出所在的位置：标题栏和状态栏上可以看出不是本机的目录。
+        let name = match crate::wsl::locate_here(&root) {
+            Some(place) => in_distro(&name, &place),
+            None => name,
         };
 
         let mut workspace = Workspace {
@@ -455,15 +450,9 @@ impl Workspace {
         self.expanded.insert(folder.clone());
         let mut current = folder;
 
-        // 远端的目录由后台读取：各级上级目录的路径已经知道，一起要，不必等上一级读好才发现
-        // 下一级。
-        let remote = winc_backend::is_remote(&self.root);
         for component in relative.parent().into_iter().flat_map(Path::components) {
             current.push(component);
             self.expanded.insert(current.clone());
-            if remote && !self.children.contains_key(&current) {
-                self.missing.want(current.clone());
-            }
         }
 
         self.rebuild();
@@ -975,8 +964,7 @@ pub fn create_at(
         ));
     }
 
-    // 名字是用户输入的：经 `join` 换成路径，远端的名字按需转义。
-    let path = winc_backend::join(dir, name);
+    let path = dir.join(name);
 
     if winc_backend::fs::exists(&path) {
         return Err(io::Error::new(
@@ -1023,7 +1011,7 @@ pub fn rename_at(root: &Path, path: &Path, name: &str) -> io::Result<PathBuf> {
         ));
     }
 
-    let target = winc_backend::join(path.parent().unwrap_or(root), name);
+    let target = path.parent().unwrap_or(root).join(name);
     if target == path {
         return Ok(target);
     }
@@ -1130,8 +1118,7 @@ pub fn copy_entry(
     let Some(name) = source.file_name() else {
         return invalid(t!("workspace-tree-cannot-copy"));
     };
-    let name = winc_backend::carry_name(name, source, dir);
-    let target = free_name(dir, Path::new(&name));
+    let target = free_name(dir, Path::new(name));
     let links: copying::Links = |from, to| winc_backend::fs::copy_symlink(from, to);
     copying::copy_item(source, &target, links, copying)?;
     Ok(target)

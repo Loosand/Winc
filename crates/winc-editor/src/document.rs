@@ -16,7 +16,7 @@ use ropey::Rope;
 use winc_core::edit::{EditKind, Transaction};
 use winc_core::selection::merge;
 use winc_core::text::{Aligned, CellLayout, ColumnWidths, Columns};
-use winc_core::{Change, History, Indent, LineEnding, Lines, Selection, diff, indent, transform};
+use winc_core::{History, Indent, LineEnding, Lines, Selection, diff, indent, transform};
 use winc_i18n::t;
 use winc_syntax::{Highlighter, LineState};
 
@@ -488,8 +488,6 @@ pub struct Document {
     ///
     /// 只读、没有对应的文件。
     pub log: Option<Box<crate::git::log::LogView>>,
-    /// 编辑区按十六进制显示文件的字节，而不是文本；只读，文本为空。
-    pub hex: Option<Box<crate::hex::HexView>>,
     /// 切换到预览之前的 `readonly`：SVG 的预览期间强制只读，切回源代码时恢复该值。
     readonly_before_preview: bool,
     /// 分栏预览（`PreviewMode::Split`）：文本仍然显示，右侧的预览由界面管理。
@@ -561,8 +559,6 @@ pub struct Document {
     pending: bool,
     /// 尚未读取的文档在读取时是否把二进制内容也按文本读入（「以文本方式打开」）。
     pending_as_text: bool,
-    /// 尚未读取的文档读取时是否打开成十六进制视图。
-    pending_hex: bool,
     /// 用户通过「通过编码重新打开」选的编码：之后从磁盘重新读取时按它解码，不再识别编码，也不
     /// 再判断是否二进制。
     chosen: Option<Encoding>,
@@ -615,7 +611,6 @@ impl Document {
             table: None,
             diff: None,
             log: None,
-            hex: None,
             readonly_before_preview: false,
             split: false,
             rendered: false,
@@ -648,7 +643,6 @@ impl Document {
             conflict: false,
             pending: false,
             pending_as_text: false,
-            pending_hex: false,
             chosen: None,
         }
     }
@@ -976,7 +970,6 @@ impl Document {
             _ if self.unsupported.is_some() => Some(t!("editor-readonly-unsupported")),
             _ if self.previewing() => Some(t!("editor-readonly-previewing")),
             _ if self.title.is_some() => Some(t!("editor-readonly-tab")),
-            _ if self.hex.is_some() => Some(t!("editor-readonly-hex")),
             _ if self.encoding == Encoding::Binary => Some(t!("editor-readonly-binary")),
             Content::Large(large) if large.has_overlong_lines() => {
                 Some(t!("editor-readonly-long-lines"))
@@ -1352,58 +1345,11 @@ impl Document {
         if let Some(view) = &self.log {
             return view.row_count();
         }
-        if let Some(view) = &self.hex {
-            return view.rows();
-        }
         match &self.diff {
             // 末尾删掉一大段时左侧比右侧长，滚动范围取较长的一侧（见 `DiffView::scroll_rows`）。
             Some(view) => view.scroll_rows().max(1),
             None => self.folds.row_count(self.text.line_count()),
         }
-    }
-
-    /// 返回要交给格式化工具的内容。
-    ///
-    /// # Errors
-    ///
-    /// 文档只读（含预览、二进制、无法解码）或属于大文件时返回原因。
-    pub fn format_source(&self) -> Result<Rope, String> {
-        if let Some(reason) = self.readonly_reason() {
-            return Err(reason.to_owned());
-        }
-        match &self.text {
-            Content::Rope(rope) => Ok(rope.clone()),
-            Content::Large(_) => Err(t!("format-file-too-large").to_owned()),
-        }
-    }
-
-    /// 用格式化的结果替换内容：算一次修改，⌘Z 一次还原；选区跟随原来的文字移动，并重新检测缩进。
-    ///
-    /// `top` 是窗口第一行的行首位置（字符偏移），与选区一起换算，返回换算后的位置。
-    ///
-    /// 内容与送去格式化时不一样（期间又被修改，或从磁盘重新加载过）时不做任何改动，返回 `None`。
-    /// 不能用撤销记录的版本号判断：重新加载会清空撤销记录，版本号可能回到原来的值。
-    pub fn apply_formatted(
-        &mut self,
-        sent: &Rope,
-        changes: Vec<Change>,
-        top: usize,
-    ) -> Option<usize> {
-        if self.text.rope() != Some(sent) || self.readonly_reason().is_some() {
-            return None;
-        }
-        if changes.is_empty() {
-            return Some(top);
-        }
-
-        let before = self.selection;
-        // `map_positions` 按输入的数量返回位置，因此这里正好取到三个。
-        let mapped = diff::map_positions(&changes, &[before.anchor, before.head, top]);
-        let after = Selection::new(mapped[0], mapped[1]);
-        self.apply(Transaction::new(changes, before, after, EditKind::Other));
-        self.goal_cell = None;
-        self.detected_indent = indent::detect(&self.text);
-        Some(mapped[2])
     }
 
     /// 保存前按 `.editorconfig` 清理文本，返回是否有改动。

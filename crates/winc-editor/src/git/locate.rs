@@ -82,9 +82,9 @@ fn developer_tools_installed() -> bool {
     )
 }
 
-/// 仓库 `root` 的 `git` 是否在本机运行：远端主机和 WSL 发行版中的仓库使用各自系统中的 `git`。
+/// 仓库 `root` 的 `git` 是否在本机运行：WSL 发行版中的仓库使用发行版中的 `git`。
 pub fn runs_here(root: &Path) -> bool {
-    !winc_backend::is_remote(root) && crate::wsl::locate_here(root).is_none()
+    crate::wsl::locate_here(root).is_none()
 }
 
 /// 把 `program` 追加为 `command` 的凭据助手，排在用户配置的助手之后。
