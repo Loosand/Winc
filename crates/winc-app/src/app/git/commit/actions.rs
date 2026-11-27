@@ -3,8 +3,8 @@
 use std::sync::{Arc, PoisonError};
 
 use winc_core::diff::Pick;
-use winc_editor::format::Cancel;
 use winc_editor::git::{CommitOptions, Synced};
+use winc_editor::shell::Cancel;
 use winc_i18n::t;
 
 use super::*;
@@ -411,9 +411,8 @@ impl App {
             self.git.commit.commit_queued = true;
             return;
         }
-        // 提交前先格式化、再检查新增的 TODO：都在后台进行，做完再接着提交（见
-        // `App::reformatted`、`App::todo_checked`）。
-        if self.reformat_first() || self.check_todo_first() {
+        // 提交前检查新增的 TODO：在后台进行，做完再接着提交（见 `App::todo_checked`）。
+        if self.check_todo_first() {
             return;
         }
         if !self.git.commit.staging() {
@@ -641,13 +640,7 @@ impl App {
             many => t!("git-rollback-confirm-many", count = many.len()),
         };
         if self.window.handle.is_some() {
-            // 远端主机上没有废纸篓：未跟踪的文件直接删除。
-            let remote = paths.iter().any(|path| winc_backend::is_remote(path));
-            let detail = if remote {
-                t!("git-rollback-confirm-detail-remote")
-            } else {
-                t!("git-rollback-confirm-detail")
-            };
+            let detail = t!("git-rollback-confirm-detail");
             let button = t!("git-rollback-confirm-button");
             self.show_confirm(&message, detail, button, move |ok| {
                 ok.then(|| UserEvent::GitRollback(paths.clone()))
@@ -681,17 +674,13 @@ impl App {
             }
         }
         let count = paths.len();
-        // 本机的文件在界面线程上移到废纸篓（和文件树的删除同一个入口）；远端主机上的文件在后台
-        // 直接删除，删完后再刷新一次状态。git 在后台。
         if let Some(first) = trash.first().cloned() {
-            let (to_trash, remote) = (self.trash, winc_backend::is_remote(&first));
+            let to_trash = self.trash;
             let remove = move || -> Vec<(PathBuf, std::io::Result<()>)> {
-                (trash.into_iter())
+                trash
+                    .into_iter()
                     .map(|path| {
-                        let result = match winc_backend::is_remote(&path) {
-                            true => winc_backend::fs::remove_all(&path),
-                            false => to_trash(&path),
-                        };
+                        let result = to_trash(&path);
                         (path, result)
                     })
                     .collect()
@@ -705,9 +694,6 @@ impl App {
                             t!("git-rollback-file-failed", name = name, error = error),
                         );
                     }
-                }
-                if remote {
-                    app.git_refresh();
                 }
             });
         }
@@ -833,11 +819,6 @@ impl App {
                 }
                 Outcome::TodoChecked(count, root) => {
                     if self.todo_checked(count, &root) {
-                        self.git_commit();
-                    }
-                }
-                Outcome::Reformatted(count, root) => {
-                    if self.reformatted(count, &root) {
                         self.git_commit();
                     }
                 }

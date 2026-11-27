@@ -1,8 +1,6 @@
-//! 更新日志：从发布站点读取，按版本取舍后整理成阅读标签显示的 Markdown。
+//! 更新日志：从内置本地基线读取，按版本取舍后整理成阅读标签显示的 Markdown。
 //!
-//! 更新日志每种语言一份，各版以「`## 版本号 · 日期`」一行开头，从新到旧排列。只在用户打开更新
-//! 说明时请求。内容来自网络：长度有上限，格式不符时不显示，显示前使其中的图片和 HTML 失效
-//! （见 [`inert`]）。
+//! 更新日志每种语言一份，各版以「`## 版本号 · 日期`」一行开头，从新到旧排列。
 
 use winc_config::compare_versions;
 use winc_i18n::Locale;
@@ -10,16 +8,30 @@ use winc_i18n::Locale;
 #[cfg(test)]
 mod tests;
 
-/// 更新日志所在的地址，其后接语言对应的文件名。
-const NOTES: &str = "https://winc.si/releases/notes/";
-
-/// 请求更新日志的等待上限（秒），与请求 appcast 的上限相同：两者是同一站点上大小相近的文件。
-const TIMEOUT: u64 = 15;
-
 /// 更新日志的长度上限（字节），1 MiB。
-///
-/// 站点只保留最近若干版，正常的日志为数十 KB；超过上限的应答不是更新日志，不显示。
 const MAX_LENGTH: usize = 1 << 20;
+
+/// 内置中文更新日志基线（独立产品线起始版本）。
+const BASELINE_ZH_CN: &str = "\
+## 0.1.0 · 2026-11-27
+
+### 初始基线
+
+- 建立独立文本与 Markdown 写作产品基线，脱离原上游发布通道与品牌链接。
+- 支持本地笔记库渐进加载、纸张卡片骨架屏与侧边栏空白回主页。
+- 支持 Markdown 实时编辑、源码模式默认自动换行与自定义正文字体排版。
+";
+
+/// 内置英文更新日志基线（独立产品线起始版本）。
+const BASELINE_EN_US: &str = "\
+## 0.1.0 · 2026-11-27
+
+### Initial Baseline
+
+- Established an independent text and Markdown writing baseline detached from upstream release channels and branding.
+- Added progressive note-library loading, paper skeleton cards, and clicking blank sidebar space to return home.
+- Improved live Markdown editing, default word wrap in source mode, and customizable typography.
+";
 
 /// 要显示的版本范围。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -32,41 +44,29 @@ pub enum Scope {
     Since(Option<String>),
 }
 
-/// 返回语言 `locale` 的更新日志的地址。
-pub(crate) fn url(locale: Locale) -> String {
-    let file = match locale {
-        Locale::ZhCn => "zh-cn.md",
-        Locale::EnUs => "en.md",
-    };
-    format!("{NOTES}{file}")
+/// 返回语言 `locale` 的内置更新日志原文。
+pub(crate) fn baseline(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhCn => BASELINE_ZH_CN,
+        Locale::EnUs => BASELINE_EN_US,
+    }
 }
 
-/// 返回语言 `locale` 的下载页地址：不由应用自己更新的安装从这里取得新版本。
+/// 返回语言 `locale` 的下载页地址；未配置自定义发布站点时为 `None`。
 #[cfg_attr(target_os = "macos", allow(dead_code))]
-pub(crate) fn downloads(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhCn => "https://winc.si/zh-cn/downloads",
-        Locale::EnUs => "https://winc.si/downloads",
-    }
+pub(crate) fn downloads(_locale: Locale) -> Option<&'static str> {
+    None
 }
 
-/// 返回语言 `locale` 的、在浏览器中查看完整更新日志的页面地址。
-pub(crate) fn page(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhCn => "https://winc.si/zh-cn/downloads#changelog",
-        Locale::EnUs => "https://winc.si/downloads#changelog",
-    }
+/// 返回语言 `locale` 的完整更新日志网页地址；未配置自定义发布站点时为 `None`。
+pub(crate) fn page(_locale: Locale) -> Option<&'static str> {
+    None
 }
 
-/// 取回语言 `locale` 的更新日志，返回其中 `scope` 范围内各版的 Markdown；`missing` 见
+/// 读取语言 `locale` 的本地内置更新日志，返回其中 `scope` 范围内各版的 Markdown；`missing` 见
 /// [`select`]。
-///
-/// 等待网络应答，在后台线程调用。请求失败、应答超过 [`MAX_LENGTH`] 或内容不是更新日志时返回
-/// `None`。
 pub(crate) fn load(locale: Locale, scope: &Scope, missing: &str) -> Option<String> {
-    let bytes = crate::web::fetch(&url(locale), TIMEOUT, Some(MAX_LENGTH as u64)).ok()?;
-    let text = std::str::from_utf8(&bytes).ok()?;
-    select(text, scope, winc_version::VERSION, missing)
+    select(baseline(locale), scope, winc_version::VERSION, missing)
 }
 
 /// 返回更新日志 `text` 中 `scope` 范围内各版的 Markdown，`current` 是当前版本。

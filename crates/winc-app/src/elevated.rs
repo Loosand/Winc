@@ -61,11 +61,10 @@ fn write_in_place(copy: &Path, target: &Path) -> io::Result<()> {
 
 /// 保存 `path` 失败、原因为 `error` 时能否以管理员身份重试：是本机的文件，且是系统拒绝了写入。
 ///
-/// 文档只读等 winc 自己的拒绝不算；远端主机上和 WSL 发行版中的文件不经本机的管理员权限。
+/// 文档只读等 winc 自己的拒绝不算；WSL 发行版中的文件不经本机的管理员权限。
 pub fn can_retry(path: &Path, error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::PermissionDenied
         && error.raw_os_error().is_some()
-        && !winc_backend::is_remote(path)
         && winc_editor::wsl::locate(path).is_none()
 }
 
@@ -344,9 +343,6 @@ mod tests {
         // winc 自己的拒绝（文档只读）不是系统的拒绝。
         assert!(!can_retry(local, &denied));
         assert!(!can_retry(local, &io::Error::other("full")));
-        let target = winc_backend::Target::new("host").unwrap();
-        let remote = winc_backend::virtual_path(&target, b"/etc/hosts");
-        assert!(!can_retry(&remote, &os_denied));
     }
 
     #[test]

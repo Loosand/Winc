@@ -14,7 +14,6 @@ mod input;
 mod lifecycle;
 pub(crate) mod preview;
 mod release_notes;
-pub(crate) mod remote;
 pub(crate) mod scroll;
 mod settings;
 #[cfg(test)]
@@ -35,8 +34,6 @@ pub use editor::conflict::{ConflictAction, OverwriteChoice};
 pub use editor::editing::BraceKey;
 pub use editor::folding::FoldMotion;
 pub(crate) use editor::folding::fold_column;
-pub use editor::format::{FormatState, ToolAnswer};
-pub use editor::hint::NameHint;
 pub(crate) use editor::scrollbar::{ScrollArea, Scrollbars, ThumbLook};
 pub use editor::sticky::StickyRow;
 pub(crate) use editor::sticky::{place_sticky_rows, sticky_limit};
@@ -122,9 +119,6 @@ use crate::layout::{
 use crate::theme::*;
 use crate::view;
 
-/// 交给逐个执行的线程的一个任务（见 [`App::spawn_ordered_then`]）。
-type OrderedTask = Box<dyn FnOnce() + Send>;
-
 /// 后台线程和系统回调（面板、菜单、提示框）送回事件循环的事件。
 #[derive(Debug)]
 pub enum UserEvent {
@@ -190,16 +184,10 @@ pub enum UserEvent {
     Move(Vec<PathBuf>, PathBuf, bool),
     /// 「要在哪里打开」提示框中做了选择：目录、是否在新窗口打开、是否勾选了「不再询问」。
     OpenFolderIn(PathBuf, bool, bool),
-    /// 后台格式化已有结果。
-    Formatted,
-    /// 提示框中回答了是否允许运行项目自带的格式化工具。
-    ToolChoice(ToolAnswer),
     /// 确认框中同意运行参数所指的运行配置。
     RunApproved(Box<winc_config::RunConfig>),
     /// 提示框中回答了是否信任 Git 仓库（第一个参数）指纹为第二个参数的配置。
     GitTrust(PathBuf, u64, bool),
-    /// 后台查找定义有新进展。
-    Definitions,
     /// 已打开目录中有文件被外部修改。
     FilesChanged,
     /// 后台读到一段标准输入（`winc -`）。
@@ -223,15 +211,11 @@ pub enum UserEvent {
     Overwrite(DocumentId, OverwriteChoice),
     /// 用户确认放弃未保存的修改，按指定编码重新打开文档。
     ReopenEncoding(DocumentId, winc_editor::Encoding),
-    /// 用户确认放弃未保存的修改，改按十六进制查看文档。
-    ShowHex(DocumentId),
     /// 后台完成了一张图片的解码，或一个 SVG 的绘制。
     ImageReady,
     /// 粘贴到文件树中的文件已在后台复制完成：复制好的新路径、失败的原因（没有失败时为 `None`），
     /// 以及这次复制。
     Pasted(Vec<PathBuf>, Option<String>, Arc<winc_editor::Copying>),
-    /// 远端的各项已下载到本机：下载好的路径、失败的原因（没有失败时为 `None`），以及这次复制。
-    Downloaded(Vec<PathBuf>, Option<String>, Arc<winc_editor::Copying>),
     /// 拖进文件树的文件和目录已在后台复制完成：各个副本的路径、复制失败的说明，以及这次复制。
     Copied(Vec<PathBuf>, Vec<String>, Arc<winc_editor::Copying>),
     /// 窗口已关闭时点击了程序坞中的图标（macOS）：重新显示窗口。
@@ -277,24 +261,6 @@ pub enum UserEvent {
     GitOperated,
     /// 后台的 Git 操作发来了输入请求。
     GitQuestion,
-    /// 后台到远端主机的连接已建立或已失败。
-    RemoteConnected,
-    /// 远程选择面板在后台读好了一个目录。
-    RemoteListed,
-    /// 后台对远端目录的监视已经启动。
-    RemoteWatching,
-    /// 到远端主机的连接意外中断。
-    RemoteClosed(winc_backend::Target),
-    /// 后台的文件操作（新建、改名、移动、删除）已完成。
-    FileWorked,
-    /// 后台为远端文件的格式化选好了工具。
-    FormatPlanned,
-    /// 连接远端主机的 `ssh` 发来了输入请求。
-    RemoteQuestion,
-    /// 后台到远端主机的连接到达了新的阶段。
-    RemoteStage,
-    /// 远端主机有无响应的状况变了：状态栏的连接按钮随之重绘。
-    RemoteHealth,
     /// 后台已读取三栏合并的两侧。
     GitMergeSides,
     /// 后台已取得日志的一批提交、一个提交的详情或一个文件的差异。
@@ -318,8 +284,6 @@ pub enum UserEvent {
     CloseConfirmed(bool),
     /// 确认框中确认把文字粘贴到指定的终端标签（多行文字，且程序未开启括号粘贴）。
     TerminalPaste(u16, String),
-    /// 要粘贴到远端终端标签的图片或文件已在后台传到那台主机：标签，那里的路径或失败的原因。
-    TerminalUploaded(u16, Result<Vec<String>, String>),
     /// 确认框中确认日志中对一个提交的操作（签出该提交、硬重置）。
     GitLogConfirmed(git::log::LogConfirmed),
     /// 确认框中确认移除参数所指的工作树；第二个参数是一并删除的分支（勾选「同时删除分支」时）。
@@ -365,8 +329,6 @@ pub enum UserEvent {
 pub enum PromptKind {
     /// 跳转到行（`⌃G`）。
     GoTo,
-    /// 十六进制视图里转到偏移（`⌃G`）。
-    GoToOffset,
     /// 储藏改动的说明（可为空）。
     Stash,
     /// 储藏这些文件的更改时输入说明。
@@ -478,8 +440,6 @@ pub enum Hover {
     None,
     /// 文件视图底部大纲里的一处（符号行、行首箭头、标题行及其右端的按钮）。
     Outline(OutlineTarget),
-    /// 编辑区右侧的缩略图。
-    Minimap,
     /// 应用绘制的标题栏上的窗口按钮。
     WindowControl(WindowControl),
     /// 可以拖动改变窗口大小的边缘，参数是方向。
@@ -601,7 +561,7 @@ impl Hover {
                         | terminal::HeaderHit::Hide
                         | terminal::HeaderHit::Run(_),
                 )
-                | Hover::Status(StatusItem::Terminal | StatusItem::Remote | StatusItem::Settings)
+                | Hover::Status(StatusItem::Terminal | StatusItem::Settings)
                 | Hover::TreeMore
                 | Hover::CloudBadge(_)
                 | Hover::SidebarButton
@@ -704,8 +664,6 @@ enum Drag {
     },
     /// 在日志详情中拖选文字（`App::drag_log_text`）。
     LogText,
-    /// 在十六进制视图中拖选字节（`App::drag_hex`）。
-    Hex,
     /// 在 Markdown 预览中拖选文字（`App::drag_markdown`）。
     MarkdownText,
     /// 拖动 JSON 结构图的画布。
@@ -754,11 +712,6 @@ enum Drag {
     LogColumn {
         start_x: f32,
         start_width: f32,
-    },
-    /// 拖动缩略图的滑块；指针在纵坐标 `from`（逻辑像素）时，滚动位置是 `scroll`。
-    Minimap {
-        from: f32,
-        scroll: f64,
     },
     /// 拖动滚动条。
     ///
@@ -957,14 +910,12 @@ pub struct App {
     /// 设置浮层：当前页、分类和各输入框。
     pub settings: SettingsState,
 
-    /// 保存时格式化和修复的状态。
-    pub format: FormatState,
+    /// 运行外部程序所用的用户 shell 环境。
+    pub shell: winc_editor::shell::Shell,
     /// Git 模块：仓库状态、文件树装饰，以及提交、日志、追溯、分支、合并各视图的状态。
     ///
     /// 模块关闭时为空。
     pub git: git::GitState,
-    /// 远程模块：正在进行的连接。
-    pub remote: remote::RemoteState,
 
     // 右键菜单、关闭和退出
     /// 删除文件使用的函数：正常运行时移到废纸篓，测试中替换为直接删除，避免写入用户的废纸篓。
@@ -1010,20 +961,14 @@ impl App {
     /// 在后台线程上执行 `job`，完成后发送事件 `done` 唤醒界面线程处理结果（[`App::finished`]）。
     ///
     /// 测试中没有事件循环：在当前线程上执行 `job`，之后直接调用 [`App::finished`] 处理结果。
-    ///
-    /// 打开的目录在远端主机上时改用单独的线程（[`App::spawn_blocking_then`]）：这时的任务大多
-    /// 要等待网络，耗时没有上限，放进线程池会占住池中的线程，各窗口的本机任务只能排队。
     fn spawn_then(&mut self, done: UserEvent, job: impl FnOnce() + Send + 'static) {
-        if self.editor.root().is_some_and(winc_backend::is_remote) {
-            return self.spawn_blocking_then(done, job);
-        }
         match self.link.proxy.clone() {
             Some(proxy) => winc_editor::background::spawn(move || {
                 job();
                 let _ = proxy.send_event(done);
             }),
             None => {
-                winc_backend::remote::allow_blocking(job);
+                job();
                 self.finished(done);
             }
         }
@@ -1042,47 +987,9 @@ impl App {
                 let _ = proxy.send_event(done);
             }),
             None => {
-                winc_backend::remote::allow_blocking(job);
+                job();
                 self.finished(done);
             }
-        }
-    }
-
-    /// 在本窗口改动远端文件的线程上执行 `job`，完成后发送事件 `done`；其余行为同
-    /// [`App::spawn_then`]。
-    ///
-    /// 这个线程按提交的顺序逐个执行：保存与改名、移动、删除不会交错，先发起的保存一定在随后
-    /// 的改名之前写完。线程在第一次使用时创建，窗口关闭时结束。
-    fn spawn_ordered_then(&mut self, done: UserEvent, job: impl FnOnce() + Send + 'static) {
-        let Some(proxy) = self.link.proxy.clone() else {
-            winc_backend::remote::allow_blocking(job);
-            self.finished(done);
-            return;
-        };
-        let task: OrderedTask = Box::new(move || {
-            job();
-            let _ = proxy.send_event(done);
-        });
-        let task = match &self.disk.ordered {
-            Some(queue) => match queue.send(task) {
-                Ok(()) => return,
-                // 线程已经结束：重新创建。
-                Err(mpsc::SendError(task)) => task,
-            },
-            None => task,
-        };
-        let (queue, tasks) = mpsc::channel::<OrderedTask>();
-        let worker = std::thread::Builder::new()
-            .name("winc-remote".into())
-            .spawn(move || tasks.into_iter().for_each(|task| task()));
-        // 线程无法创建时退回单独的线程：任务仍然执行，只是不再保证先后。
-        self.disk.ordered = None;
-        if worker.is_err() {
-            winc_editor::background::spawn_blocking(task);
-        } else if let Err(mpsc::SendError(task)) = queue.send(task) {
-            winc_editor::background::spawn_blocking(task);
-        } else {
-            self.disk.ordered = Some(queue);
         }
     }
 
@@ -1096,11 +1003,6 @@ impl App {
             UserEvent::GitCommit => self.poll_commit(),
             UserEvent::GitBase => self.poll_bases(),
             UserEvent::GitOperated => self.poll_branch_ops(),
-            UserEvent::RemoteConnected => self.poll_remote(),
-            UserEvent::RemoteListed => self.poll_remote_listings(),
-            UserEvent::RemoteWatching => self.poll_remote_watcher(),
-            UserEvent::FormatPlanned => self.poll_formatting(),
-            UserEvent::FileWorked => self.poll_file_work(),
             UserEvent::GitMergeSides => self.poll_merge_sides(),
             UserEvent::GitLog => self.poll_log(),
             UserEvent::GitBlame => self.poll_blame(),
@@ -1178,7 +1080,8 @@ impl App {
         if hover != self.pointer.hover {
             self.leave_tooltip();
         }
-        let picker_only = |h: Hover| matches!(h, Hover::None | Hover::PickerRow(_) | Hover::PickerPart(_));
+        let picker_only =
+            |h: Hover| matches!(h, Hover::None | Hover::PickerRow(_) | Hover::PickerPart(_));
         let overlay_only = self.picker_backdrop_eligible()
             && picker_only(hover)
             && picker_only(self.pointer.hover)

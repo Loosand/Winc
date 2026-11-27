@@ -125,9 +125,11 @@ impl App {
         }
     }
 
-    /// 在浏览器中打开完整的更新日志。
+    /// 在浏览器中打开完整的更新日志；未配置外部地址时不做操作。
     pub(in crate::app) fn open_release_notes_page(&mut self) {
-        let page = release_notes::page(winc_i18n::locale());
+        let Some(page) = release_notes::page(winc_i18n::locale()) else {
+            return;
+        };
         if let Err(e) = crate::system::open_url(page) {
             self.flash(t!(
                 "preview-markdown-link-open-failed",

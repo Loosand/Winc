@@ -173,7 +173,6 @@ impl App {
         matches!(
             self.target_at(x, y),
             Target::Scrollbar(..)
-                | Target::Minimap
                 | Target::Splitter
                 | Target::TerminalDivider
                 | Target::OutlineDivider
@@ -236,7 +235,6 @@ impl App {
             }
             Target::TreeMore => Hover::TreeMore,
             Target::Scrollbar(bar, _) => Hover::Scrollbar(bar),
-            Target::Minimap => Hover::Minimap,
             Target::Panel(hover) => hover,
             Target::Search => SearchParts::new(l.search)
                 .button_at(x, y)
@@ -469,9 +467,6 @@ impl App {
                 || over_toc && *bar == Scrollbar::MarkdownTable)
         }) {
             return Target::Scrollbar(bar, grab);
-        }
-        if l.minimap.contains(x, y) {
-            return Target::Minimap;
         }
         if let Some(index) = hit(&self.hits.crumbs, x, y) {
             return Target::Crumb(index);
@@ -1285,8 +1280,6 @@ pub(super) enum Target {
     SplitDivider,
     /// 编辑区窗格之间的第几道分隔线。
     PaneDivider(usize),
-    /// 编辑区右侧的缩略图。
-    Minimap,
     /// 终端面板标签栏上的按钮。
     TerminalHeader(crate::app::terminal::HeaderHit),
     /// 终端中命令块的色带与吸顶的命令行。

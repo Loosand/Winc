@@ -16,7 +16,7 @@ use winc_i18n::t;
 use winc_pty::protocol::ToHelper;
 
 use super::HeaderHit;
-use super::shells::{Integration, Launch, default_shell_applies, environment, launch, os_bytes};
+use super::shells::{Launch, default_shell_applies, environment, launch, os_bytes};
 use crate::app::NoticeKind;
 use crate::app::input::context_menu::menu_below;
 use crate::app::input::context_menu::{MenuButton, MenuTarget};
@@ -157,7 +157,7 @@ fn run_launch(
     let dir = os_bytes(dir.as_os_str());
     // 默认 shell 是本机的命令：目录在 WSL 发行版中时命令在发行版内运行。
     let shell = shell.filter(|_| default_shell_applies(&dir, windows));
-    let mut launch = launch(shell, dir, windows, Integration::Off);
+    let mut launch = launch(shell, dir, windows);
     let kind = launch_kind(&launch, windows);
     let mut line = command_line(config, kind);
     let args: Vec<String> = match kind {
@@ -266,9 +266,6 @@ impl App {
 
     /// 运行当前选中的配置，已在运行时结束后重新运行；还没有配置时打开配置文件。
     pub(in crate::app) fn run_current_config(&mut self) {
-        if self.remote_has_no_run_configs() {
-            return;
-        }
         self.reload_run_configs();
         let Some(config) = self.run.current().cloned() else {
             self.edit_run_configs();
@@ -424,20 +421,8 @@ impl App {
         }
     }
 
-    /// 打开的目录在远端主机上时提示没有运行配置并返回 `true`：配置中的命令只在本机的终端里运行。
-    fn remote_has_no_run_configs(&mut self) -> bool {
-        let remote = self.editor.root().is_some_and(winc_backend::is_remote);
-        if remote {
-            self.notify(NoticeKind::Warning, t!("terminal-run-remote"));
-        }
-        remote
-    }
-
     /// 打开运行配置文件，不存在时先用示例新建：这是唯一往项目里写文件的地方，由用户的操作触发。
     pub(in crate::app) fn edit_run_configs(&mut self) {
-        if self.remote_has_no_run_configs() {
-            return;
-        }
         let Some(root) = self.editor.root().map(Path::to_path_buf) else {
             return;
         };

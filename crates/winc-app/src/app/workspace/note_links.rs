@@ -41,7 +41,7 @@ pub(crate) enum WikiResult<'a> {
 
 /// One parsed note link citation.
 #[derive(Clone)]
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 pub(crate) struct Citation {
     pub(crate) range: Range<usize>,
     pub(crate) before: String,

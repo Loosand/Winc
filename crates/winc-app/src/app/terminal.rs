@@ -19,7 +19,6 @@ mod shortcuts;
 mod split;
 pub(crate) mod strip;
 mod tab;
-pub(crate) mod upload;
 
 use shells::*;
 
@@ -522,14 +521,10 @@ impl App {
             .collect();
         t.want = dirs.iter().map(|p| os_bytes(p.as_os_str())).collect();
         t.want_names.clone_from(&session.names);
-        // 远端目录的 shell 是那台主机上的路径，无法在本机检查；建标签时按那台主机上检测到的
-        // shell 确认。
-        let saved = session.shells.iter().zip(&dirs);
+        let saved = session.shells.iter();
         t.want_shells = saved
-            .map(|(command, dir)| {
-                let usable =
-                    |c: &String| winc_backend::locate(dir).is_some() || shells::still_usable(c);
-                Some(command.clone()).filter(|c| !c.is_empty() && usable(c))
+            .map(|command| {
+                Some(command.clone()).filter(|c| !c.is_empty() && shells::still_usable(c))
             })
             .collect();
         t.want_active = Some(session.active);

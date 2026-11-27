@@ -37,8 +37,7 @@ impl App {
             old.sticky_scroll != new.sticky_scroll,
         );
         let images = old.markdown_remote_images != new.markdown_remote_images;
-        let minimap = old.minimap != new.minimap
-            || old.line_numbers != new.line_numbers
+        let relayout = old.line_numbers != new.line_numbers
             || old.status_bar != new.status_bar
             || old.outline != new.outline;
         let hide_outline = old.outline != new.outline && new.outline == Some(false);
@@ -57,8 +56,6 @@ impl App {
         let title_bar = old.ui_native_title_bar != new.ui_native_title_bar;
         let stop_terminal =
             old.terminal_enabled != new.terminal_enabled && new.terminal_enabled == Some(false);
-        let stop_remote =
-            old.remote_enabled != new.remote_enabled && new.remote_enabled != Some(true);
 
         if fonts || glyph_language {
             // 别的窗口已经用上了这些字体，这里也用得上；万一用不上，留着原来的字体。
@@ -82,7 +79,7 @@ impl App {
         if wrap {
             self.word_wrap_changed();
         }
-        if minimap {
+        if relayout {
             self.relayout();
         }
         if hide_outline && self.focus == Focus::Outline {
@@ -114,9 +111,6 @@ impl App {
         }
         if stop_terminal {
             self.stop_terminal();
-        }
-        if stop_remote {
-            self.stop_remote();
         }
         // 模块关闭后它的那一页不再列出：设置停在该页时改到「模块」页。
         let page = self.settings.selected.page();

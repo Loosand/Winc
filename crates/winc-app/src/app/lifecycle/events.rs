@@ -238,12 +238,6 @@ impl ApplicationHandler<UserEvent> for App {
             self.restore_sidebar_for_window();
         }
 
-        // 开启「保存时格式化」时，启动后在后台预先读取用户 shell 的环境，避免第一次 `⌘S` 时等待；
-        // 读取耗时取决于用户 shell 初始化脚本的速度。测量时不读取，避免干扰启动测量。
-        if !settings && self.config.format_on_save == Some(true) && !self.frame.bench.silent() {
-            self.format.formatter.prepare(|| {});
-        }
-
         if self.editor.active.is_none()
             && self.editor.workspace.is_some()
             && self.panels.sidebar.visible
@@ -476,13 +470,8 @@ impl App {
             #[cfg(all(unix, not(target_os = "macos")))]
             UserEvent::PickFailed(kind, error) => self.pick_failed(kind, error.as_deref()),
             UserEvent::Searched => self.poll_global(),
-            UserEvent::Definitions => self.poll_definitions(),
             UserEvent::FilesChanged => self.files_changed(),
             UserEvent::GitQuestion => self.poll_git_questions(),
-            UserEvent::RemoteQuestion => self.poll_remote_questions(),
-            UserEvent::RemoteStage => self.remote_stage_changed(),
-            UserEvent::RemoteHealth => self.request_redraw(),
-            UserEvent::RemoteClosed(target) => self.remote_closed(&target),
             UserEvent::ReleaseNotes(notes) => self.show_release_notes(notes),
             #[cfg(target_os = "macos")]
             UserEvent::CloudRows => self.finished(UserEvent::CloudRows),
@@ -491,11 +480,6 @@ impl App {
             | UserEvent::GitCommit
             | UserEvent::GitBase
             | UserEvent::GitOperated
-            | UserEvent::RemoteConnected
-            | UserEvent::RemoteListed
-            | UserEvent::RemoteWatching
-            | UserEvent::FormatPlanned
-            | UserEvent::FileWorked
             | UserEvent::GitMergeSides
             | UserEvent::GitLog
             | UserEvent::GitBlame
@@ -541,7 +525,6 @@ impl App {
                 self.request_redraw();
             }
             UserEvent::TerminalPaste(id, text) => self.confirmed_terminal_paste(id, text),
-            UserEvent::TerminalUploaded(id, result) => self.terminal_uploaded(id, result),
             UserEvent::TerminalQuit(ok) => {
                 if let Some(request) = self.closing.confirming.take()
                     && ok
@@ -583,10 +566,6 @@ impl App {
                 self.copy_finished(&copying);
                 self.pasted_into_tree(done, failure);
             }
-            UserEvent::Downloaded(done, failure, copying) => {
-                self.copy_finished(&copying);
-                self.downloaded(done, failure);
-            }
             UserEvent::Copied(copies, failures, copying) => {
                 self.copy_finished(&copying);
                 self.copied_into_tree(copies, failures);
@@ -620,14 +599,11 @@ impl App {
                 }
             }
             UserEvent::Delete(paths, permanent) => self.delete_entries(&paths, permanent),
-            UserEvent::Formatted => self.poll_formatting(),
-            UserEvent::ToolChoice(answer) => self.answer_tool_choice(answer),
             UserEvent::GitTrust(root, fingerprint, trusted) => {
                 self.answer_git_trust(&root, fingerprint, trusted);
             }
             UserEvent::StdinRead => self.poll_stdin(),
             UserEvent::ReopenEncoding(id, encoding) => self.reopen_with_encoding(id, encoding),
-            UserEvent::ShowHex(id) => self.show_hex_now(id),
             UserEvent::ImageReady => self.poll_images(),
             UserEvent::Terminal => self.poll_terminal(),
         }
@@ -679,7 +655,6 @@ impl App {
             self.status.until,
             self.notice.until,
             committed,
-            self.hint_tick(now),
             self.touch_tick(now),
         ]
         .into_iter()
@@ -828,10 +803,7 @@ impl App {
 
         earliest(&mut wake, self.bench_wheel_tick(now));
 
-        earliest(&mut wake, self.format_progress_tick(now));
-
         earliest(&mut wake, self.log_tick(now));
-        earliest(&mut wake, self.definition_tick(now));
 
         if let Some(at) = self.frame.next_frame {
             if now >= at {
@@ -852,11 +824,10 @@ impl App {
         wake
     }
 
-    /// 在事件循环结束前收尾：等待后台保存完成，停止格式化，补写同意退出后的修改，记录会话状态。
+    /// 在事件循环结束前收尾：等待后台保存完成，补写同意退出后的修改，记录会话状态。
     pub(crate) fn prepare_exit(&mut self) {
         // 等待后台保存的大文件写完，避免留下写入不完整的临时文件。
         self.wait_for_saves();
-        self.cancel_all_formatting();
         // 同意退出后不再定时写备份，但其他窗口仍在询问期间本窗口的文档可能再被修改，因此按当前
         // 内容再写一次备份，使下次启动恢复最新内容。未经询问直接退出时（未保存的内容均已有
         // 备份，或系统注销、关机）同样按当前内容写一次，不丢失最近的修改。

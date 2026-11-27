@@ -26,8 +26,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use ropey::Rope;
 use winc_editor::diff_view::{DiffSide, DiffView};
 use winc_editor::encoding::{decode_known, decode_unknown};
-use winc_editor::format::Cancel;
 use winc_editor::git::{self, Branch, Change, Git, Stash, Status, Unavailable, Worktree};
+use winc_editor::shell::Cancel;
 use winc_editor::shell::Shell;
 use winc_editor::{DocumentId, Encoding, LARGE_FILE, looks_binary};
 use winc_i18n::t;
@@ -598,14 +598,7 @@ impl App {
         let slot = Arc::clone(&self.git.scanned);
         let extra = self.extra_folders();
         self.spawn_blocking_then(UserEvent::GitStatus, move || {
-            // 本机的目录已在界面线程上查过它所在的仓库和第一层子目录（`git_discover`）；远端的
-            // 目录在这里一并查找。
-            let mut found = if winc_backend::is_remote(&dir) {
-                git::find_repositories(&dir)
-            } else {
-                Vec::new()
-            };
-            found.extend(git::scan_repositories(&dir, depth, &cancel));
+            let mut found = git::scan_repositories(&dir, depth, &cancel);
             for folder in &extra {
                 found.extend(git::scan_repositories(folder, depth, &cancel));
             }
@@ -663,11 +656,6 @@ impl App {
             self.git.repositories.clear();
             return;
         };
-        // 远端的目录不在界面线程上查找：仓库由后台的查找加入（`git_scan_repositories`），
-        // 已有的列表保留。
-        if winc_backend::is_remote(dir) {
-            return;
-        }
         let mut found = git::find_repositories(dir);
         // 附加的目录里的仓库排在后面。
         for folder in self.extra_folders() {
@@ -987,7 +975,7 @@ impl App {
         done: UserEvent,
         work: impl FnOnce(Result<Git, Unavailable>) + Send + 'static,
     ) {
-        let (tool, shell) = (self.git.tool.clone(), self.format.formatter.shell().clone());
+        let (tool, shell) = (self.git.tool.clone(), self.shell.clone());
         let program = self.config.git_path.clone();
         self.spawn_blocking_then(done, move || work(tool.resolve(&shell, program.as_deref())));
     }

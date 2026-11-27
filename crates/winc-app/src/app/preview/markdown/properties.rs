@@ -157,11 +157,6 @@ impl App {
 
     pub(crate) fn note_properties_available(&self) -> bool {
         self.markdown_live()
-            && self
-                .editor
-                .active()
-                .and_then(|doc| doc.path.as_deref())
-                .is_none_or(|p| !winc_backend::is_remote(p))
     }
 
     fn property_scope(&self) -> String {
@@ -290,11 +285,7 @@ impl App {
     }
 
     pub(in crate::app) fn toggle_property_panel(&mut self) {
-        let Some((id, path)) = self
-            .editor
-            .active()
-            .map(|doc| (doc.id, doc.path.clone()))
-        else {
+        let Some((id, path)) = self.editor.active().map(|doc| (doc.id, doc.path.clone())) else {
             return;
         };
         let md = &mut self.preview.markdown;

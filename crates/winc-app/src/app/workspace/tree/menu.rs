@@ -15,9 +15,7 @@ impl App {
                 .as_ref()
                 .is_some_and(|w| w.multi_selected())
         {
-            let targets = self.tree_targets();
-            let remote = !targets.is_empty() && targets.iter().all(|p| winc_backend::is_remote(p));
-            return tree_selection_menu(self.tree_selected_files().len(), remote);
+            return tree_selection_menu(self.tree_selected_files().len(), false);
         }
 
         // 目录自己的一行和空白处一样：不能改名、剪切、删除。
@@ -30,11 +28,10 @@ impl App {
                 .or_else(|| self.note_in_library(p).then_some(EntryKind::File))
         });
         let can_paste = self.can_paste_into_tree();
-        let remote = path.is_some_and(winc_backend::is_remote);
-        let mut menu = if self.notebook_sidebar() && !remote {
+        let mut menu = if self.notebook_sidebar() {
             notebook_tree_menu(kind, can_paste)
         } else {
-            tree_menu(kind, can_paste, remote)
+            tree_menu(kind, can_paste, false)
         };
         if kind.is_none() && !self.notebook_sidebar() {
             menu.extend(self.folder_items(folder));
@@ -92,7 +89,6 @@ impl App {
                     self.copy_entries(&self.tree_targets());
                 }
                 MenuCommand::Delete => self.ask_delete_all(self.tree_targets(), false),
-                MenuCommand::Download => self.pick(Pick::Download(self.tree_targets())),
                 MenuCommand::CopyPath => self.copy_paths(&selection, false),
                 MenuCommand::CopyRelativePath => self.copy_paths(&selection, true),
                 _ => {}
@@ -126,7 +122,6 @@ impl App {
             MenuCommand::Copy => self.copy_entry(&target),
             // 右键时已选中了那一行（空白处则取消选中），粘贴到的目录由选中的行决定。
             MenuCommand::Paste => self.paste_into_tree(),
-            MenuCommand::Download => self.pick(Pick::Download(vec![target])),
             _ => {}
         }
     }

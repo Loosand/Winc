@@ -29,16 +29,6 @@ pub struct Copies {
     due: Option<Instant>,
 }
 
-// 用到它的测试只在 Unix 上编译。
-#[cfg(all(test, unix))]
-impl Copies {
-    /// 把 `copying` 记为正在进行、已到显示进度的时刻的一次复制；`download` 表示是下载。
-    pub(in crate::app) fn track(&mut self, copying: Arc<Copying>, download: bool) {
-        self.running.push((copying, download));
-        self.due = Some(Instant::now());
-    }
-}
-
 /// 把字节数 `bytes` 写成便于阅读的大小：不足 1 KB 时写字节数，其余取一位小数（1 KB 为 1024
 /// 字节）。
 fn size_label(bytes: u64) -> String {
@@ -107,7 +97,7 @@ impl App {
     ) -> Option<R> {
         let copying = Arc::new(Copying::default());
         let Some(proxy) = self.link.proxy.clone() else {
-            return Some(winc_backend::remote::allow_blocking(|| work(&copying)));
+            return Some(work(&copying));
         };
         (self.panels.tree.copies.running).push((Arc::clone(&copying), download));
         if self.panels.tree.copies.due.is_none() {
@@ -145,44 +135,6 @@ impl App {
             });
         }
         copying.is_cancelled()
-    }
-
-    /// 把远端的各项 `paths` 下载到本机的目录 `dir`（文件树的「下载…」），在后台进行。
-    ///
-    /// 目录连同其中的内容一起下载；重名时不覆盖，副本改名（见 `winc_editor::paste::copy_into`）。
-    pub(in crate::app) fn download(&mut self, paths: Vec<PathBuf>, dir: PathBuf) {
-        let copy = move |copying: &Copying| {
-            let copied = winc_editor::paste::copy_into(&paths, &dir, copying);
-            copy_outcome(copied, copying, |path, error| {
-                t!(
-                    "workspace-download-failed",
-                    name = winc_editor::display_name(path),
-                    error = error.to_string()
-                )
-            })
-        };
-        let done = |(done, failure), copying| UserEvent::Downloaded(done, failure, copying);
-        if let Some((done, failure)) = self.spawn_copy(true, true, copy, done) {
-            self.downloaded(done, failure);
-        }
-    }
-
-    /// 下载结束：失败时提示原因，否则提示下载了什么，按钮在文件管理器中显示下载到的地方；
-    /// `done` 是下载好的各项（失败或取消之前下载好的也在内）。
-    pub(in crate::app) fn downloaded(&mut self, done: Vec<PathBuf>, failure: Option<String>) {
-        if let Some(message) = failure {
-            self.notify(NoticeKind::Error, message);
-        } else if let Some(last) = done.last().cloned() {
-            let message = match done.as_slice() {
-                [one] => t!(
-                    "workspace-download-done-one",
-                    name = winc_editor::display_name(one)
-                ),
-                many => t!("workspace-download-done-many", count = many.len()),
-            };
-            self.notify_with(NoticeKind::Done, message, NoticeAction::Reveal(last));
-        }
-        self.request_redraw();
     }
 
     /// 取消正在进行的各次复制：各自正在复制的一项停止，已复制完的各项保留。

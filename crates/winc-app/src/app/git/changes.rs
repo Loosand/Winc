@@ -18,7 +18,7 @@ use winc_core::Lines;
 use winc_core::diff::{self, LineHunk};
 use winc_editor::diff_view::inline_marks;
 use winc_editor::encoding::decode_known;
-use winc_editor::format::Cancel;
+use winc_editor::shell::Cancel;
 use winc_editor::{DocumentId, LARGE_FILE, looks_binary};
 use winc_i18n::t;
 use winc_render::Rect;

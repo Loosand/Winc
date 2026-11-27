@@ -203,7 +203,7 @@ impl App {
         };
         let sender = self.git.merge.loaded.get_or_insert_with(channel).0.clone();
         self.spawn_git(UserEvent::GitMergeSides, move |tool| {
-            let cancel = winc_editor::format::Cancel::default();
+            let cancel = winc_editor::shell::Cancel::default();
             let sides = tool.map_err(|e| super::unusable(&e)).and_then(|git| {
                 let read = |stage| git.content_at(&root, stage, &path, &cancel);
                 Ok([read(":2")?, read(":3")?])

@@ -10,10 +10,10 @@ use std::time::Duration;
 
 use winc_editor::diff_view::{DiffSide, DiffView};
 use winc_editor::encoding::decode_unknown;
-use winc_editor::format::Cancel;
 use winc_editor::git::{
     Branch, BranchDeleted, Carried, CommitFile, Git, Operation, Remote, Stash, WorktreeCheck,
 };
+use winc_editor::shell::Cancel;
 use winc_editor::{LARGE_FILE, looks_binary};
 use winc_i18n::t;
 
@@ -217,8 +217,6 @@ pub enum PickerPart {
     NewWorktree,
     /// 最近目录列表第几行行尾的「✕」：从最近列表中移除该目录。
     ForgetFolder(usize),
-    /// 连接远端主机的面板中第几行行尾的「✕」：从最近的记录中移除这个目录或主机。
-    ForgetRemote(usize),
 }
 
 /// 检查完、等着确认移除的工作树。
@@ -252,8 +250,6 @@ impl RemoveCheck {
 pub(in crate::app) enum Asker {
     /// 第几个 Git 操作。
     Git(u64),
-    /// 到远端主机的连接。
-    Remote,
 }
 
 impl Asker {
@@ -1005,7 +1001,6 @@ impl App {
         self.overlays.picker.folders = false;
         self.overlays.picker.languages = false;
         self.overlays.picker.vim_list = None;
-        self.overlays.picker.remote = None;
         self.overlays.picker.anchor = anchor;
         self.overlays.picker.open = true;
         self.overlays.picker.doc = self.editor.active().map(|d| d.id);

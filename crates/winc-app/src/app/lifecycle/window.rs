@@ -382,13 +382,12 @@ impl App {
         self.sync_terminal();
     }
 
-    /// 在编辑区里放置随当前标签变化的部分：标签栏右端的按钮、分栏预览、合并的两侧、缩略图。
+    /// 在编辑区里放置随当前标签变化的部分：标签栏右端的按钮、分栏预览、合并的两侧。
     pub(in crate::app) fn place_editor_parts(&mut self) {
         self.place_preview_button();
         self.place_browser_button();
         self.place_split();
         self.place_merge_panes();
-        self.place_minimap();
     }
 
     /// 当前文件能切换预览时，在标签栏右端留出「源代码 / 分栏 / 预览」三个按钮，标签栏
@@ -448,31 +447,6 @@ impl App {
     ///
     /// 左边占的比例按 `split_share`（默认各占一半），两边都至少留 `SPLIT_MIN`；编辑区太窄、
     /// 两边都放不下 `SPLIT_MIN` 时不分，只显示源代码。
-    fn place_minimap(&mut self) {
-        // 编辑区窄于该宽度时不显示（逻辑像素，经验值）：优先留给代码。
-        const MINIMAP_MIN: f32 = 480.0;
-        // 缩略图占的宽度（逻辑像素，经验值），右边一段让给滚动条。
-        const MINIMAP_W: f32 = 84.0;
-        self.layout.minimap = Rect::default();
-        let shows_code = self.editor.active().is_some_and(|doc| {
-            doc.shows_text()
-                && doc.diff.is_none()
-                && doc.log.is_none()
-                && doc.preview_mode() != winc_editor::PreviewMode::Preview
-        });
-        let l = &mut self.layout;
-        if self.config.minimap != Some(true) || !shows_code || l.editor.w < MINIMAP_MIN {
-            return;
-        }
-        l.text.w = (l.text.w - MINIMAP_W).max(0.0);
-        l.minimap = Rect::new(
-            l.text.right(),
-            l.editor.y,
-            MINIMAP_W - SCROLLBAR_HIT,
-            l.editor.h,
-        );
-    }
-
     fn place_split(&mut self) {
         // 分栏时每一半的最小宽度（逻辑像素，经验值）。
         const SPLIT_MIN: f32 = 240.0;

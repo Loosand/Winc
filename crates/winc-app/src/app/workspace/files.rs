@@ -42,10 +42,6 @@ pub enum Pick {
     AddFolder,
     /// 设置中选择窗口的背景图片。
     BackgroundImage,
-    /// 连接远端主机对话框中密钥文件右端的按钮：选密钥文件，从 `~/.ssh` 开始。
-    KeyFile,
-    /// 远端文件树的「下载…」：选本机的目录，把参数中的各项下载到那里。
-    Download(Vec<PathBuf>),
 }
 
 /// 无法打开的文件在编辑区中给出的操作。
@@ -53,8 +49,6 @@ pub enum Pick {
 pub enum PlaceholderAction {
     /// 以文本方式打开二进制文件，只读。
     OpenAsText,
-    /// 按十六进制查看文件的字节。
-    ShowHex,
     /// 读取失败时重试。
     Retry,
     /// 用系统默认应用打开。
@@ -225,66 +219,23 @@ impl App {
     }
 
     /// `path` 是否目录。
-    ///
-    /// 本机的路径以磁盘为准。远端的路径不能在界面线程上查询，查询的结果一律是「不是目录」：类别
-    /// 取自文件树和已打开的文档（[`Self::known_folder`]），其中没有的才查询磁盘。
     pub(in crate::app) fn is_folder(&self, path: &Path) -> bool {
-        let known = winc_backend::is_remote(path)
-            .then(|| self.known_folder(path))
-            .flatten();
-        known.unwrap_or_else(|| winc_backend::fs::is_dir(path))
-    }
-
-    /// 不查询磁盘能确定时返回 `path` 是否目录：打开的目录、文件树上可见的行（合并显示的各级
-    /// 目录也算）和已打开的文档。
-    pub(in crate::app) fn known_folder(&self, path: &Path) -> Option<bool> {
-        if let Some(workspace) = &self.editor.workspace {
-            if path == workspace.root.as_path() {
-                return Some(true);
-            }
-            if let Some(row) = workspace.row_of(path) {
-                return Some(workspace.rows()[row].kind == winc_editor::EntryKind::Dir);
-            }
-        }
-        // 打开的文档都是文件。
-        let documents = &self.editor.documents;
-        let open = documents
-            .iter()
-            .any(|doc| doc.path.as_deref() == Some(path));
-        open.then_some(false)
+        winc_backend::fs::is_dir(path)
     }
 
     /// `path` 是否可以当作文件打开。
-    ///
-    /// 本机的路径以磁盘为准。远端的路径在界面线程上查不到：文件树和已打开的文档知道的照实
-    /// 回答，其余按可以打开处理，文件不存在时由随后的读取在标签中报告，而不是把存在的文件当作
-    /// 不存在。
     pub(in crate::app) fn may_be_file(&self, path: &Path) -> bool {
-        if !winc_backend::is_remote(path) {
-            return winc_backend::fs::is_file(path);
-        }
-        self.known_folder(path).is_none_or(|folder| !folder)
+        winc_backend::fs::is_file(path)
     }
 
-    /// `path` 是否存在；远端的路径查不到时按存在处理，规则同 [`Self::may_be_file`]。
+    /// `path` 是否存在。
     pub(in crate::app) fn may_exist(&self, path: &Path) -> bool {
-        winc_backend::is_remote(path) || winc_backend::fs::exists(path)
+        winc_backend::fs::exists(path)
     }
 
-    /// 终端输出中的路径 `path` 是否可以作为跳转的目标；`numbered` 表示它带有行号。
-    ///
-    /// 远端的路径查不到时不能把每个像路径的词都当作文件：只认打开的目录之内、带行号的位置
-    /// （编译器的报错）。
-    pub(in crate::app) fn terminal_target(&self, path: &Path, numbered: bool) -> bool {
-        if !winc_backend::is_remote(path) {
-            return winc_backend::fs::exists(path);
-        }
-        let inside = || {
-            self.editor
-                .root()
-                .is_some_and(|root| path.starts_with(root))
-        };
-        self.known_folder(path).is_some() || numbered && inside()
+    /// 终端输出中的路径 `path` 是否可以作为跳转的目标。
+    pub(in crate::app) fn terminal_target(&self, path: &Path, _numbered: bool) -> bool {
+        winc_backend::fs::exists(path)
     }
 
     /// 打开文件或目录 `path`；`preview` 为真时在预览标签中打开文件（见 [`Self::preview_path`]）。
@@ -370,9 +321,7 @@ impl App {
         let Some(doc) = self.editor.document(id) else {
             return true;
         };
-        if self.is_formatting(id)
-            || (doc.is_dirty() && (doc.path.is_none() || doc.deleted_on_disk()))
-        {
+        if doc.is_dirty() && (doc.path.is_none() || doc.deleted_on_disk()) {
             let name = doc.name().into_owned();
             self.notify(
                 NoticeKind::Warning,
@@ -513,7 +462,6 @@ impl App {
 
         match action {
             PlaceholderAction::ShowSource => self.toggle_preview(),
-            PlaceholderAction::ShowHex => self.show_hex(),
             PlaceholderAction::OpenAsText | PlaceholderAction::Retry => {
                 let as_text = action == PlaceholderAction::OpenAsText;
                 // 读好后由 `poll_loads` 换入标签并提示只读的原因。
@@ -522,22 +470,11 @@ impl App {
                 }
             }
             PlaceholderAction::OpenWithDefaultApp => {
-                // 远端的文件：挂载在本机时（`remote.localFolders`）打开本机上的那一份。
-                let local = if winc_backend::is_remote(&path) {
-                    self.local_folder(&path)
-                } else {
-                    Some(path)
-                };
-                match local {
-                    None => self.notify(NoticeKind::Warning, t!("workspace-remote-local-only")),
-                    Some(path) => {
-                        if let Err(e) = system::open_with_default_app(&path) {
-                            self.notify(
-                                NoticeKind::Error,
-                                t!("workspace-open-default-app-failed", error = e.to_string()),
-                            );
-                        }
-                    }
+                if let Err(e) = system::open_with_default_app(&path) {
+                    self.notify(
+                        NoticeKind::Error,
+                        t!("workspace-open-default-app-failed", error = e.to_string()),
+                    );
                 }
             }
             PlaceholderAction::Reveal => self.reveal_in_file_manager(&path),
@@ -549,21 +486,7 @@ impl App {
     }
 
     /// 在系统文件管理器中显示 `path`；失败时提示原因。
-    ///
-    /// 远端的文件在挂载到本机的目录之内时（配置项 `remote.localFolders`）显示本机上的那一份；
-    /// 没有挂载时说明可以怎样设置。
     pub(in crate::app) fn reveal_in_file_manager(&mut self, path: &Path) {
-        let local;
-        let path = if winc_backend::is_remote(path) {
-            let Some(mapped) = self.local_folder(path) else {
-                self.notify(NoticeKind::Warning, t!("workspace-remote-reveal-unmapped"));
-                return;
-            };
-            local = mapped;
-            local.as_path()
-        } else {
-            path
-        };
         if let Err(e) = system::reveal_in_file_manager(path) {
             self.notify(
                 NoticeKind::Error,
@@ -592,16 +515,8 @@ impl App {
         if self.open_in_builtin_terminal(&dir) {
             return;
         }
-        let remote = winc_backend::is_remote(&dir);
         if self.frame.bench.silent() || cfg!(test) {
             self.opened_terminal = Some(dir.clone());
-            if !remote {
-                return;
-            }
-        }
-        // 远端主机上的目录只能在内置终端中打开：本机的终端程序进不去。
-        if remote {
-            self.notify(NoticeKind::Warning, t!("workspace-remote-terminal"));
             return;
         }
         if let Err(e) = system::open_terminal(&dir, self.config.external_terminal.as_deref()) {
@@ -785,15 +700,11 @@ impl App {
         }
     }
 
-    /// 保存有路径的文档 `id`：开启了「保存时格式化」时先格式化再保存。
+    /// 保存有路径的文档 `id`。
     ///
     /// 不检查磁盘冲突，调用方已确认可以覆盖。
     pub(in crate::app) fn save_by_id(&mut self, id: DocumentId) {
-        if self.prepares_on_save(id) {
-            self.format_then_save(id);
-        } else {
-            self.write_document_with(id, None, false, true);
-        }
+        self.write_document_with(id, None, false, true);
     }
 
     /// 设置什么时候自动保存。
@@ -901,7 +812,7 @@ impl App {
                 continue;
             }
             self.deleted_told.remove(&id);
-            if candidate && doc.can_save_quietly() && !self.is_formatting(id) {
+            if candidate && doc.can_save_quietly() {
                 self.write_document_with(id, None, true, true);
             }
         }
@@ -989,35 +900,12 @@ impl App {
             return false;
         };
         doc.tidy_for_save(to.as_deref(), quiet);
-        // 远端主机上的文档总是由后台线程写出：界面线程不发出远端的请求。必须等写完的保存在此
-        // 等待后台完成。
-        let remote = doc.path.as_deref().is_some_and(winc_backend::is_remote);
-        // 远端的改名、移动或删除尚未完成：文档的路径可能即将改变，后台保存推迟到它完成之后。
-        if remote && background && to.is_none() && self.file_work_pending() {
-            if !self
-                .disk
-                .file_work
-                .deferred
-                .iter()
-                .any(|(known, _)| *known == id)
-            {
-                self.disk.file_work.deferred.push((id, quiet));
-            }
-            return true;
-        }
-        let Some(doc) = self.editor.document_mut(id) else {
-            return false;
-        };
         let edited = doc.is_dirty();
-        if (background || remote) && to.is_none() {
+        if background && to.is_none() {
             match doc.begin_save() {
                 Ok(Some(job)) => {
                     self.save_in_background(id, job, quiet, edited);
-                    if background {
-                        return true;
-                    }
-                    self.wait_for_save(id);
-                    return (self.editor.document(id)).is_some_and(|doc| !doc.is_dirty());
+                    return true;
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -1106,14 +994,12 @@ impl App {
                     .or_else(|| self.editor.root().map(Path::to_path_buf));
                 (name, dir)
             }
-            Pick::KeyFile => (String::new(), crate::app::remote::key_dir()),
             Pick::Open
             | Pick::OpenFolder
             | Pick::WslFolder(_)
             | Pick::WorktreeFolder
             | Pick::AddFolder
-            | Pick::BackgroundImage
-            | Pick::Download(_) => (String::new(), None),
+            | Pick::BackgroundImage => (String::new(), None),
         };
 
         #[cfg(target_os = "macos")]
@@ -1124,18 +1010,16 @@ impl App {
                 return;
             };
             let panel = match &kind {
-                Pick::Open | Pick::BackgroundImage | Pick::KeyFile => Panel::Open {
+                Pick::Open | Pick::BackgroundImage => Panel::Open {
                     files: true,
                     dir: dir.as_deref(),
                 },
-                Pick::OpenFolder
-                | Pick::WslFolder(_)
-                | Pick::WorktreeFolder
-                | Pick::AddFolder
-                | Pick::Download(_) => Panel::Open {
-                    files: false,
-                    dir: None,
-                },
+                Pick::OpenFolder | Pick::WslFolder(_) | Pick::WorktreeFolder | Pick::AddFolder => {
+                    Panel::Open {
+                        files: false,
+                        dir: None,
+                    }
+                }
                 Pick::SaveAs(_) => Panel::Save {
                     name: &name,
                     dir: dir.as_deref(),
@@ -1164,26 +1048,12 @@ impl App {
                     };
                     (choose, t!("cmd-open-file"))
                 }
-                Pick::KeyFile => {
-                    let choose = Choose::Open {
-                        directory: false,
-                        dir: dir.as_deref(),
-                    };
-                    (choose, t!("workspace-remote-dialog-key-choose"))
-                }
                 Pick::OpenFolder | Pick::WslFolder(_) | Pick::WorktreeFolder | Pick::AddFolder => {
                     let choose = Choose::Open {
                         directory: true,
                         dir: None,
                     };
                     (choose, t!("cmd-open-folder"))
-                }
-                Pick::Download(_) => {
-                    let choose = Choose::Open {
-                        directory: true,
-                        dir: None,
-                    };
-                    (choose, t!("menu-download"))
                 }
                 Pick::SaveAs(_) => (
                     Choose::Save {
@@ -1209,12 +1079,10 @@ impl App {
             // 系统的对话框只能选文件或者只能选目录：「打开…」选文件，目录从「打开目录…」选。
             let title = match &kind {
                 Pick::Open | Pick::BackgroundImage => t!("cmd-open-file"),
-                Pick::KeyFile => t!("workspace-remote-dialog-key-choose"),
                 Pick::OpenFolder | Pick::WorktreeFolder => t!("cmd-open-folder"),
                 Pick::AddFolder => t!("cmd-add-folder"),
                 Pick::WslFolder(_) => t!("cmd-open-wsl-folder"),
                 Pick::SaveAs(_) => t!("cmd-save-as"),
-                Pick::Download(_) => t!("menu-download"),
             };
             // 对话框的标题不带省略号；挂在窗口上，打开期间窗口不响应。
             let mut dialog = rfd::FileDialog::new().set_title(title.trim_end_matches('…'));
@@ -1234,12 +1102,11 @@ impl App {
                     dialog = dialog.set_directory(home.unwrap_or(root));
                 }
                 let path = match &kind {
-                    Pick::Open | Pick::BackgroundImage | Pick::KeyFile => dialog.pick_file(),
+                    Pick::Open | Pick::BackgroundImage => dialog.pick_file(),
                     Pick::OpenFolder
                     | Pick::WslFolder(_)
                     | Pick::WorktreeFolder
-                    | Pick::AddFolder
-                    | Pick::Download(_) => dialog.pick_folder(),
+                    | Pick::AddFolder => dialog.pick_folder(),
                     Pick::SaveAs(_) => dialog.set_file_name(&name).save_file(),
                 };
                 let _ = proxy.send_event(UserEvent::Picked(kind, path));
@@ -1277,9 +1144,7 @@ impl App {
             | Pick::WslFolder(_)
             | Pick::WorktreeFolder
             | Pick::AddFolder
-            | Pick::BackgroundImage
-            | Pick::KeyFile
-            | Pick::Download(_) => None,
+            | Pick::BackgroundImage => None,
         };
 
         let Some(path) = path else { return };
@@ -1293,8 +1158,6 @@ impl App {
             Pick::WorktreeFolder => self.worktree_folder_picked(path),
             Pick::AddFolder => self.add_folder(&path),
             Pick::BackgroundImage => self.set_background_image(Some(path)),
-            Pick::KeyFile => self.key_file_picked(&path),
-            Pick::Download(paths) => self.download(paths, path),
             Pick::SaveAs(id) => {
                 if self.save_document(id, Some(path))
                     && let Some(prompt) = continuation
@@ -1313,7 +1176,6 @@ impl App {
     /// 文件树和 `⌘P` 的文件表已经保持最新；没有监视（启动监视失败）时，重读文件树，并让
     /// `⌘P` 的文件表在下次使用时于后台重新遍历。
     pub(in crate::app) fn check_disk(&mut self) {
-        self.check_remote();
         self.sync_documents(|_| true);
         // 在终端里提交、切换分支时 `.git` 可能不在监视范围内：打开的是仓库中的子目录，或者没有
         // 启动监视。工作树、子模块的 `.git` 是文件，真正的目录在其他位置。仓库根位于已监视的目录

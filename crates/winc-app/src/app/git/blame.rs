@@ -16,8 +16,8 @@ use ropey::Rope;
 
 use winc_core::Lines;
 use winc_editor::DocumentId;
-use winc_editor::format::Cancel;
 use winc_editor::git::{Blame, BlameCommit};
+use winc_editor::shell::Cancel;
 use winc_i18n::t;
 use winc_render::Rect;
 

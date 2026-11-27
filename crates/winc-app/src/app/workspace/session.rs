@@ -13,8 +13,6 @@ pub enum StartAction {
     Open,
     /// 打开目录（`Ctrl+K Ctrl+O`）；只在选择器不能同时选文件和目录的平台上显示。
     OpenFolder,
-    /// 连接到 SSH 主机；只在远程模块开着时显示。
-    Remote,
     /// 打开最近列表中的目录，参数为列表下标（从 0 起）。
     Recent(usize),
     /// 从最近列表中移除一项（悬停时右端的 ✕），参数为列表下标（从 0 起）。
@@ -27,7 +25,7 @@ impl App {
     /// 窗口里已经开着另一个目录时，按 `editor.openFolderInNewWindow` 在新窗口或此窗口打开；
     /// 没有设置时弹出提示框询问。其余情况同 [`Self::switch_folder`]。
     pub(in crate::app) fn open_folder(&mut self, path: &Path) {
-        if self.writing_workspace() && !winc_backend::is_remote(path) {
+        if self.writing_workspace() {
             self.switch_folder(path);
             return;
         }
@@ -269,7 +267,6 @@ impl App {
         self.git.commit.forget_dirs();
         self.overlays.picker.index.cancel();
         self.overlays.picker.index = FileIndex::default();
-        self.jumps.definitions = None;
         if self.overlays.picker.open {
             self.close_picker();
         }
@@ -447,23 +444,17 @@ impl App {
     /// 把最近打开的目录和文件交给系统：macOS 的最近文档列表（程序坞菜单）、Windows 的任务栏
     /// 跳转列表。没有状态文件（测试、测量）时不做任何事，其他平台没有对应的入口。
     pub(in crate::app) fn sync_system_recents(&self) {
-        // 远端主机上的目录和文件不交给系统：系统的最近列表只能打开本机路径。
         #[cfg(any(target_os = "macos", windows))]
-        let local = |paths: &[PathBuf]| -> Vec<PathBuf> {
-            let local = paths.iter().filter(|path| !winc_backend::is_remote(path));
-            local.cloned().collect()
-        };
-        #[cfg(any(target_os = "macos", windows))]
-        let (folders, files) = (local(&self.state.recent), local(&self.state.recent_files));
+        let (folders, files) = (&self.state.recent, &self.state.recent_files);
         #[cfg(target_os = "macos")]
         if self.store.state_path.is_some() {
             let exists = |path: &Path| winc_backend::fs::exists(path);
-            let (folders, files) = crate::recents::dock_entries(&folders, &files, exists);
+            let (folders, files) = crate::recents::dock_entries(folders, files, exists);
             crate::macos::sync_recent_documents(&folders, &files);
         }
         #[cfg(windows)]
         if let Some(path) = &self.store.state_path {
-            crate::windows::sync_jump_list(&folders, &files, path);
+            crate::windows::sync_jump_list(folders, files, path);
         }
     }
 
@@ -479,9 +470,6 @@ impl App {
         let Some(folder) = self.state.recent.get(index).cloned() else {
             return;
         };
-        if self.reopen_remote(&folder) {
-            return;
-        }
         if winc_backend::fs::is_dir(&folder) {
             self.new_window(Some(folder));
         } else {
@@ -496,14 +484,10 @@ impl App {
             StartAction::NewFile => self.new_file(),
             StartAction::Open => self.pick(Pick::Open),
             StartAction::OpenFolder => self.pick(Pick::OpenFolder),
-            StartAction::Remote => self.open_remote_picker(),
             StartAction::Recent(index) => {
                 let Some(folder) = self.state.recent.get(index).cloned() else {
                     return;
                 };
-                if self.reopen_remote(&folder) {
-                    return;
-                }
                 if winc_backend::fs::is_dir(&folder) {
                     self.open_path(&folder);
                 } else {

@@ -384,9 +384,6 @@ impl App {
         if self.click_diff(x, y) {
             return;
         }
-        if self.hex_active() {
-            return self.hex_press(x, y);
-        }
         self.focus = Focus::Editor;
         self.ime.preedit.clear();
 
@@ -404,18 +401,6 @@ impl App {
         };
 
         let count = self.click_count(x, y);
-
-        // `⌘` 单击转到定义，其他平台上为 `Ctrl` 单击。
-        let jump = if cfg!(target_os = "macos") {
-            self.pointer.modifiers.super_key()
-        } else {
-            self.pointer.modifiers.control_key()
-        };
-        if jump && count == 1 && !l.gutter.contains(x, y) {
-            self.select(pos, pos);
-            self.go_to_definition();
-            return;
-        }
 
         // `⇧⌥` 按下拖动框出一列；`⌥` 单击添加或移除一个光标，按住拖动则添加一个选区。
         let (shift, alt) = (

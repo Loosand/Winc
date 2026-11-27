@@ -3,8 +3,8 @@
 //! 界面先按操作的结果更新，命令在后台按顺序逐个执行；全部写完后重新读取状态。
 
 use winc_core::diff::{LineHunk, StageLine, line_hunks, stage, unstage};
-use winc_editor::format::Cancel;
 use winc_editor::git::Change;
+use winc_editor::shell::Cancel;
 
 use super::*;
 use crate::app::NoticeKind;

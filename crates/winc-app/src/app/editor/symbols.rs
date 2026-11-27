@@ -39,7 +39,6 @@ impl App {
         self.overlays.picker.folders = false;
         self.overlays.picker.languages = false;
         self.overlays.picker.vim_list = None;
-        self.overlays.picker.remote = None;
         self.overlays.picker.notebook = None;
         self.overlays.picker.open = true;
         self.overlays.picker.doc = self.editor.active().map(|d| d.id);
@@ -61,7 +60,6 @@ impl App {
             && !self.overlays.picker.folders
             && !self.overlays.picker.languages
             && self.overlays.picker.vim_list.is_none()
-            && self.overlays.picker.remote.is_none()
             && self.overlays.picker.input.text().starts_with('@')
     }
 

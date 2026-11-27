@@ -103,9 +103,6 @@ pub struct CardFx {
     pub shot: Option<(winc_render::Rect, winc_render::Snapshot)>,
     /// 淡入途中存放卡片下方内容（连同阴影）的缓冲，每帧复用；淡入结束后释放。
     pub base: Option<winc_render::Snapshot>,
-    /// 卡片开着换了一页（见 [`App::turn_card`]）时，换页之前的画面及其淡出的时钟；保留到新
-    /// 的一页淡入结束。
-    pub turning: Option<(Clock, winc_render::Rect, winc_render::Snapshot)>,
 }
 
 impl CardFx {
@@ -123,7 +120,6 @@ impl CardFx {
         }
         if self.motion.is_none() {
             self.base = None;
-            self.turning = None;
         }
         if !self.shown && self.motion.is_none() {
             self.shot = None;
@@ -302,22 +298,6 @@ impl App {
         }
     }
 
-    /// 开着的 `card` 即将换成另一页内容：换页之前的画面原地淡出，新的一页按出现的动画淡入。
-    ///
-    /// 卡片没有开着，或系统要求减弱动态效果时什么都不做。
-    pub(crate) fn turn_card(&mut self, card: Card) {
-        let (leave, enter) = (self.clock(DIALOG_OUT), self.clock(DIALOG_IN));
-        let fx = self.card_fx(card);
-        let (Some(leave), Some(enter), true) = (leave, enter, fx.shown) else {
-            return;
-        };
-        let Some((rect, shot)) = fx.shot.take() else {
-            return;
-        };
-        fx.turning = Some((leave, rect, shot));
-        fx.motion = Some((true, enter));
-    }
-
     /// 返回 `card` 的动画状态。
     pub(crate) fn card_fx(&mut self, card: Card) -> &mut CardFx {
         match card {
@@ -429,7 +409,6 @@ impl App {
         settle(&mut self.settings.key_slide, |s| s.1);
         self.show_update_notice();
         settle(&mut self.git.log.fade, |c| *c);
-        self.settle_hint();
         self.tabs.slides.retain(|s| !s.clock.done());
         self.tabs.closing.retain(|g| !g.clock.done());
         self.tabs.opening.retain(|(_, c)| !c.done());
@@ -536,7 +515,6 @@ impl App {
             || self.settings.switch_slide.is_some()
             || self.settings.key_slide.is_some()
             || self.git.log.fade.is_some()
-            || self.hint_animating()
             || !self.tabs.slides.is_empty()
             || !self.tabs.closing.is_empty()
             || !self.tabs.opening.is_empty()

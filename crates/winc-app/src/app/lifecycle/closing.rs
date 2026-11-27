@@ -157,7 +157,6 @@ impl App {
     pub(crate) fn closing_pending(&self) -> bool {
         self.closing.prompt.is_some()
             || self.closing.continuation.is_some()
-            || self.format.then_close.is_some()
             || self.closing.confirming.is_some()
     }
 
@@ -167,7 +166,6 @@ impl App {
             |p: &Option<SavePrompt>| p.as_ref().is_some_and(|p| p.request == CloseRequest::Quit);
         quits(&self.closing.prompt)
             || quits(&self.closing.continuation)
-            || quits(&self.format.then_close)
             || self.closing.confirming == Some(CloseRequest::Quit)
     }
 
@@ -187,10 +185,6 @@ impl App {
     /// 退出时先备份未保存的内容（热退出），已备份的文档不再询问。
     pub(in crate::app) fn request_close(&mut self, request: CloseRequest) {
         if !self.finish_property_picker() {
-            return;
-        }
-        // 正在为关闭而保存或格式化时，等待其完成，不重复处理。
-        if self.format.then_close.is_some() {
             return;
         }
         // 后台在存的大文件先存完：要不要问、备份哪些，都按存完以后的样子算。
@@ -358,11 +352,6 @@ impl App {
                 self.pick(Pick::SaveAs(id));
                 return;
             }
-            if self.prepares_on_save(id) {
-                self.format.then_close = Some(prompt);
-                self.format_then_save(id);
-                return;
-            }
             if !self.save_document(id, None) {
                 return;
             }
@@ -464,7 +453,6 @@ impl App {
         let Some(index) = self.editor.index_of(id) else {
             return;
         };
-        self.cancel_format(id);
         if self.vim.is_some() {
             self.vim_store_marks(id);
         }
@@ -481,7 +469,6 @@ impl App {
         if let Some(doc) = self.editor.documents.get(index) {
             let id = doc.id;
             self.remember_closed(doc.path.clone(), doc.selection.head);
-            self.cancel_format(id);
             if self.vim.is_some() {
                 self.vim_store_marks(id);
             }

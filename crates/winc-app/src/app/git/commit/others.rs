@@ -711,42 +711,6 @@ impl App {
         counted.collect()
     }
 
-    /// 提交前格式化时其他仓库里要格式化的文件和所在仓库：会整个写进这次提交的文件（勾选式下
-    /// 勾上、没有按处取消勾选的；暂存区视图中暂存了、工作区里没有另外改动的）。修改上一次提交、
-    /// 有合并或变基进行中的仓库不一并提交，也不格式化。
-    pub(super) fn other_reformat_paths(&self) -> Vec<(PathBuf, PathBuf)> {
-        if !self.commit_shows_others() || self.git.commit.amend {
-            return Vec::new();
-        }
-        let root = self.git.root.as_deref();
-        let staging = self.git.commit.staging();
-        let summaries = (self.git.summaries.lock()).unwrap_or_else(PoisonError::into_inner);
-        let mut paths = Vec::new();
-        for repo in (self.git.repositories.iter()).filter(|r| Some(r.as_path()) != root) {
-            let Some(status) = summaries.get(repo).filter(|s| s.operation.is_none()) else {
-                continue;
-            };
-            for e in &status.entries {
-                let gone =
-                    [e.staged, e.unstaged].contains(&Some(winc_editor::git::Change::Deleted));
-                if gone || e.is_dir || e.conflicted() {
-                    continue;
-                }
-                let taken = match staging {
-                    true => commits_staged(e) && e.unstaged.is_none(),
-                    false => {
-                        let partial = self.git.commit.other_skipped.contains_key(&e.path);
-                        self.other_checked(&e.path) && !partial
-                    }
-                };
-                if taken {
-                    paths.push((e.path.clone(), repo.clone()));
-                }
-            }
-        }
-        paths
-    }
-
     /// 暂存区视图中其他仓库里随当前仓库一并提交的文件数。
     pub(crate) fn other_staged_count(&self) -> usize {
         self.other_staged().iter().map(|(_, count)| count).sum()

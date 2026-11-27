@@ -34,15 +34,15 @@ pub fn indent_menu(size_title: &str, editable: bool) -> Vec<MenuEntry> {
 /// 文件只能用 UTF-8）。
 pub fn encoding_menu(
     reopen: impl Fn(Encoding) -> bool,
-    hex: bool,
     save: impl Fn(Encoding) -> bool,
 ) -> Vec<MenuEntry> {
-    use MenuCommand::{ReopenEncoding, ReopenHex, SaveEncoding};
-    use MenuEntry::{Item, Separator, Submenu};
+    use MenuCommand::{ReopenEncoding, SaveEncoding};
+    use MenuEntry::{Item, Submenu};
 
-    let reopen = (CHOICES.iter().enumerate())
-        .map(|(i, &(encoding, _))| Item(ReopenEncoding(i), reopen(encoding)))
-        .chain([Separator, Item(ReopenHex, hex)]);
+    let reopen = CHOICES
+        .iter()
+        .enumerate()
+        .map(|(i, &(encoding, _))| Item(ReopenEncoding(i), reopen(encoding)));
     let save = CHOICES
         .iter()
         .enumerate()
@@ -114,32 +114,6 @@ pub fn document_language_menu(named: bool) -> Vec<MenuEntry> {
     menu.push(Item(MenuCommand::UsePlainText, true));
     menu.extend((languages.into_iter()).map(|(i, _)| Item(MenuCommand::UseLanguage(i), true)));
     menu
-}
-
-/// 去掉 `menu` 中只能在本机执行的项，并合并因此相邻的分隔线。
-///
-/// 远端主机上的文件无法交给本机的文件管理器，除非它所在的目录挂载在本机（`mounted`，见配置项
-/// `remote.localFolders`），此时显示的是本机上的那一份；`terminal` 为 `false`（终端模块关闭）时
-/// 「在终端中打开」只能启动本机的终端程序，同样去掉。
-pub fn without_local_only(menu: Vec<MenuEntry>, terminal: bool, mounted: bool) -> Vec<MenuEntry> {
-    use MenuCommand::{LocationReveal, OpenInTerminal, Reveal};
-
-    let mut kept: Vec<MenuEntry> = Vec::with_capacity(menu.len());
-    for entry in menu {
-        let dropped = match &entry {
-            MenuEntry::Item(Reveal | LocationReveal, _) => !mounted,
-            MenuEntry::Item(OpenInTerminal, _) => !terminal,
-            MenuEntry::Separator => matches!(kept.last(), None | Some(MenuEntry::Separator)),
-            _ => false,
-        };
-        if !dropped {
-            kept.push(entry);
-        }
-    }
-    if matches!(kept.last(), Some(MenuEntry::Separator)) {
-        kept.pop();
-    }
-    kept
 }
 
 /// 返回文件树菜单的菜单项。
@@ -428,29 +402,11 @@ pub fn search_result_menu(file: bool, replace: bool) -> Vec<MenuEntry> {
 /// `bookmarked` 决定「添加书签」「删除书签」哪个可用。没有选区时剪切、复制作用于光标所在的整行，
 /// 与 `⌘X`、`⌘C` 相同；只读的文件不能格式化、剪切、粘贴。格式化和修复总是可以点击，无法执行时
 /// 点击后说明原因。「粘贴」不检查剪贴板里有没有文字：弹出菜单不应读取其他应用复制的内容。
-/// 返回十六进制视图的右键菜单：复制（写成十六进制）、按文字复制、全选、转到偏移。
-///
-/// `selected` 为 `false`（空文件）时不能复制。
-pub fn hex_menu(selected: bool) -> Vec<MenuEntry> {
-    use MenuCommand::*;
-    use MenuEntry::{Item, Separator};
-    vec![
-        Item(Copy, selected),
-        Item(HexCopyText, selected),
-        Separator,
-        Item(SelectAll, true),
-        Item(HexGoTo, true),
-    ]
-}
-
 pub fn editor_menu(editable: bool, _selected: bool, bookmarked: bool) -> Vec<MenuEntry> {
     use MenuCommand::*;
     use MenuEntry::{Item, Separator};
 
     vec![
-        Item(GoToDefinition, true),
-        Item(FindReferences, true),
-        Separator,
         Item(AddBookmark, !bookmarked),
         Item(RemoveBookmark, bookmarked),
         Item(ListBookmarks, true),
@@ -519,17 +475,11 @@ pub fn diff_menu(right: bool, on_hunk: bool) -> Vec<MenuEntry> {
 ///
 /// `recent` 为最近列表的长度，`current` 为当前目录在最近列表中的位置，`opened` 表示是否已经
 /// 打开目录（没有打开时「关闭目录」不可用）。
-///
-/// `hosts` 为 `ssh` 配置中的主机数，远程模块关闭时为 `None`：模块开着时有「连接到 SSH 主机」，
-/// 配置了主机时它是子菜单，按主机列出，末尾是「其他主机…」。`connected` 表示打开的目录在远端
-/// 主机上：这时「关闭目录」之前有「断开 SSH 连接」。
 pub fn project_menu(
     recent: usize,
     current: Option<usize>,
     opened: bool,
     distros: usize,
-    hosts: Option<usize>,
-    connected: bool,
 ) -> Vec<MenuEntry> {
     use MenuEntry::{Alternate, Item, Separator, Submenu};
 
@@ -553,21 +503,6 @@ pub fn project_menu(
             t!("cmd-open-wsl-folder").to_owned(),
             items.collect(),
         ));
-    }
-    match hosts {
-        None => {}
-        Some(0) => menu.push(Item(MenuCommand::RemoteConnect, true)),
-        Some(hosts) => {
-            let mut items: Vec<MenuEntry> = (0..hosts)
-                .map(|i| Item(MenuCommand::RemoteHost(i), true))
-                .collect();
-            items.push(Separator);
-            items.push(Item(MenuCommand::RemoteOther, true));
-            menu.push(Submenu(t!("workspace-remote-submenu").to_owned(), items));
-        }
-    }
-    if connected {
-        menu.push(Item(MenuCommand::RemoteDisconnect, true));
     }
     menu.push(Item(MenuCommand::CloseFolder, opened));
     menu

@@ -25,7 +25,7 @@ pub const PICKER_TEXT_X: f32 = 40.0;
 
 /// 结果列表最多同时显示的行数（行）；结果更多时滚动。
 pub const PICKER_MAX_ROWS: usize = 10;
-/// 位置浮窗（定义、用法、书签）底栏的高度（逻辑像素）：显示选中项的完整路径。
+/// 位置浮窗（书签）底栏的高度（逻辑像素）：显示选中项的完整路径。
 pub const PLACES_FOOTER: f32 = 28.0;
 /// 位置浮窗的宽度（逻辑像素）：放得下文件名、行号和一行代码；窄窗口下随编辑区收窄。
 const PLACES_WIDTH: f32 = 720.0;
@@ -35,7 +35,7 @@ const PLACES_GAP: f32 = 4.0;
 /// 位置浮窗关闭时的状态，淡出动画据此绘制（此时面板状态已清空）。
 pub struct PlacesGhost {
     /// 列出的位置。
-    pub places: editor::definition::Places,
+    pub places: editor::places::Places,
     /// 筛选后留下的条目序号。
     pub hits: Vec<usize>,
     /// 选中项在 `hits` 中的序号。
@@ -153,7 +153,6 @@ impl App {
         self.overlays.picker.folders = false;
         self.overlays.picker.languages = false;
         self.overlays.picker.vim_list = None;
-        self.overlays.picker.remote = None;
         self.overlays.picker.notebook = notebook;
         self.overlays.picker.open = true;
         self.overlays.picker.doc = self.editor.active().map(|d| d.id);
@@ -200,7 +199,6 @@ impl App {
         self.overlays.picker.folders = false;
         self.overlays.picker.languages = false;
         self.overlays.picker.vim_list = None;
-        self.overlays.picker.remote = None;
         self.hits.picker_parts.clear();
         self.overlays.picker.fold = None;
         self.overlays.picker.places_in = None;
@@ -390,12 +388,6 @@ impl App {
             self.language_picker_refresh();
             return;
         }
-        if self.overlays.picker.remote.is_some() {
-            self.overlays.picker.goto = None;
-            self.drop_symbols();
-            self.remote_picker_refresh();
-            return;
-        }
         if self.overlays.picker.vim_list.is_some() {
             self.overlays.picker.goto = None;
             self.drop_symbols();
@@ -522,7 +514,6 @@ impl App {
             && !self.picker_lists_locations()
             && !self.overlays.picker.folders
             && !self.overlays.picker.languages
-            && self.overlays.picker.remote.is_none()
             && self.overlays.picker.vim_list.is_none();
         if self.overlays.picker.open && files && self.overlays.picker.places.is_none() {
             let scroll = self.overlays.picker.scroll;
@@ -582,8 +573,6 @@ impl App {
         if self.picker_lists_symbols() {
             self.symbols_preview();
         }
-        // 浏览远端目录时提前读取选中的子目录。
-        self.prefetch_remote_listing();
         if !self.picker_lists_symbols() && self.picker_backdrop_eligible() {
             self.request_overlay_redraw();
         } else {
@@ -639,10 +628,6 @@ impl App {
         }
         if self.overlays.picker.languages {
             self.language_picker_accept();
-            return;
-        }
-        if self.overlays.picker.remote.is_some() {
-            self.remote_picker_accept();
             return;
         }
         if self.overlays.picker.vim_list.is_some() {
@@ -748,7 +733,6 @@ impl App {
             && self.settings.motion.is_none()
             && self.notice.text.is_none()
             && self.notice.leaving.is_none()
-            && self.jumps.name_hint.is_none()
             && self.hits.conflict_card.is_none()
             && self.hits.merge_card.is_none()
             && !self.dragging()
@@ -820,8 +804,8 @@ pub struct Picker {
     pub(crate) scroll: f32,
     /// 在快速打开中输入 `@` 时列出的当前文件的符号。
     pub(crate) symbols: Option<crate::app::editor::symbols::SymbolList>,
-    /// 转到定义找到多个位置时，卡片中列出的位置。
-    pub(crate) places: Option<crate::app::editor::definition::Places>,
+    /// 位置浮窗中列出的位置（如书签列表）。
+    pub(crate) places: Option<crate::app::editor::places::Places>,
     /// 面板列出分支（分支选择器）时的各行。
     pub(crate) branch_rows: Option<Vec<crate::app::git::branch::picker::BranchRow>>,
     /// 面板列出位置（位置选择器）时的各行。
@@ -831,8 +815,6 @@ pub struct Picker {
     /// 面板是否列出语言（更改文件的语言）；为真时 `Picker::hits` 的含义见
     /// `status::language_picker::LanguageRow::of`。
     pub(crate) languages: bool,
-    /// 面板用于连接远端主机（选主机、浏览目录）时的内容；`Picker::hits` 是其各行的下标。
-    pub(crate) remote: Option<crate::app::remote::picker::RemoteList>,
     /// 面板列出 Vim 模式的寄存器、标记或文档时的各行；`Picker::hits` 是其中的下标。
     pub(crate) vim_list: Option<crate::app::vim::VimList>,
     /// 分支选择器、位置选择器的展开位置。
@@ -879,7 +861,6 @@ impl Default for Picker {
             location_rows: None,
             folders: false,
             languages: false,
-            remote: None,
             vim_list: None,
             anchor: GitAnchor::Branch,
             height: None,

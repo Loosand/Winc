@@ -58,12 +58,6 @@ impl App {
             let _ = reply.send(password);
             return;
         }
-        // 连接远端主机的对话框让位给询问，答复之后再回来（见 `connect_dialog_closed`）。
-        if asker == Asker::Remote {
-            self.connect_dialog_steps_aside();
-            // 同一张卡片换了一页：旧的一页淡出，询问淡入。
-            self.turn_card(crate::app::animation::Card::Dialog);
-        }
         self.close_form_dialog();
         let (name, focus) = match &prompt {
             Prompt::Username { .. } => (TextField::default(), DialogPart::Branch),
@@ -81,14 +75,7 @@ impl App {
         self.git.branch.asking = Some((asker, reply));
         let offered = remember.is_some();
         self.git.branch.remember = remember;
-        // 远端仓库的操作提出的请求：答复会发到那台主机上，对话框标明它。
-        let origin = match asker {
-            Asker::Git(_) => (self.git.root.as_deref())
-                .and_then(winc_backend::locate)
-                .map(|at| at.target.as_str().to_owned()),
-            Asker::Remote => None,
-        };
-        self.show_form_dialog(FormKind::Question(prompt, origin), name, focus);
+        self.show_form_dialog(FormKind::Question(prompt, None), name, focus);
         // 「记住密码」借用 `checkout` 一项，默认勾选。
         if let Some(dialog) = &mut self.overlays.form_dialog {
             dialog.checkout = offered;
@@ -122,15 +109,10 @@ impl App {
         if let Some(flag) = self.git.branch.remember.take() {
             flag.store(dialog.checkout, std::sync::atomic::Ordering::Relaxed);
         }
-        let asker = self.git.branch.asking.take().map(|(asker, reply)| {
+        if let Some((_, reply)) = self.git.branch.asking.take() {
             let _ = reply.send(answer);
-            asker
-        });
-        self.close_form_dialog();
-        // 答复的是连接远端主机时的询问：连接仍在进行，回到连接的对话框。
-        if asker == Some(Asker::Remote) {
-            self.restore_connect_dialog();
         }
+        self.close_form_dialog();
     }
 
     /// 第 `id` 个操作结束时调用：清除已填写的密码，关闭未答复的对话框，不按用户取消处理。
@@ -139,11 +121,6 @@ impl App {
             self.git.branch.password = None;
         }
         self.end_questions(Asker::Git(id));
-    }
-
-    /// 连接结束时调用：关闭未答复的对话框，不按用户取消处理。
-    pub(in crate::app) fn end_remote_questions(&mut self) {
-        self.end_questions(Asker::Remote);
     }
 
     fn end_questions(&mut self, asker: Asker) {

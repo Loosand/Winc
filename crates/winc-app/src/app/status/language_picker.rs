@@ -95,7 +95,6 @@ impl App {
         picker.location_rows = None;
         picker.folders = false;
         picker.vim_list = None;
-        picker.remote = None;
         picker.languages = true;
         picker.open = true;
         picker.doc = self.editor.active().map(|d| d.id);

@@ -163,10 +163,6 @@ impl Clipboard {
         self.whole_line = None;
         #[cfg(test)]
         {
-            // 与系统剪贴板一样放不下远端的文件（见上）：写入失败，原有内容不变。
-            if paths.iter().any(|path| winc_backend::is_remote(path)) {
-                return false;
-            }
             self.copied = None;
             self.copied_image = None;
             self.copied_files = paths.to_vec();

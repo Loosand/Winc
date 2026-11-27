@@ -25,7 +25,6 @@ impl App {
         // 跳转过渡期间绘制的是插值位置，而命中测试按滚动位置换算：过渡停在屏幕上显示的位置。
         self.settle_glides();
         self.scroll.fling = None;
-        self.dismiss_hint();
 
         // 窗口内的提示框、菜单打开时，这次按下只交给它们：点在菜单外面即关掉菜单。
         if (button == MouseButton::Left && self.alert_mouse_down())
@@ -309,7 +308,6 @@ impl App {
             }
             Target::RulerChange(hunk) => self.go_to_change(hunk),
             Target::Scrollbar(bar, grab) => self.grab_scrollbar(bar, grab),
-            Target::Minimap => self.press_minimap(y),
             Target::Crumb(index) => self.open_crumb_menu(index),
             Target::WorkspaceHistory(forward) => self.step_workspace_path(forward),
             Target::Status(item) => self.open_status_menu(item),

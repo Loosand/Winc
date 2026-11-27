@@ -255,10 +255,12 @@ impl App {
         Some(if setting == Setting::Version {
             let text_w = measure(&crate::layout::version_line());
             crate::layout::ProductParts::new(row.row).version_area(text_w)
-        } else {
+        } else if setting == Setting::ReleaseNotes || crate::layout::about_link(setting).is_some() {
             let text = crate::layout::about_value(setting).unwrap_or_default();
             let content = measure(&text) + crate::layout::LINK_ICON_W;
             crate::layout::value_area(row.control, content)
+        } else {
+            return None;
         })
     }
 
@@ -680,7 +682,6 @@ impl App {
             Setting::VimYankHighlight => self.config.vim_yank_highlight != Some(0),
             Setting::WordWrap => self.config.word_wrap == Some(true),
             Setting::WholeLines => self.config.whole_lines == Some(true),
-            Setting::Minimap => self.config.minimap == Some(true),
             Setting::Outline => self.config.outline != Some(false),
             Setting::LineNumbers => self.config.line_numbers != Some(false),
             Setting::DiffInline => self.config.diff_inline == Some(true),
@@ -704,7 +705,6 @@ impl App {
             Setting::GitTree => !self.git.commit.flat(),
             Setting::GitStagingArea => self.config.git_staging_area == Some(true),
             Setting::TerminalModule => self.terminal_enabled(),
-            Setting::RemoteModule => self.remote_enabled(),
             Setting::TerminalCopyOnSelect => self.config.terminal_copy_on_select == Some(true),
             Setting::TerminalConfirmClose => self.config.terminal_confirm_close != Some(false),
             Setting::TerminalPrompt => self.config.terminal_prompt != Some(false),
@@ -754,7 +754,6 @@ impl App {
             Setting::VimYankHighlight => self.config.vim_yank_highlight = (!on).then_some(0),
             Setting::WordWrap => self.config.word_wrap = Some(on),
             Setting::WholeLines => self.config.whole_lines = Some(on),
-            Setting::Minimap => self.config.minimap = Some(on),
             Setting::Outline => self.config.outline = Some(on),
             Setting::LineNumbers => self.config.line_numbers = Some(on),
             Setting::DiffInline => self.config.diff_inline = Some(on),
@@ -791,7 +790,6 @@ impl App {
             Setting::GitInlineBlame => self.config.git_inline_blame = Some(on),
             Setting::GitAutoFetch => self.config.git_auto_fetch = Some(on),
             Setting::TerminalModule => self.config.terminal_enabled = Some(on),
-            Setting::RemoteModule => self.config.remote_enabled = Some(on),
             Setting::TerminalCopyOnSelect => self.config.terminal_copy_on_select = Some(on),
             Setting::TerminalConfirmClose => self.config.terminal_confirm_close = Some(on),
             Setting::TerminalPrompt => self.config.terminal_prompt = Some(on),
@@ -810,10 +808,7 @@ impl App {
         if setting == Setting::WordWrap {
             self.word_wrap_changed();
         }
-        if matches!(
-            setting,
-            Setting::Minimap | Setting::LineNumbers | Setting::Outline
-        ) {
+        if matches!(setting, Setting::LineNumbers | Setting::Outline) {
             self.relayout();
         }
         // 关掉大纲时焦点在大纲上的，交给文件树。
@@ -838,9 +833,6 @@ impl App {
         }
         if setting == Setting::GitModule {
             self.git_folder_changed();
-        }
-        if setting == Setting::RemoteModule && !on {
-            self.stop_remote();
         }
         // 关闭终端模块时辅助进程和里面的 shell 一起结束；开着时等用户按 ⌃` 再启动。
         if setting == Setting::TerminalModule {

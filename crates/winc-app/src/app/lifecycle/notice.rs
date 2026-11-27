@@ -7,22 +7,10 @@ use super::*;
 /// 点击提示条按钮后执行的操作。
 #[derive(Debug, Clone, PartialEq)]
 pub enum NoticeAction {
-    /// 「查看输出」：在只读标签中打开格式化工具的完整输出。
-    ShowOutput(String),
-    /// 「安装方法」：在只读标签中打开各个格式化工具的安装说明。
-    ///
-    /// `dir` 是文件所在的目录。
-    Install { tools: Vec<String>, dir: PathBuf },
     /// 「查看输出」：在只读标签中打开 Git 操作的输出。
     GitOutput,
-    /// 「重新连接」：重新连接远端主机并回到其上的目录。
-    Reconnect(PathBuf),
-    /// 「取消」：取消正在进行的到远端主机的连接。
-    CancelConnect,
     /// 「取消」：取消文件树里正在进行的复制。
     CancelCopy,
-    /// 在系统文件管理器中显示这个路径，如刚下载到本机的文件。
-    Reveal(PathBuf),
     /// 「以管理员身份重试…」：保存被系统拒绝的文档，经系统的授权对话框再保存一次。
     SaveAsAdmin(DocumentId),
     /// 「查看更新日志」：在阅读标签中打开上次运行的版本（没有记录时为 `None`）之后的各版。
@@ -58,22 +46,15 @@ pub struct NoticeGhost {
 impl NoticeAction {
     /// 是否这条提示说明的事情正在进行：提示条上显示转动的图标，而不是提醒图标。
     pub fn in_progress(&self) -> bool {
-        matches!(self, NoticeAction::CancelConnect | NoticeAction::CancelCopy)
+        matches!(self, NoticeAction::CancelCopy)
     }
 
     /// 按钮上显示的文字。
     pub fn label(&self) -> &'static str {
         match self {
-            NoticeAction::ShowOutput(_) | NoticeAction::GitOutput => {
-                t!("workspace-notice-show-output")
-            }
-            NoticeAction::Install { .. } => t!("workspace-notice-install"),
-            NoticeAction::Reconnect(_) => t!("workspace-notice-reconnect"),
-            NoticeAction::CancelConnect | NoticeAction::CancelCopy => {
-                t!("workspace-notice-cancel")
-            }
+            NoticeAction::GitOutput => t!("workspace-notice-show-output"),
+            NoticeAction::CancelCopy => t!("workspace-notice-cancel"),
             NoticeAction::ReleaseNotes(_) => t!("workspace-notice-release-notes"),
-            NoticeAction::Reveal(_) => crate::system::reveal_label(),
             NoticeAction::SaveAsAdmin(_) => t!("workspace-save-admin"),
         }
     }
@@ -188,21 +169,8 @@ impl App {
         };
         self.clear_notice();
         match action {
-            NoticeAction::ShowOutput(text) => {
-                self.editor
-                    .show_output(t!("workspace-format-output-title"), &text);
-                self.focus = Focus::Editor;
-                self.relayout();
-                self.ensure_caret_visible();
-            }
-            NoticeAction::Install { tools, dir } => self.show_install_guide(&tools, &dir),
             NoticeAction::GitOutput => self.show_git_output(),
-            NoticeAction::Reconnect(folder) => {
-                self.reopen_remote(&folder);
-            }
-            NoticeAction::CancelConnect => self.cancel_remote(),
             NoticeAction::CancelCopy => self.cancel_copies(),
-            NoticeAction::Reveal(path) => self.reveal_in_file_manager(&path),
             NoticeAction::SaveAsAdmin(id) => self.save_as_admin(id),
             NoticeAction::ReleaseNotes(previous) => {
                 self.open_release_notes(crate::release_notes::Scope::Since(previous));

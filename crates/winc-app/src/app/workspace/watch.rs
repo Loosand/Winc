@@ -103,12 +103,6 @@ impl App {
         let (Some(root), Some(proxy)) = (root, self.link.proxy.clone()) else {
             return;
         };
-        // 远端主机上的目录由服务进程在那台主机上监视；启动要发出请求，在后台进行。
-        if winc_backend::is_remote(&root) {
-            self.start_remote_watcher(root);
-            self.index_folder();
-            return;
-        }
         // 监视启动失败（例如超出系统允许的监视数量）时 `watcher` 为 `None`，
         // 由 `check_disk` 在窗口重新获得焦点时检查文档并重读文件树。
         self.disk.watcher = Watcher::start(&root, move || {
@@ -126,14 +120,6 @@ impl App {
         let (Some(root), Some(proxy)) = (root, self.link.proxy.clone()) else {
             return;
         };
-        // 远端的监视随连接中断而结束：连接恢复后重新启动。
-        if let Some(at) = winc_backend::locate(&root) {
-            if winc_backend::remote::is_connected(&at.target) {
-                self.disk.watcher = None;
-                self.start_remote_watcher(root);
-            }
-            return;
-        }
         if !winc_editor::wsl::reachable(&root) {
             return;
         }
@@ -141,37 +127,6 @@ impl App {
             let _ = proxy.send_event(UserEvent::FilesChanged);
         };
         if let Ok(watcher) = Watcher::start(&root, wake) {
-            self.disk.watcher = Some(watcher);
-        }
-    }
-
-    /// 在后台启动对远端目录 `root` 的监视，启动好后由 [`App::poll_remote_watcher`] 接收。
-    ///
-    /// 启动失败（服务进程无法监视、连接中断）时没有监视，变化由 `check_disk` 在窗口重新获得
-    /// 焦点时检查。
-    fn start_remote_watcher(&mut self, root: PathBuf) {
-        let Some(proxy) = self.link.proxy.clone() else {
-            return;
-        };
-        let slot = Arc::clone(&self.remote.watching);
-        self.spawn_blocking_then(UserEvent::RemoteWatching, move || {
-            let wake = move || {
-                let _ = proxy.send_event(UserEvent::FilesChanged);
-            };
-            if let Ok(watcher) = Watcher::start(&root, wake) {
-                *slot
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(watcher);
-            }
-        });
-    }
-
-    /// 接收后台启动好的远端目录的监视；期间换了目录时丢弃（监视随之结束）。
-    pub(in crate::app) fn poll_remote_watcher(&mut self) {
-        let started = (self.remote.watching.lock())
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(watcher) = started.filter(|w| Some(w.root()) == self.editor.root()) {
             self.disk.watcher = Some(watcher);
         }
     }

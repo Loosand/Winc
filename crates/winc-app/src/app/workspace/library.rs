@@ -323,9 +323,7 @@ impl App {
     }
 
     pub(crate) fn library_root(&self) -> Option<&Path> {
-        self.editor
-            .root()
-            .filter(|root| !winc_backend::is_remote(root))
+        self.editor.root()
     }
 
     pub(crate) fn library_shown(&self) -> bool {

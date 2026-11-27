@@ -85,7 +85,6 @@ impl App {
             FormKind::Remote { editing } => {
                 self.remote_plan(editing.as_deref(), dialog.name.text(), dialog.second.text())
             }
-            FormKind::Connect => self.connect_plan(dialog),
             FormKind::Push(form) => self.push_plan(dialog, form),
             FormKind::GoToRevision | FormKind::CompareRevision { .. } => {
                 let revision = dialog.name.text().trim();
@@ -277,10 +276,6 @@ impl App {
             self.answer_git_question();
             return;
         }
-        if matches!(dialog.kind, FormKind::Connect) {
-            self.submit_connect();
-            return;
-        }
         if matches!(dialog.kind, FormKind::GoToRevision) {
             let revision = dialog.name.text().trim().to_owned();
             self.close_form_dialog();
@@ -330,7 +325,6 @@ impl App {
                 self.git_new_branch(name, from, checkout);
             }
             FormKind::Question(..)
-            | FormKind::Connect
             | FormKind::GoToRevision
             | FormKind::CompareRevision { .. }
             | FormKind::RenameGroup
@@ -541,7 +535,6 @@ impl App {
             .form_dialog
             .as_ref()
             .map(|dialog| &dialog.kind);
-        let connecting = matches!(shown, Some(FormKind::Connect));
         match part {
             DialogPart::Close | DialogPart::Cancel => self.close_form_dialog(),
             DialogPart::Confirm => self.submit_form_dialog(),
@@ -557,7 +550,6 @@ impl App {
                 };
                 self.open_context_menu(target, menu_below(base));
             }
-            DialogPart::Change if connecting => self.pick(crate::app::Pick::KeyFile),
             DialogPart::Change => self.pick(crate::app::Pick::WorktreeFolder),
             DialogPart::RebaseList => self.submit_form_dialog(),
             part @ (DialogPart::RebaseRow(_)

@@ -190,10 +190,9 @@ impl App {
 
     /// 把拖出窗口的 `paths` 交给系统的拖放，交出后结束窗口内的拖动；返回是否已交出。
     ///
-    /// 只交出本机的文件，远程的项留在窗口内。系统只提供复制，拖回 Winc 的窗口时不放下。
-    /// Linux 上不交出。
+    /// 系统只提供复制，拖回 Winc 的窗口时不放下。Linux 上不交出。
     fn drag_out(&mut self, paths: &[PathBuf]) -> bool {
-        if paths.iter().any(|path| winc_backend::is_remote(path)) || !self.start_drag_out(paths) {
+        if !self.start_drag_out(paths) {
             return false;
         }
         self.cancel_tree_drag();
@@ -356,8 +355,6 @@ impl App {
         let Some(root) = self.folder_root(&dir) else {
             return;
         };
-        let remote =
-            winc_backend::is_remote(&dir) || paths.iter().any(|path| winc_backend::is_remote(path));
         let copy = move |copying: &winc_editor::Copying| {
             let (mut copies, mut failures) = (Vec::new(), Vec::new());
             for from in &paths {
@@ -375,7 +372,7 @@ impl App {
             (copies, failures)
         };
         let done = |(copies, failures), copying| UserEvent::Copied(copies, failures, copying);
-        if let Some((copies, failures)) = self.spawn_copy(remote, false, copy, done) {
+        if let Some((copies, failures)) = self.spawn_copy(false, false, copy, done) {
             self.copied_into_tree(copies, failures);
         }
     }
@@ -458,10 +455,8 @@ impl App {
     ///
     /// 文档的内容和修改状态不变。某一项移动失败时提示原因，其余各项仍然移动。
     pub(in crate::app) fn move_entries(&mut self, paths: &[PathBuf], dir: &Path) {
-        // 先等待后台保存完成，否则保存会在原位置重新写出文件。远端的保存与移动按顺序执行。
-        if !winc_backend::is_remote(dir) {
-            self.wait_for_saves();
-        }
+        // 先等待后台保存完成，否则保存会在原位置重新写出文件。
+        self.wait_for_saves();
         let Some(root) = self.folder_root(dir) else {
             return;
         };

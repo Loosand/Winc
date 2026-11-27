@@ -35,9 +35,9 @@ use std::time::{Duration, Instant};
 
 use winc_editor::diff_view::{DiffSide, DiffView};
 use winc_editor::encoding::decode_unknown;
-use winc_editor::format::Cancel;
 use winc_editor::git::log::{Arrival, Compare, Details};
 use winc_editor::git::{Commit, CommitFile, Git, LogQuery, LogStream, Ref};
+use winc_editor::shell::Cancel;
 use winc_editor::{DocumentId, LARGE_FILE, looks_binary};
 use winc_i18n::t;
 use winc_render::Rect;

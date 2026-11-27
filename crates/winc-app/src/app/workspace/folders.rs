@@ -13,11 +13,9 @@ use crate::app::NoticeKind;
 use crate::app::input::context_menu::{MenuCommand, MenuEntry, MenuLabel};
 
 impl App {
-    /// 是否可以添加附加的目录：打开了本机的目录。
-    ///
-    /// 远端主机上的目录不能用本机的面板选择。
+    /// 是否可以添加附加的目录：已打开目录。
     pub(in crate::app) fn can_add_folder(&self) -> bool {
-        (self.editor.root()).is_some_and(|root| !winc_backend::is_remote(root))
+        self.editor.root().is_some()
     }
 
     /// 返回文件树菜单中管理附加目录的项；`folder` 是右键点中的目录行，空白处为 `None`。

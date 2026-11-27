@@ -288,7 +288,7 @@ fn stash_files(
     root: &std::path::Path,
     stash: &Stash,
 ) -> Result<Vec<(CommitFile, Option<String>, String)>, String> {
-    let cancel = winc_editor::format::Cancel::default();
+    let cancel = winc_editor::shell::Cancel::default();
     let base = stash.parents.first().cloned();
     let tracked = git.commit_files(root, base.as_deref(), &stash.oid, &cancel)?;
     let mut files: Vec<_> = (tracked.into_iter())

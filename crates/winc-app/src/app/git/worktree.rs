@@ -356,7 +356,7 @@ impl App {
     ) {
         self.git_operate_then(what, move |git, root| {
             add(git, root)?;
-            let cancel = winc_editor::format::Cancel::default();
+            let cancel = winc_editor::shell::Cancel::default();
             let summary = match git.copy_ignored(root, &dir, &globs, &cancel) {
                 Ok(0) => String::new(),
                 Ok(n) => t!("git-worktree-copied-ignored", count = n),
@@ -414,7 +414,7 @@ impl App {
         }
         let what = t!("git-op-check-worktree", name = name.as_str());
         self.git_operate_then(what, move |git, root| {
-            let cancel = winc_editor::format::Cancel::default();
+            let cancel = winc_editor::shell::Cancel::default();
             let check = git.check_worktree(root, &worktree, &cancel)?;
             let branch = worktree.branch().map(str::to_owned);
             let path = worktree.path;
@@ -458,12 +458,7 @@ impl App {
         let name = winc_editor::git::repo_name(&path);
         let message = t!("git-worktree-remove-confirm", name = name.as_str());
         if self.window.handle.is_some() {
-            // 远端主机上没有废纸篓：目录由 `git worktree remove` 直接删除。
-            let mut detail = if winc_backend::is_remote(&path) {
-                t!("git-worktree-remove-confirm-detail-remote").to_owned()
-            } else {
-                t!("git-worktree-remove-confirm-detail").to_owned()
-            };
+            let mut detail = t!("git-worktree-remove-confirm-detail").to_owned();
             // 有没提交的改动、游离的提交时没有默认按钮（↩ 不会误删）。
             let dirty = check.changed + check.untracked + check.unreachable > 0;
             if check.unreachable > 0 {
@@ -534,10 +529,7 @@ impl App {
             self.ask_close_worktree_window(&name, path);
             return;
         }
-        // 远端主机上的目录留给下面的 `git worktree remove --force` 删除。
-        if !winc_backend::is_remote(path)
-            && let Err(e) = (self.trash)(path)
-        {
+        if let Err(e) = (self.trash)(path) {
             let error = e.to_string();
             self.notify(
                 NoticeKind::Error,

@@ -109,7 +109,6 @@ impl App {
             }
         };
         if written {
-            self.forget_remote_copy();
             self.flash(winc_i18n::t!("editor-selection-copied"));
         } else {
             self.flash(winc_i18n::t!("editor-paste-clipboard-unavailable"));

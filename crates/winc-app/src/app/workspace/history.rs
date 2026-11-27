@@ -54,7 +54,7 @@ impl App {
             return Some((folder, true));
         }
         let path = self.editor.active()?.path.as_deref()?;
-        (!winc_backend::is_remote(path)).then_some((path, false))
+        Some((path, false))
     }
 
     pub(in crate::app) fn remember_workspace_visit(&mut self) {

@@ -445,9 +445,7 @@ impl App {
                 bar: Scrollbar::Settings,
                 ..
             } => {}
-            Drag::Minimap { from, scroll } => self.drag_minimap(y, from, scroll),
             Drag::LogText => self.drag_log_text(x, y),
-            Drag::Hex => self.drag_hex(x, y),
             Drag::MarkdownText => self.drag_markdown(x, y),
             Drag::ImageResize => self.drag_image_resize(x),
             Drag::TableCells => self.drag_table(x, y),

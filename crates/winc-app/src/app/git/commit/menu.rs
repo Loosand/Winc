@@ -195,7 +195,6 @@ impl App {
             MenuCommand::CommitAmend => self.toggle_amend(),
             MenuCommand::CommitSignOff => self.toggle_sign_off(),
             MenuCommand::CommitCheckTodo => self.toggle_check_todo(),
-            MenuCommand::CommitReformat => self.toggle_reformat(),
             MenuCommand::CommitMessage(i) => self.use_commit_message(i),
             MenuCommand::CommitCoAuthor(i) => self.add_co_author(i),
             MenuCommand::CommitNoVerify => self.git.commit.no_verify = !self.git.commit.no_verify,

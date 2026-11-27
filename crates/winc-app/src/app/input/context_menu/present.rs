@@ -247,17 +247,6 @@ impl App {
             return None;
         }
 
-        if self.hex_active() {
-            if let Some(at) = self.hex_byte_at(x, y) {
-                let inside = (self.editor.active().and_then(|d| d.hex.as_deref()))
-                    .is_some_and(|v| v.selection().contains(&at));
-                if !inside {
-                    self.hex_press(x, y);
-                    self.pointer.drag = Drag::None;
-                }
-            }
-            return self.editor.active().map(|d| d.id);
-        }
         let pos = self.pos_at(x.max(l.text.x), y)?;
         let doc = self.editor.active_mut()?;
         if !doc.shows_text() {
@@ -341,9 +330,6 @@ impl App {
                     current,
                     root.is_some(),
                     crate::system::wsl_distributions().len(),
-                    // 每次打开菜单重新读取：用户可能刚修改了 `ssh` 配置。
-                    (self.remote_enabled()).then(crate::app::remote::refresh_hosts),
-                    root.is_some_and(winc_backend::is_remote),
                 ));
                 self.add_folder_entries(&mut menu);
                 menu
@@ -388,13 +374,10 @@ impl App {
                 menu
             }
             MenuTarget::Tree(path) => self.tree_menu_entries(path.as_deref()),
-            MenuTarget::Editor(id) => 'editor: {
+            MenuTarget::Editor(id) => {
                 let Some(doc) = self.editor.document(*id) else {
                     return;
                 };
-                if let Some(view) = doc.hex.as_deref() {
-                    break 'editor hex_menu(view.size() > 0);
-                }
                 let bookmarked = doc
                     .bookmarks()
                     .lines()
@@ -592,17 +575,10 @@ impl App {
                 let Some(doc) = self.editor.document(*id) else {
                     return;
                 };
-                // 十六进制视图没有文本，按文件的大小判断是不是大文件。
-                let large = doc.is_large()
-                    || (doc.hex.as_deref()).is_some_and(|v| v.size() > winc_editor::LARGE_FILE);
-                let utf8_only = doc.hex.is_some() && large;
-                let reopen = |encoding| {
-                    doc.path.is_some()
-                        && (!large || utf8_only && encoding == winc_editor::Encoding::Utf8)
-                };
-                let hex = doc.path.is_some() && doc.hex.is_none();
-                encoding_menu(reopen, hex, |encoding| {
-                    doc.hex.is_none() && doc.encoding.writable() && doc.can_save_with(encoding)
+                let large = doc.is_large();
+                let reopen = |_encoding| doc.path.is_some() && !large;
+                encoding_menu(reopen, |encoding| {
+                    doc.encoding.writable() && doc.can_save_with(encoding)
                 })
             }
             MenuTarget::Language(id) => {
@@ -715,21 +691,6 @@ impl App {
             MenuTarget::TagOps(index) => {
                 crate::app::git::branch::tag_ops(*index, self.git.branch.running.is_some())
             }
-        };
-
-        // 菜单所指的文件在远端主机上：不列出只能在本机执行的项。
-        let place = match &target {
-            MenuTarget::Tree(path) => path.as_deref().or(self.editor.root()),
-            MenuTarget::Tab(id) => (self.editor.document(*id)).and_then(|d| d.path.as_deref()),
-            MenuTarget::CommitFile(path) | MenuTarget::LogFile(_, path) => Some(path.as_path()),
-            _ => None,
-        };
-        let entries = match place {
-            Some(path) if winc_backend::is_remote(path) => {
-                let mounted = self.local_folder(path).is_some();
-                without_local_only(entries, self.terminal_enabled(), mounted)
-            }
-            _ => entries,
         };
 
         // 菜单上显示的快捷键按菜单弹出的位置取：文件树中取文件树的键位，编辑区中取编辑区的键位。

@@ -161,7 +161,6 @@ impl App {
     /// [`Self::note_wheel_gesture`]）；鼠标滚轮按每个事件的主方向。鼠标滚轮的整格滚动分多帧完成
     /// （[`WheelGlide`]），触控板的滚动量立即生效。
     pub(in crate::app) fn scroll_by_wheel(&mut self, delta: MouseScrollDelta, gesture: bool) {
-        self.dismiss_hint();
         let scale = self
             .frame
             .renderer

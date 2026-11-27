@@ -61,16 +61,6 @@ impl App {
             return;
         }
 
-        // 「⋯」菜单打开时，按任意键（单独按修饰键除外）都会先关闭菜单；按的是 `Esc` 时只关闭
-        // 菜单，不再继续处理。
-        let modifier = matches!(
-            event.logical_key,
-            Key::Named(NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::Super)
-        );
-        // 名字旁边的提示气泡在按下任意键（单独按修饰键除外）时淡出。
-        if !modifier {
-            self.dismiss_hint();
-        }
         // 窗口内的提示框、菜单打开时，按键只给它们。
         if self.alert_key(&event.logical_key, cmd) || self.popup_key(event) {
             return;
@@ -296,10 +286,6 @@ impl App {
         }
         if self.log_active() {
             self.log_key(&event.logical_key);
-            return;
-        }
-        if self.hex_active() {
-            self.hex_key(&event.logical_key, cmd);
             return;
         }
         if self.editor.active().is_some_and(|d| d.diff.is_some()) {
@@ -764,10 +750,6 @@ impl App {
     /// 其余按键交给输入框，因为面板的输入部分就是一个普通的单行输入框。
     fn on_key_picker(&mut self, event: &KeyEvent, base: &str, cmd: bool) {
         let ctrl = cfg!(target_os = "macos") && self.pointer.modifiers.control_key();
-        // 浏览远端目录时 `⇥` 进入选中的目录，输入为空时 `⌫` 回到上级。
-        if self.remote_picker_key(&event.logical_key) {
-            return;
-        }
 
         if self.overlays.picker.input.is_multiline() && self.overlays.picker.property.is_some() {
             match event.logical_key {
@@ -782,10 +764,7 @@ impl App {
 
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => {
-                // 选择远端目录时先回到上一步（主机面板），再按一次才关闭。
-                if !self.remote_picker_back() {
-                    self.close_picker();
-                }
+                self.close_picker();
                 return;
             }
             Key::Named(NamedKey::Enter) => {

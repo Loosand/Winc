@@ -707,7 +707,8 @@ impl App {
             };
             md.pending = Some(revision);
             if md.parsed.is_none() && md.first_parse_since.is_none_or(|(s, _)| s != id) {
-                md.first_parse_since = Some((id, hold_since.unwrap_or_else(std::time::Instant::now)));
+                md.first_parse_since =
+                    Some((id, hold_since.unwrap_or_else(std::time::Instant::now)));
             }
             let (sender, proxy) = (md.sender.clone(), self.link.proxy.clone());
             winc_editor::background::spawn(move || {

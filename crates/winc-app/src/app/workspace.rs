@@ -88,11 +88,6 @@ pub(crate) struct DiskState {
     pub(in crate::app) saves: workspace::background_save::BackgroundSaves,
     /// 正在后台读取的、刚打开的文件。
     pub(in crate::app) loads: workspace::loading::Loads,
-    /// 正在后台执行的文件操作。
-    pub(in crate::app) file_work: workspace::file_work::FileWork,
-    /// 逐个执行远端文件改动的线程的任务队列（见 [`App::spawn_ordered_then`]）；尚未创建时为
-    /// `None`。
-    pub(in crate::app) ordered: Option<mpsc::Sender<OrderedTask>>,
 }
 
 /// 本窗口最近关闭的标签、最近切换到的文件和最近使用的命令。

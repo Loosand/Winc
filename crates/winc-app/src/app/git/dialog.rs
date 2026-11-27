@@ -148,29 +148,6 @@ impl QuestionView {
         }
     }
 
-    /// 返回连接远端主机的对话框内容：主机、端口和密钥文件。
-    pub(crate) fn connect() -> QuestionView {
-        let input = |label, placeholder| QuestionInput { label, placeholder };
-        QuestionView {
-            title: t!("workspace-remote-dialog-title").to_owned(),
-            message: None,
-            message_lines: 0,
-            values: Vec::new(),
-            inputs: vec![
-                input(
-                    t!("workspace-remote-dialog-host"),
-                    t!("workspace-remote-dialog-host-placeholder"),
-                ),
-                input(t!("workspace-remote-dialog-port"), "22"),
-                input(
-                    t!("workspace-remote-dialog-key"),
-                    t!("workspace-remote-dialog-key-placeholder"),
-                ),
-            ],
-            confirm: t!("workspace-remote-dialog-connect"),
-        }
-    }
-
     /// 返回 `prompt` 对应的对话框内容；`origin` 是提出请求的远端主机，排在只读信息的第一行。
     pub(crate) fn of(prompt: &Prompt, origin: Option<&str>) -> QuestionView {
         let mut view = Self::of_prompt(prompt);
@@ -439,8 +416,6 @@ pub(crate) enum FormKind {
     Property(crate::app::preview::markdown::properties::PropertyEdit),
     /// 交互式变基。
     Rebase(Box<RebaseForm>),
-    /// 连接远端主机：主机、端口，见 [`crate::app::remote`]。
-    Connect,
     /// 推送：远程、目标分支、待推送的提交，可一并推送标签。
     Push(Box<PushForm>),
 }
@@ -483,7 +458,6 @@ impl FormKind {
         match self {
             FormKind::Question(prompt, origin) => Some(QuestionView::of(prompt, origin.as_deref())),
             FormKind::Remote { editing } => Some(QuestionView::remote(editing.as_deref())),
-            FormKind::Connect => Some(QuestionView::connect()),
             FormKind::GoToRevision => Some(QuestionView::go_to_revision()),
             FormKind::CompareRevision { commit } => Some(QuestionView::compare_revision(commit)),
             FormKind::LogPath => Some(QuestionView::log_path()),
@@ -668,9 +642,6 @@ impl App {
         if matches!(dialog.kind, FormKind::Question(..)) {
             self.decline_git_question();
         }
-        if matches!(dialog.kind, FormKind::Connect) {
-            self.connect_dialog_closed();
-        }
         self.ime.field_preedit.clear();
         if self.focus == Focus::Dialog {
             self.focus = dialog.back;
@@ -682,10 +653,8 @@ impl App {
     /// 关闭询问对话框时调用：尚未答复的请求按用户取消处理。
     fn decline_git_question(&mut self) {
         self.git.branch.remember = None;
-        match self.git.branch.asking.take() {
-            Some((Asker::Git(_), _)) => self.git.branch.declined = true,
-            Some((Asker::Remote, _)) => self.cancel_remote(),
-            None => {}
+        if let Some((Asker::Git(_), _)) = self.git.branch.asking.take() {
+            self.git.branch.declined = true;
         }
     }
 
@@ -701,7 +670,6 @@ impl App {
         let window = self.layout.window;
         match self.overlays.form_dialog.as_ref().map(|d| &d.kind) {
             Some(FormKind::Clone) => DialogLayout::clone_form(window),
-            Some(FormKind::Connect) => DialogLayout::connect_form(window),
             Some(FormKind::Rebase(form)) => {
                 DialogLayout::rebase(window, form.rows.len(), form.pushed > 0)
             }

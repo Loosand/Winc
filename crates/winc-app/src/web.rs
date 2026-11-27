@@ -75,6 +75,7 @@ pub enum Failure {
     /// 服务器返回了错误。
     Server,
     /// 取回的内容不对。
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     Invalid,
     /// 其他原因：命令的错误输出，去掉了其中的用户名和密码。
     Other(String),
@@ -131,6 +132,7 @@ impl Failure {
 }
 
 /// 去掉 `text` 中网址里的用户名和密码（`scheme://用户:密码@主机` 中的 `用户:密码@`）。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) fn redact(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -157,6 +159,7 @@ pub(crate) fn redact(text: &str) -> String {
 /// # Errors
 ///
 /// 请求失败或超过上限时返回失败的原因。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) fn fetch(url: &str, timeout: u64, limit: Option<u64>) -> Result<Vec<u8>, Failure> {
     let timeout = timeout.to_string();
     let within = limit.map(|limit| limit.to_string());
@@ -335,6 +338,7 @@ pub(crate) fn image_redirect_protocols(referer: Option<&str>) -> &'static str {
 
 /// 下载命令（`wget` 为真时是 `wget`，否则是 `curl`）失败的原因；`proxied` 见
 /// [`Failure::from_curl`]。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) fn failure(output: &Output, wget: bool, proxied: bool) -> Failure {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let code = output.status.code();

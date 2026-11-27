@@ -228,7 +228,6 @@ impl App {
                     && !self.overlays.picker.folders
                     && !self.overlays.picker.languages
                     && self.overlays.picker.vim_list.is_none()
-                    && self.overlays.picker.remote.is_none()
                 {
                     self.close_picker();
                 } else if self.notebook_sidebar() {
@@ -243,8 +242,6 @@ impl App {
             }
             GoToSymbol => self.open_symbols(),
             GoToLine => self.open_goto(),
-            GoToDefinition => self.go_to_definition(),
-            FindReferences => self.find_references(),
             // 有日志标签且可以后退时先在日志里后退；日志里已经找不到的提交（例如被跳过的
             // 父提交）直接跳过，继续找回更早的记录。
             GoBack if self.log_navigate(false) => {}
@@ -262,8 +259,6 @@ impl App {
             OpenFile => self.pick(Pick::Open),
             OpenFolder => self.pick(Pick::OpenFolder),
             AddFolder => self.ask_add_folder(),
-            RemoteConnect => self.open_remote_picker(),
-            RemoteDisconnect => self.remote_disconnect(),
             OpenRecent => self.open_recent_folders(),
             Save => self.save_active(),
             SaveAs => {
@@ -355,7 +350,6 @@ impl App {
                     ws.select_all();
                 }
             }
-            SelectAll if self.hex_active() => self.select_all_hex(),
             SelectAll => editing(self, Command::SelectAll),
             // 语言没有任何注释写法（纯文本、日志、CSV）：说明一声，不是没反应。
             ToggleComment
@@ -466,15 +460,6 @@ impl App {
             PreviousBookmark => self.cycle_bookmark(false),
             ListBookmarks => self.list_bookmarks(),
             ClearBookmarks => self.clear_bookmarks(),
-            Format => self.format_active(),
-            FormatSelection => {
-                if self.editor.active().is_some_and(|d| d.selection.is_empty()) {
-                    self.flash(winc_i18n::t!("cmd-no-selection"));
-                } else {
-                    self.format_selection();
-                }
-            }
-            Fix => self.fix_active(),
 
             // 日志标签里 `⌘F` 是筛选输入框。
             Find if self.log_active() => {
@@ -580,7 +565,6 @@ impl App {
                 let all = self.config.render_whitespace == Some(All);
                 self.set_render_whitespace(if all { None } else { All });
             }
-            ToggleMinimap => self.settings_toggle(crate::layout::Setting::Minimap),
             // 差异标签里在两侧的改动之间跳；普通文件里在行号栏标出的改动之间跳。
             NextDifference | PreviousDifference => {
                 let forward = action == NextDifference;
@@ -750,12 +734,6 @@ impl App {
             {
                 return false;
             }
-            // 只有打开的目录在远端主机上时才有连接可断开。
-            Action::RemoteDisconnect
-                if !self.editor.root().is_some_and(winc_backend::is_remote) =>
-            {
-                return false;
-            }
             // 模块已经启用时没有要启用的；启用后内置终端的各条命令列出。
             Action::EnableTerminal if self.terminal_enabled() => return false,
             // Windows 安装包、deb 包已经把 `winc` 放进 `PATH`，没有要安装的。
@@ -769,7 +747,6 @@ impl App {
         match action.module() {
             Some(crate::keymap::Module::Git) => self.git_enabled(),
             Some(crate::keymap::Module::Terminal) => self.terminal_enabled(),
-            Some(crate::keymap::Module::Remote) => self.remote_enabled(),
             None => true,
         }
     }

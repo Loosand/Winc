@@ -6,7 +6,7 @@
 use winc_i18n::t;
 
 use super::*;
-use crate::app::editor::definition::{Place, PlacesKind};
+use crate::app::editor::places::{Place, PlacesKind};
 
 impl App {
     /// 切换光标所在行的书签（`⌥⌘K`）：没有则添加，已有则移除。
@@ -77,10 +77,8 @@ impl App {
             .bookmark_lines()
             .iter()
             .map(|&line| Place {
-                path: doc.path.clone().unwrap_or_default(),
                 relative: doc.name().into_owned(),
                 line,
-                col: None,
                 preview: doc.bookmark_preview(line),
                 marks: Vec::new(),
             })
@@ -90,7 +88,7 @@ impl App {
             return;
         }
 
-        self.show_places(PlacesKind::Bookmarks, String::new(), items);
+        self.show_places(PlacesKind::Bookmarks, items);
         self.request_redraw();
     }
 

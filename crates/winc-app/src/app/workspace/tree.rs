@@ -758,11 +758,7 @@ impl App {
         };
 
         let collapsed = at.filter(|&at| !ws.rows()[at].expanded);
-        let (index, field) = if notebook
-            && kind == EntryKind::File
-            && contents.is_none()
-            && !winc_backend::is_remote(&dir)
-        {
+        let (index, field) = if notebook && kind == EntryKind::File && contents.is_none() {
             // Reveal the sorted slot immediately so the focused field isn't clipped by the fold animation.
             if let Some(at) = collapsed {
                 ws.toggle(at);

@@ -391,7 +391,7 @@ impl App {
                 self.close_tabs(others.filter(|id| Some(*id) != active).collect());
             }
             AppCommand::List(listing) => self.vim_show_list(listing),
-            AppCommand::Definition => self.go_to_definition(),
+            AppCommand::Definition => {}
             AppCommand::OpenFile => self.vim_open_file(),
             AppCommand::NoHighlight => {
                 if let Some(state) = &mut self.vim {
@@ -436,12 +436,7 @@ impl App {
         if doc.path.as_ref() == Some(&to) {
             return self.vim_save();
         }
-        // 远端的路径在界面线程上查不到是否已有文件：不加 `!` 时不写入，不会不经确认就覆盖。
-        let unknown = winc_backend::is_remote(&to) && self.known_folder(&to).is_none();
-        if unknown && !force {
-            return self.flash(t!("editor-vim-file-unknown"));
-        }
-        if !unknown && self.may_exist(&to) && !force {
+        if self.may_exist(&to) && !force {
             return self.flash(t!("editor-vim-file-exists"));
         }
         if doc.path.is_none() {
@@ -676,7 +671,6 @@ impl App {
         self.overlays.picker.location_rows = None;
         self.overlays.picker.folders = false;
         self.overlays.picker.languages = false;
-        self.overlays.picker.remote = None;
         self.overlays.picker.vim_list = Some(VimList {
             kind: listing,
             rows,

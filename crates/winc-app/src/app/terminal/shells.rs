@@ -115,34 +115,6 @@ fn unix_shells(list: &str, login: Option<&str>, exists: impl Fn(&str) -> bool) -
     shells
 }
 
-/// 在远端主机上列出 shell 的脚本，由 `sh -c` 运行，参数是 `/etc/shells` 之外要查看的路径
-/// （[`remote_candidates`]）。输出登录 shell（`winc-login:`）和其中可以执行的路径
-/// （`winc-shell:`），每行一个。
-pub(crate) const REMOTE_DETECT: &str = concat!(
-    r#"l=$(cat /etc/shells 2>/dev/null); "#,
-    r#"s=${SHELL:-$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)}; "#,
-    r#"printf 'winc-login:%s\n' "$s"; "#,
-    r#"for p in "$s" $(printf '%s\n' "$l" | grep '^/') "$@"; do "#,
-    r#"[ -x "$p" ] && printf 'winc-shell:%s\n' "$p"; done; exit 0"#,
-);
-
-/// 返回 [`REMOTE_DETECT`] 的参数：`/etc/shells` 之外各个目录中可能有的 shell。
-pub(crate) fn remote_candidates() -> Vec<String> {
-    let paths = UNIX_DIRS
-        .iter()
-        .flat_map(|dir| UNIX_SHELLS.iter().map(move |name| format!("{dir}/{name}")));
-    paths.collect()
-}
-
-/// 把 [`REMOTE_DETECT`] 的输出整理成菜单里的 shell，规则与本机相同（[`unix_shells`]）。
-pub(crate) fn remote_shells(output: &str) -> Vec<ShellChoice> {
-    let login = output.lines().find_map(|l| l.strip_prefix("winc-login:"));
-    let found = output.lines().filter_map(|l| l.strip_prefix("winc-shell:"));
-    let found: Vec<&str> = found.map(str::trim).collect();
-    let login = login.map(str::trim).filter(|login| !login.is_empty());
-    unix_shells(&found.join("\n"), login, |path| found.contains(&path))
-}
-
 /// 返回 Windows 上的 shell：`has` 判断程序是否在 `PATH` 中，`git_bash` 是 Git Bash 的路径，
 /// `distros` 是 WSL 发行版。
 ///
@@ -260,11 +232,6 @@ fn detect() -> Vec<ShellChoice> {
     windows_shells(has, git_bash.as_deref(), &distros)
 }
 
-/// 返回启动命令 `command` 中的程序路径，供在远端启动时使用。
-pub(super) fn program_path(command: &str) -> Option<String> {
-    command_words(command).into_iter().next()
-}
-
 /// 记录的 shell 是否仍然可用：绝对路径的程序已卸载时，恢复现场改用默认 shell，避免启动失败。
 pub(super) fn still_usable(command: &str) -> bool {
     let words = command_words(command);
@@ -308,13 +275,7 @@ impl App {
     }
 
     /// 菜单里的 shell：设置了 `terminal.shell` 时它是默认的，排在最前面。
-    ///
-    /// 打开的目录在远端主机上时列出那台主机的 shell，登录 shell 排在最前；`terminal.shell` 是
-    /// 本机的命令，对远端不适用。检测完成之前为空。
     pub(crate) fn terminal_shell_list(&self) -> Vec<ShellChoice> {
-        if let Some(at) = self.editor.root().and_then(winc_backend::locate) {
-            return crate::app::remote::shells(&at.target);
-        }
         let first = self.configured_shell();
         let name = first.as_ref().map(|shell| shell.name.clone());
         let others = (self.terminal.shells.iter())
@@ -386,12 +347,11 @@ pub(super) fn helper_path() -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
-/// 设置中的默认 shell 是否用于在目录 `dir` 新建的终端：目录在远端主机上，或在 Windows 上位于
-/// WSL 发行版中时不用。菜单中明确选择的 shell 不受此限制。
+/// 设置中的默认 shell 是否用于在目录 `dir` 新建的终端：在 Windows 上位于 WSL 发行版中时不用。
+/// 菜单中明确选择的 shell 不受此限制。
 pub(super) fn default_shell_applies(dir: &[u8], windows: bool) -> bool {
     let dir = bytes_path(dir);
-    let in_distro = windows && winc_editor::wsl::locate(&dir).is_some();
-    !winc_backend::is_remote(&dir) && !in_distro
+    !(windows && winc_editor::wsl::locate(&dir).is_some())
 }
 
 /// 把 shell 报告的工作目录 `path` 转换为编辑器使用的路径（见 [`terminal_path`]）。重启标签和
@@ -403,21 +363,9 @@ pub(super) fn local_cwd(root: Option<&std::path::Path>, path: Vec<u8>) -> Vec<u8
     }
 }
 
-/// 把终端中的路径 `path` 转换为编辑器使用的路径：打开的目录 `root` 在远端主机上时，`/` 开头的
-/// 路径是那台主机上的路径；位于 WSL 发行版中时属于同一发行版。其余路径原样返回。
-///
-/// 已经是远端主机上的路径时原样返回：标签记下的目录、恢复的现场都是换算过的，Unix 上这种路径
-/// 同样以 `/` 开头，再换算一次会指向错误的位置。
+/// 把终端中的路径 `path` 转换为编辑器使用的路径：位于 WSL 发行版中时属于同一发行版；其余路径原样返回。
 pub(in crate::app) fn terminal_path(root: &std::path::Path, path: PathBuf) -> PathBuf {
-    if winc_backend::is_remote(&path) {
-        return path;
-    }
-    let bytes = os_bytes(path.as_os_str());
-    match winc_backend::locate(root) {
-        Some(at) if bytes.first() == Some(&b'/') => winc_backend::virtual_path(&at.target, &bytes),
-        Some(_) => path,
-        None => winc_editor::wsl::from_terminal(root, path),
-    }
+    winc_editor::wsl::from_terminal(root, path)
 }
 
 /// shell 集成脚本放在哪里（配置目录下的 `shell`）；`terminal.shellIntegration` 关了时不注入。
@@ -427,16 +375,6 @@ pub(super) fn integration_dir(config: &winc_config::Config) -> Option<Vec<u8>> {
     }
     let config = winc_config::config_path()?;
     Some(os_bytes(config.parent()?.join("shell").as_os_str()))
-}
-
-/// 远端主机上的 shell 是否注入集成脚本；本机的 shell 由辅助进程按脚本目录决定。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Integration {
-    /// 不注入：设置里关了，或要运行的是一条命令。
-    Off,
-    /// 注入；`prompt` 为假时不换上 winc 的提示符（`terminal.prompt`），`python` 为假时不加载
-    /// 启动目录中的 Python 环境。
-    On { prompt: bool, python: bool },
 }
 
 /// 新终端的启动方式：程序、参数和工作目录。
@@ -451,25 +389,10 @@ pub(super) struct Launch {
 
 /// 返回在目录 `cwd` 新建终端时的启动方式。
 ///
-/// `cwd` 在远端主机上时运行 `ssh` 登录那台主机并进入该目录，见 [`remote_launch`]。
-///
 /// 设置了 `shell` 时运行该命令（分词见 [`command_words`]）。在 Windows（`windows`）
 /// 上且 `cwd` 位于 WSL 发行版中时，进入对应的发行版和目录：目录由 `wsl.exe` 的参数指定，进程本身
 /// 从家目录启动。其余情况运行默认 shell。
-pub(super) fn launch(
-    shell: Option<&str>,
-    cwd: Vec<u8>,
-    windows: bool,
-    integration: Integration,
-) -> Launch {
-    if let Some(at) = winc_backend::locate(&bytes_path(&cwd)) {
-        let ready = crate::app::remote::shell_ready(&at.target);
-        // 只接受那台主机上的绝对路径（由调用方按检测到的 shell 确认）；本机的命令不适用。
-        let shell = shell
-            .and_then(program_path)
-            .filter(|path| path.starts_with('/'));
-        return remote_launch(&at, integration, ready, shell.as_deref());
-    }
+pub(super) fn launch(shell: Option<&str>, cwd: Vec<u8>, windows: bool) -> Launch {
     // Windows 上 `/` 开头的目录来自 WSL 中的 shell，不是 Windows 程序可用的工作目录。
     let cwd = if windows && cwd.first() == Some(&b'/') {
         Vec::new()
@@ -501,45 +424,6 @@ pub(super) fn launch(
     Launch {
         program: Some(b"wsl.exe".to_vec()),
         args: args.iter().map(|arg| arg.as_bytes().to_vec()).collect(),
-        login: false,
-        cwd: Vec::new(),
-    }
-}
-
-/// 返回在远端主机上的目录 `at` 新建终端时的启动方式：在本机的终端里运行 `ssh`，登录后进入该
-/// 目录并换成那台主机上用户的登录 shell；启用了 shell 集成时一并注入（命令块、当前目录）。
-pub(super) fn remote_launch(
-    at: &winc_backend::Location,
-    integration: Integration,
-    ready: bool,
-    shell: Option<&str>,
-) -> Launch {
-    let start = match (integration, shell) {
-        (Integration::On { prompt, python }, _) if ready => {
-            winc_pty::scripts::remote_command(prompt, python, shell)
-        }
-        (_, Some(shell)) => format!("exec {} -l", winc_pty::scripts::single_quoted(shell)),
-        (_, None) => "exec $SHELL -l".to_owned(),
-    };
-    let dir = String::from_utf8_lossy(&at.path).replace('\'', r"'\''");
-    let mut args: Vec<String> = ["-t", "-o", "RemoteCommand=none"].map(str::to_owned).into();
-    if let Some(options) = winc_backend::remote::shared(&at.target) {
-        args.extend(options);
-    }
-    if let Some(key) = winc_backend::remote::identity(&at.target) {
-        args.extend(["-i".to_owned(), key]);
-    }
-    if let Some(port) = at.target.port() {
-        args.extend(["-p".to_owned(), port.to_string()]);
-    }
-    args.extend([
-        at.target.host().to_owned(),
-        "--".to_owned(),
-        format!("cd '{dir}' && {start}"),
-    ]);
-    Launch {
-        program: Some(b"ssh".to_vec()),
-        args: args.into_iter().map(String::into_bytes).collect(),
         login: false,
         cwd: Vec::new(),
     }

@@ -195,11 +195,7 @@ pub(crate) fn restore_tabs(
         let index = match tab {
             Tab::File(path) => take(&mut saved, |b| b.path.as_deref() == Some(path.as_path()))
                 .and_then(|backup| put_back(editor, backup))
-                // 远端的文件在界面线程上无法查询：仍然恢复标签，文件不存在时由读取报告。
-                .or_else(|| {
-                    let found = winc_backend::is_remote(path) || winc_backend::fs::is_file(path);
-                    found.then(|| editor.open_pending(path))
-                }),
+                .or_else(|| winc_backend::fs::is_file(path).then(|| editor.open_pending(path))),
             Tab::Untitled(name) => take(&mut saved, |b| {
                 b.path.is_none() && b.file.file_name().is_some_and(|n| *n == **name)
             })
@@ -664,10 +660,9 @@ impl App {
     pub(in crate::app) fn session_tab(&self, doc: &winc_editor::Document) -> Option<Tab> {
         let backed_up = self.backup.written.contains_key(&doc.id);
         match &doc.path {
-            // 发行版暂时无法访问、文件在远端主机上时无法判断文件是否存在，保留标签。
+            // 发行版暂时无法访问时无法判断文件是否存在，保留标签。
             Some(path)
                 if backed_up
-                    || winc_backend::is_remote(path)
                     || winc_backend::fs::is_file(path)
                     || !winc_editor::wsl::reachable(path) =>
             {

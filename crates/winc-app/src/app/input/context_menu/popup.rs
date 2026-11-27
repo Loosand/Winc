@@ -746,9 +746,6 @@ impl App {
         if command == MenuCommand::CommitCheckTodo {
             return self.state.commit_check_todo;
         }
-        if command == MenuCommand::CommitReformat {
-            return self.state.commit_reformat;
-        }
         if command == MenuCommand::TerminalMaximize {
             return self.terminal.maximized;
         }
@@ -797,9 +794,8 @@ impl App {
                 MenuCommand::IndentSize(n) => doc.indent_size(tab_width) == n,
                 MenuCommand::LineEnding(eol) => doc.line_ending == eol,
                 MenuCommand::ReopenEncoding(i) | MenuCommand::SaveEncoding(i) => {
-                    doc.hex.is_none() && CHOICES.get(i).is_some_and(|(e, _)| *e == doc.encoding)
+                    CHOICES.get(i).is_some_and(|(e, _)| *e == doc.encoding)
                 }
-                MenuCommand::ReopenHex => doc.hex.is_some(),
                 MenuCommand::UseLanguage(i) => (winc_syntax::languages().get(i))
                     .is_some_and(|l| std::ptr::eq(*l, doc.highlighter.language())),
                 MenuCommand::UsePlainText => doc.highlighter.language().id == "text",

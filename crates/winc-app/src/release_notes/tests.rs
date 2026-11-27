@@ -80,17 +80,18 @@ fn images_and_html_are_made_inert_outside_code() {
     // 没有结束的反引号是普通文字，其后的内容照常处理。
     assert_eq!(made("a ` <b>\n"), "a ` &lt;b>\n");
     // 链接、加粗和感叹号不受影响。
-    let plain = "- **加粗**、[链接](https://winc.si)，完成！\n";
+    let plain = "- **加粗**、[链接](https://example.com)，完成！\n";
     assert_eq!(made(plain), plain);
 }
 
 #[test]
-fn each_language_has_its_own_changelog_and_page() {
-    assert_eq!(url(Locale::ZhCn), "https://winc.si/releases/notes/zh-cn.md");
-    assert_eq!(url(Locale::EnUs), "https://winc.si/releases/notes/en.md");
-    assert!(page(Locale::ZhCn).contains("/zh-cn/"));
-    assert!(!page(Locale::EnUs).contains("/zh-cn/"));
-    // 下载页与更新日志同一页，不带跳到更新日志的锚点。
-    assert_eq!(downloads(Locale::ZhCn), "https://winc.si/zh-cn/downloads");
-    assert_eq!(downloads(Locale::EnUs), "https://winc.si/downloads");
+fn each_language_has_a_local_baseline_and_no_upstream_url() {
+    assert!(baseline(Locale::ZhCn).contains("## 0.1.0"));
+    assert!(baseline(Locale::EnUs).contains("## 0.1.0"));
+    assert!(load(Locale::ZhCn, &Scope::All, "").is_some());
+    assert!(load(Locale::EnUs, &Scope::All, "").is_some());
+    assert_eq!(page(Locale::ZhCn), None);
+    assert_eq!(page(Locale::EnUs), None);
+    assert_eq!(downloads(Locale::ZhCn), None);
+    assert_eq!(downloads(Locale::EnUs), None);
 }

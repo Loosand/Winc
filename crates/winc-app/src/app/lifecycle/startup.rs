@@ -102,7 +102,6 @@ impl App {
                 sticky_cache: None,
                 wraps: Arc::default(),
                 line_tokens: Default::default(),
-                minimap_rows: Default::default(),
                 max_scroll_x: None,
                 line_widths: ((winc_editor::DocumentId(0), 0, 0), Default::default()),
                 ruler_cache: None,
@@ -155,10 +154,8 @@ impl App {
                 keyed: false,
             },
             jumps: crate::app::editor::Jumps {
-                name_hint: None,
                 navigation: Default::default(),
                 paths: Default::default(),
-                definitions: None,
             },
             overlays: crate::app::input::Overlays {
                 form_dialog: None,
@@ -189,8 +186,6 @@ impl App {
                 rereads: Default::default(),
                 saves: Default::default(),
                 loads: Default::default(),
-                file_work: Default::default(),
-                ordered: None,
             },
             history: crate::app::workspace::History {
                 files: recent_files,
@@ -200,13 +195,12 @@ impl App {
             pending_chord: None,
             taps: Default::default(),
             settings: SettingsState::default(),
-            format: FormatState::new(formatter()),
+            shell: shell(),
             git: {
                 let mut git = git::GitState::default();
                 git.commit.set_compact(compact);
                 git
             },
-            remote: Default::default(),
             trash: crate::system::move_to_trash,
             closing: Default::default(),
             ask_on_quit: Arc::new(AtomicBool::new(false)),
@@ -348,16 +342,15 @@ impl App {
     }
 }
 
-/// 创建运行格式化工具的 `Formatter`。
+/// 创建运行外部程序所用的 `Shell` 环境。
 ///
-/// 测试中使用测试进程自身的环境变量，不运行用户的登录 shell；`PATH` 只含系统目录，使项目中
-/// 无法确定格式化工具时的选择结果与本机已安装的工具无关。
-fn formatter() -> winc_editor::format::Formatter {
+/// 测试中使用测试进程自身的环境变量，不运行用户的登录 shell。
+fn shell() -> winc_editor::shell::Shell {
     if cfg!(test) {
         let mut vars: Vec<_> = std::env::vars_os().filter(|(k, _)| k != "PATH").collect();
         vars.push(("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into()));
-        winc_editor::format::Formatter::with_vars(vars)
+        winc_editor::shell::Shell::with_vars(vars)
     } else {
-        winc_editor::format::Formatter::default()
+        winc_editor::shell::Shell::default()
     }
 }

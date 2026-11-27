@@ -1,8 +1,7 @@
 //! 命令行参数的解析与用法说明，入口是 [`parse`] 与 [`usage`]。
 //!
 //! 不带参数时恢复上次的现场；给出目录或文件时打开它们，多个文件以第一个文件所在的目录作为项目。
-//! 命令行上的 `文件:行[:列]` 跳到指定位置，行号和列号从 1 起。`ssh://主机/路径` 打开远端主机上
-//! 的目录和文件（见 [`remote_open`]）。`-w`、`--wait` 在给出的文件的标签
+//! 命令行上的 `文件:行[:列]` 跳到指定位置，行号和列号从 1 起。`-w`、`--wait` 在给出的文件的标签
 //! 全部关闭后退出，供 `git` 等程序作为编辑器调用；`-` 读取标准输入；`-n`、`--new-instance` 不交给
 //! 正在运行的 winc，由当前进程新建实例。
 
@@ -123,23 +122,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             parsed.targets.push(target);
             continue;
         }
-        if scheme.is_some_and(|s| s.eq_ignore_ascii_case(SSH_SCHEME)) {
-            let Some(target) = ssh(&text) else {
-                return Err(t!("cmd-cli-bad-ssh", link = text.as_ref()).to_owned());
-            };
-            parsed.targets.push(target);
-            continue;
-        }
         parsed.targets.push(target(arg));
     }
     if let Some(distro) = &distro {
-        let local = parsed.targets.iter_mut();
-        for target in local.filter(|t| !winc_backend::is_remote(&t.path)) {
+        for target in &mut parsed.targets {
             let path = std::mem::take(&mut target.path);
             target.path = winc_editor::wsl::from_distro(distro, path);
         }
     }
-    check_remote(&parsed)?;
     if parsed.wait && parsed.targets.is_empty() && !parsed.stdin {
         return Err(format!("{}\n\n{}", t!("cmd-cli-wait-needs-file"), usage()));
     }
@@ -211,106 +201,10 @@ fn percent_decode(text: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// 远端主机上的目录和文件的参数前缀，参数为 `ssh://[用户@]主机[:端口]/绝对路径[:行[:列]]`。
-pub const SSH_SCHEME: &str = "ssh";
-
-/// 把 `ssh://[用户@]主机[:端口]/绝对路径[:行[:列]]` 解析为 [`Target`]，路径是该主机的虚拟路径，
-/// 行号和列号从 1 起。
-///
-/// 主机按 [`winc_backend::Target`] 校验，可以是 `~/.ssh/config` 中的别名。路径末尾的 `:正整数`
-/// 总是作为行号和列号，路径中的 `:` 写作 `%3A`；之后路径按百分号编码解码，查询和片段忽略。
-/// 不符合时返回 `None`。
-fn ssh(url: &str) -> Option<Target> {
-    let (scheme, rest) = url.split_once("://")?;
-    if !scheme.eq_ignore_ascii_case(SSH_SCHEME) {
-        return None;
-    }
-    let slash = rest.find('/')?;
-    let host = winc_backend::Target::new(&rest[..slash])?;
-    let rest = &rest[slash..];
-    let rest = &rest[..rest.find(['?', '#']).unwrap_or(rest.len())];
-    let (path, line, col) = position(rest).unwrap_or((rest, None, None));
-    let path = percent_decode(path)?;
-    Some(Target {
-        path: winc_backend::virtual_path(&host, path.as_bytes()),
-        line,
-        col,
-    })
-}
-
-/// 命令行上 `ssh://` 参数要打开的远端项目。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteOpen {
-    /// 连接目标。
-    pub target: winc_backend::Target,
-    /// 作为项目打开的目录（虚拟路径）。
-    pub folder: PathBuf,
-    /// 在项目中打开的文件，带行号时跳到该位置。
-    pub files: Vec<Target>,
-}
-
-/// 返回命令行目标中的远端项目；没有 `ssh://` 参数时返回 `None`。
-///
-/// 远端路径在连接之前分不出目录和文件，按写法区分：带行号的、位于另一个参数之下的是文件，
-/// 其余的是目录（只有一个）。只给出文件时，第一个文件所在的目录作为项目。
-pub fn remote_open(targets: &[Target]) -> Option<RemoteOpen> {
-    let target = winc_backend::locate(&targets.first()?.path)?.target;
-    let folder = (targets.iter())
-        .find(|t| !remote_file(t, targets))
-        .map(|t| t.path.clone())
-        .or_else(|| Some(targets.first()?.path.parent()?.to_path_buf()))?;
-    let files = targets.iter().filter(|t| remote_file(t, targets));
-    Some(RemoteOpen {
-        target,
-        folder,
-        files: files.cloned().collect(),
-    })
-}
-
-/// `ssh://` 参数 `target` 是否按文件打开，见 [`remote_open`]。
-fn remote_file(target: &Target, targets: &[Target]) -> bool {
-    target.line.is_some()
-        || (targets.iter()).any(|t| t.path != target.path && target.path.starts_with(&t.path))
-}
-
-/// 检查 `ssh://` 参数：都指向同一个连接目标，不与本机路径、`--wait` 和 `-` 一起使用，其中至多
-/// 一个是目录。
-fn check_remote(parsed: &Args) -> Result<(), String> {
-    let mut remote = parsed.targets.iter().map(|t| winc_backend::locate(&t.path));
-    let Some(first) = remote.next().flatten() else {
-        return match remote.flatten().next() {
-            Some(_) => Err(t!("cmd-cli-ssh-mixed").to_owned()),
-            None => Ok(()),
-        };
-    };
-    if remote.any(|at| at.is_none_or(|at| at.target != first.target)) {
-        return Err(t!("cmd-cli-ssh-mixed").to_owned());
-    }
-    if parsed.wait || parsed.stdin {
-        return Err(t!("cmd-cli-ssh-one-off").to_owned());
-    }
-    // 同一个目录写了几次仍是一个目录。
-    let targets = &parsed.targets;
-    let mut folders = (targets.iter()).filter(|t| !remote_file(t, targets));
-    if let Some(folder) = folders.next()
-        && folders.any(|t| t.path != folder.path)
-    {
-        return Err(t!("cmd-cli-ssh-folders").to_owned());
-    }
-    Ok(())
-}
-
-/// 返回把 `target` 交给另一个 winc 进程时的参数：本机的是绝对路径，远端的是 `ssh://` 写法，
-/// 有行号时加上 `:行[:列]`（从 1 起）。
+/// 返回把 `target` 交给另一个 winc 进程时的参数：绝对路径，有行号时加上 `:行[:列]`（从 1 起）。
 #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 pub fn argument(target: &Target) -> OsString {
-    let mut arg = match winc_backend::locate(&target.path) {
-        Some(at) => {
-            let host = at.target.as_str();
-            OsString::from(format!("ssh://{host}{}", percent_encode(&at.path)))
-        }
-        None => OsString::from(absolute(&target.path)),
-    };
+    let mut arg = OsString::from(absolute(&target.path));
     if let Some(line) = target.line {
         arg.push(format!(":{}", line + 1));
         if let Some(col) = target.col {
@@ -326,10 +220,6 @@ pub fn argument(target: &Target) -> OsString {
 /// 路径不存在时（例如 `winc 新目录/新文件.txt`）解析最近一个存在的上级目录，再拼上其余部分；
 /// 只解析文件所在的那一层不够：该层也可能不存在，而当前目录本身可能经由符号链接进入。
 pub fn absolute(path: &Path) -> PathBuf {
-    // 远端的路径（虚拟路径）本身就是绝对路径，不在本机上解析。
-    if winc_backend::is_remote(path) {
-        return path.to_path_buf();
-    }
     if let Ok(path) = winc_config::files::canonicalize(path) {
         return path;
     }
@@ -343,19 +233,6 @@ pub fn absolute(path: &Path) -> PathBuf {
         }
     }
     path
-}
-
-/// 把路径编码为 URL 的路径部分：保留字母、数字、`/` 和 `-._~`，其余字节写作 `%XX`。
-fn percent_encode(path: &[u8]) -> String {
-    let mut out = String::with_capacity(path.len());
-    for &byte in path {
-        if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
-            out.push(char::from(byte));
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
 }
 
 /// 拆出 `路径:行:列` 或 `路径:行` 末尾的行号和列号，返回时减 1 成为从 0 起；末尾不是正整数或

@@ -62,15 +62,7 @@ impl App {
                 saved: job.run(),
             });
         };
-        // 远端的文件与改名、移动、删除在同一个线程上按顺序执行。
-        let remote = (self.editor.document(id))
-            .and_then(|doc| doc.path.as_deref())
-            .is_some_and(winc_backend::is_remote);
-        if remote {
-            self.spawn_ordered_then(UserEvent::Saved, save);
-        } else {
-            self.spawn_then(UserEvent::Saved, save);
-        }
+        self.spawn_then(UserEvent::Saved, save);
     }
 
     /// 收取后台保存完成的文档。

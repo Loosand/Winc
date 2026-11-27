@@ -273,7 +273,6 @@ impl App {
                 self.open_worktree_dialog();
             }
             PickerPart::ForgetFolder(row) => self.forget_picker_folder(row),
-            PickerPart::ForgetRemote(row) => self.forget_remote_row(row),
         }
         self.request_redraw();
     }

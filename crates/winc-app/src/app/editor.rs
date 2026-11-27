@@ -9,15 +9,12 @@ pub(super) mod bookmarks;
 pub(crate) mod clipboard;
 pub(super) mod conflict;
 pub(super) mod cursors;
-pub(crate) mod definition;
 pub(super) mod editing;
 pub(super) mod find;
 pub(super) mod folding;
-pub(super) mod format;
-pub(crate) mod hex;
-pub(super) mod hint;
 pub(super) mod navigation;
 pub(super) mod paste;
+pub(crate) mod places;
 pub(super) mod scrollbar;
 pub(super) mod sticky;
 pub(super) mod symbols;
@@ -30,8 +27,6 @@ pub(crate) struct EditorCaches {
     pub(in crate::app) wraps: Arc<Mutex<Vec<(DocumentId, winc_editor::WrapResult)>>>,
     /// 长行的着色结果，跨帧复用（见 [`crate::view::LineTokens`]）。
     pub(crate) line_tokens: std::cell::RefCell<crate::view::LineTokens>,
-    /// 缩略图中各行的小块，跨帧复用（见 [`crate::view::MinimapRows`]）。
-    pub(crate) minimap_rows: std::cell::RefCell<crate::view::MinimapRows>,
     /// 最近一次计算的最大横向滚动量及其依据的条件（见 [`App::text_max_scroll_x`]）。
     pub(in crate::app) max_scroll_x: Option<(editor::editing::MaxScrollKey, f32)>,
     /// 各行的显示宽度，供 [`App::text_max_scroll_x`] 复用。
@@ -56,15 +51,11 @@ pub(crate) struct InputBars {
     pub prompt_kind: PromptKind,
 }
 
-/// 跳转：位置历史、后台的定义查找和名字旁的提示。
+/// 跳转：位置历史与路径历史。
 pub(crate) struct Jumps {
-    /// 光标所在名字旁边的提示气泡（例如没有找到定义）；没有时为 `None`。
-    pub(crate) name_hint: Option<NameHint>,
     /// 「后退」「前进」使用的位置历史。
     pub(in crate::app) navigation: editor::navigation::Navigation,
     pub(in crate::app) paths: workspace::history::PathHistory,
-    /// 正在后台进行的项目内定义查找。
-    pub(in crate::app) definitions: Option<editor::definition::DefinitionSearch>,
 }
 
 impl App {
@@ -75,19 +66,11 @@ impl App {
             .max(1.0) as usize
     }
 
-    /// 忘掉文件树里复制的远端文件：剪贴板里的文字是 Winc 刚写入的别的内容（即使碰巧与复制时
-    /// 写入的路径相同，例如「复制路径」），不再当作那些文件。
-    pub(in crate::app) fn forget_remote_copy(&mut self) {
-        *self.link.shared.remote_copy.borrow_mut() = None;
-    }
-
     /// 把 `text` 写入剪贴板。
     ///
     /// `whole_line` 为 `true` 表示复制的是整行，粘贴到编辑区时插入当前行上方。
     pub(in crate::app) fn set_clipboard(&mut self, text: String, whole_line: bool) {
-        if self.clipboard.set_text(text, whole_line) {
-            self.forget_remote_copy();
-        }
+        self.clipboard.set_text(text, whole_line);
     }
 
     /// 返回剪贴板中的文本；没有时返回 `None`。

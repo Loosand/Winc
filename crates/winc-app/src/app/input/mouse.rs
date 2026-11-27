@@ -187,7 +187,6 @@ impl App {
         if self.scroll.wheel.zoom.abs() >= 1.0 {
             let up = self.scroll.wheel.zoom > 0.0;
             self.scroll.wheel.zoom = 0.0;
-            self.dismiss_hint();
             // PDF 和图片缩放时鼠标处的内容保持在原位。
             match zoomed {
                 Zoomed::Pdf => drop(self.zoom_pdf(Some(up), Some(self.pointer.mouse))),

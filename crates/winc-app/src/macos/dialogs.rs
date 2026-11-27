@@ -359,9 +359,8 @@ fn render_application_icon_32(path: &Path) -> Option<winc_preview::image::Pixels
             let (r, g, b) = if a == 0 || a == 255 {
                 (r, g, b)
             } else {
-                let unpremul = |c: u8| {
-                    ((u16::from(c) * 255 + u16::from(a) / 2) / u16::from(a)).min(255) as u8
-                };
+                let unpremul =
+                    |c: u8| ((u16::from(c) * 255 + u16::from(a) / 2) / u16::from(a)).min(255) as u8;
                 (unpremul(r), unpremul(g), unpremul(b))
             };
             rgba.extend_from_slice(&[r, g, b, a]);

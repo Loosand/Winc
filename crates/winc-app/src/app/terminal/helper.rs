@@ -277,29 +277,14 @@ impl App {
                 let id = t.next_id;
                 let dir = if want.is_empty() { cwd.clone() } else { want };
                 let chosen = shells.get(i).cloned().flatten();
-                // 远端的目录只接受在那台主机上检测到的 shell：本机的命令（设置里的、恢复现场
-                // 时记下的）对远端不适用，不传过去，也不再记到标签上。
-                let host = winc_backend::locate(&bytes_path(&dir)).map(|at| at.target);
-                let chosen = match &host {
-                    Some(host) => chosen.filter(|command| {
-                        let known = crate::app::remote::shells(host);
-                        known.iter().any(|shell| shell.command == *command)
-                    }),
-                    None => chosen,
-                };
-                // 设置中的默认 shell 是本机的命令：目录在远端主机上或 WSL 发行版中时不适用，
-                // 新终端进入那台主机或发行版。
+                // 设置中的默认 shell 是本机的命令：目录在 WSL 发行版中时不适用，新终端进入该发行版。
                 let shell = match default_shell_applies(&dir, cfg!(windows)) {
                     true => shell.clone(),
                     false => None,
                 };
                 let python = python.get(i).copied().unwrap_or(false);
-                let integrated = match &integration {
-                    Some(_) => Integration::On { prompt, python },
-                    None => Integration::Off,
-                };
                 let shell = chosen.as_deref().or(shell.as_deref());
-                let launch = launch(shell, dir.clone(), cfg!(windows), integrated);
+                let launch = launch(shell, dir.clone(), cfg!(windows));
                 client.send(&ToHelper::Spawn {
                     tab: id,
                     program: launch.program,
@@ -412,21 +397,8 @@ impl App {
                 continue;
             }
             let candidates = [".venv", "venv"].map(|name| dir.join(name));
-            // 远端的目录不能在界面线程上查询：按文件树上看得到的目录判断，看不到时不加载，
-            // 不会在没有询问的情况下加载远端的环境。
-            let venv = if winc_backend::is_remote(&dir) {
-                let listed = |venv: &PathBuf| self.known_folder(venv) == Some(true);
-                match candidates.into_iter().find(listed) {
-                    Some(venv) => Some(venv),
-                    None => {
-                        choices.push(false);
-                        continue;
-                    }
-                }
-            } else {
-                let found = |venv: &PathBuf| winc_backend::fs::is_file(venv.join("pyvenv.cfg"));
-                candidates.into_iter().find(found)
-            };
+            let found = |venv: &PathBuf| winc_backend::fs::is_file(venv.join("pyvenv.cfg"));
+            let venv = candidates.into_iter().find(found);
             let Some(venv) = venv else {
                 choices.push(true);
                 continue;

@@ -50,9 +50,7 @@ impl App {
         if self.panels.sidebar.legacy_chrome {
             return false;
         }
-        self.editor
-            .root()
-            .is_none_or(|root| !winc_backend::is_remote(root))
+        true
     }
 
     pub(crate) fn notebook_sidebar(&self) -> bool {
@@ -129,12 +127,7 @@ impl App {
             (false, SidebarView::Files) => {
                 let width = (side.w - 44.0).clamp(0.0, 212.0);
                 let x = side.x + (side.w - width) / 2.0;
-                let recent = self
-                    .state
-                    .recent
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, path)| (!winc_backend::is_remote(path)).then_some(i))
+                let recent = (0..self.state.recent.len())
                     .take(RECENT_LIMIT)
                     .collect::<Vec<_>>();
                 let top = header.bottom();

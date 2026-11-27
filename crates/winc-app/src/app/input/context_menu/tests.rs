@@ -63,17 +63,8 @@ fn menus_show_the_key_for_where_they_open() {
             text(MenuCommand::Copy, Context::Editor).as_deref(),
             Some("⌘C")
         );
-        assert_eq!(
-            text(MenuCommand::Format, Context::Editor).as_deref(),
-            Some("⌥⇧F")
-        );
-        assert_eq!(
-            text(MenuCommand::FindReferences, Context::Editor).as_deref(),
-            Some("⇧F12")
-        );
     }
-    // 两步组合键无法显示；右键菜单中的「新建文件…」不是 `⌘N`，也不显示。
-    assert_eq!(text(MenuCommand::FormatSelection, Context::Editor), None);
+    // 右键菜单中的「新建文件…」不是 `⌘N`，不显示快捷键。
     assert_eq!(text(MenuCommand::NewFile, Context::Tree), None);
 }
 
@@ -157,12 +148,10 @@ fn menus_depend_on_what_was_clicked() {
     assert!(commands(tab_menu((0, 2), 3, 3, true, true, true)).contains(&(CloseOthers, false)));
     assert!(commands(tab_menu((0, 2), 2, 3, true, true, true)).contains(&(CloseOthers, true)));
 
-    // 可编辑的文件菜单项全部可用；只读的文件只能复制、复制代码引用，以及转到定义、查找引用。
+    // 可编辑的文件菜单项全部可用；只读的文件只能复制、复制代码引用和书签操作。
     assert_eq!(
         commands(editor_menu(true, false, false)),
         [
-            (GoToDefinition, true),
-            (FindReferences, true),
             (AddBookmark, true),
             (RemoveBookmark, false),
             (ListBookmarks, true),
@@ -175,8 +164,6 @@ fn menus_depend_on_what_was_clicked() {
     assert_eq!(
         commands(editor_menu(false, false, false)),
         [
-            (GoToDefinition, true),
-            (FindReferences, true),
             (AddBookmark, true),
             (RemoveBookmark, false),
             (ListBookmarks, true),
@@ -190,61 +177,4 @@ fn menus_depend_on_what_was_clicked() {
     let marked = commands(editor_menu(true, false, true));
     assert!(marked.contains(&(AddBookmark, false)));
     assert!(marked.contains(&(RemoveBookmark, true)));
-}
-
-/// 远端主机上的文件：各菜单不列出「在文件管理器中显示」，终端模块关闭时也不列出「在终端中
-/// 打开」，其余的项和顺序不变，不留下多余的分隔线。
-#[test]
-fn local_only_items_are_left_out_for_remote_files() {
-    use MenuCommand::*;
-
-    let items = |menu: &[MenuEntry]| -> Vec<MenuCommand> {
-        (menu.iter())
-            .filter_map(|entry| match entry {
-                MenuEntry::Item(command, _) => Some(*command),
-                _ => None,
-            })
-            .collect()
-    };
-    let tidy = |menu: &[MenuEntry]| {
-        let separator = |entry: &MenuEntry| matches!(entry, MenuEntry::Separator);
-        !menu.first().is_some_and(separator)
-            && !menu.last().is_some_and(separator)
-            && !menu
-                .windows(2)
-                .any(|pair| separator(&pair[0]) && separator(&pair[1]))
-    };
-    let menus = [
-        tree_menu(Some(EntryKind::File), true, true),
-        tree_selection_menu(2, true),
-        tree_menu(None, true, false),
-        tab_menu((0, 0), 1, 3, true, true, true),
-        commit_file_menu(true, true, &[]),
-        log_file_menu(true, true),
-    ];
-    for menu in menus {
-        let before = items(&menu);
-        for terminal in [false, true] {
-            let kept = without_local_only(menu.clone(), terminal, false);
-            let after = items(&kept);
-            assert!(!after.contains(&Reveal), "{after:?}");
-            assert_eq!(
-                after.contains(&OpenInTerminal),
-                terminal && before.contains(&OpenInTerminal)
-            );
-            let expected: Vec<_> = (before.iter())
-                .filter(|c| **c != Reveal && (terminal || **c != OpenInTerminal))
-                .cloned()
-                .collect();
-            assert_eq!(after, expected);
-            assert!(tidy(&kept), "{kept:?}");
-        }
-        // 挂载在本机的目录（`remote.localFolders`）之内：「在文件管理器中显示」保留。
-        let mounted = items(&without_local_only(menu.clone(), true, true));
-        assert_eq!(mounted.contains(&Reveal), before.contains(&Reveal));
-        // 应用内的定位不受影响。
-        if before.contains(&RevealInTree) {
-            assert!(items(&without_local_only(menu, false, false)).contains(&RevealInTree));
-        }
-    }
 }

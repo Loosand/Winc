@@ -918,21 +918,8 @@ impl App {
         self.bars.find.input.set_text(&query.regex);
     }
 
-    /// 格式化第 `first` 至 `last` 行：复用格式化选区，之后选区收回为光标。
-    fn vim_format(&mut self, first: usize, last: usize) {
-        let Some(doc) = self.editor.active_mut() else {
-            return;
-        };
-        let original = doc.selection;
-        let text = doc.text();
-        let last = last.min(text.line_count().saturating_sub(1));
-        let (from, to) = (text.line_start(first.min(last)), text.line_end(last));
-        doc.selection = Selection::new(from, to);
-        self.format_selection();
-        if let Some(doc) = self.editor.active_mut() {
-            doc.selection = original;
-        }
-    }
+    /// Vim `=` 格式化算子：当前未启用外部代码格式化工具，保留为空操作。
+    fn vim_format(&mut self, _first: usize, _last: usize) {}
 
     /// 纵向滚动到第 `line` 行位于窗口的 `place`；窗口顶部被固定显示的行占用的部分不算。
     fn vim_reveal(&mut self, line: usize, place: Place) {

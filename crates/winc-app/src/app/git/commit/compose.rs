@@ -165,14 +165,11 @@ impl App {
         self.update_state(|state| state.commit_check_todo = !state.commit_check_todo);
     }
 
-    /// 提交按钮菜单的最后几项：「提交检查」子菜单（格式化代码、检查 TODO 两个开关），以及最近的
+    /// 提交按钮菜单的最后几项：「提交检查」子菜单（检查 TODO 开关），以及最近的
     /// 提交信息、共同作者两个子菜单（有内容时）。
     pub(super) fn compose_menu_entries(&self) -> Vec<MenuEntry> {
         // 提交前的检查放在一个子菜单里逐项勾选，与签署、跳过钩子分开。
-        let checks = vec![
-            MenuEntry::Item(MenuCommand::CommitReformat, true),
-            MenuEntry::Item(MenuCommand::CommitCheckTodo, true),
-        ];
+        let checks = vec![MenuEntry::Item(MenuCommand::CommitCheckTodo, true)];
         let mut entries = vec![MenuEntry::Submenu(t!("menu-commit-checks").into(), checks)];
         let messages = self.recent_messages().len().min(MENU_MESSAGES);
         let authors = self.git.authors.len().min(MENU_AUTHORS);

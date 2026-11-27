@@ -251,7 +251,6 @@ impl App {
             self.settle_glides();
             self.scroll.wheel.glide = None;
             self.scroll.fling = None;
-            self.dismiss_hint();
             self.pointer.cursor_inside = true;
             self.on_mouse_move(point.0, point.1);
             if let Some(operation) = self.touch_window_at(point.0, point.1) {

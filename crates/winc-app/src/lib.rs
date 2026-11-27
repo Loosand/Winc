@@ -81,18 +81,6 @@ pub fn run() {
     }
     shell_command::enter_real_path();
     crash::install();
-    // 本线程是界面线程：不等待远端主机的应答，访问远端文件的操作都在后台线程上进行。
-    winc_backend::remote::forbid_blocking();
-    // 连接断开时各项操作失败的原因原样出现在提示里：用界面语言说明。
-    winc_backend::remote::describe_unavailable(|what| {
-        use winc_backend::remote::Unavailable;
-        match what {
-            Unavailable::Lost => winc_i18n::t!("workspace-remote-error-lost").to_owned(),
-            Unavailable::NotConnected => {
-                winc_i18n::t!("workspace-remote-error-not-connected").to_owned()
-            }
-        }
-    });
     #[cfg(windows)]
     windows::attach_console();
     // `--help` 和无法识别的选项不需要窗口，先处理参数；用法与错误信息按系统语言输出。
@@ -275,13 +263,6 @@ pub fn run() {
         }
         // 从命令行打开的目录同样记入「最近打开」。
         app.remember_workspace();
-        // 远端的目录启动时没有连接，无法像本机目录那样直接打开，在后台连接：命令行上的
-        // `ssh://` 参数，或者上次开着的远端目录。
-        match cli::remote_open(&args.targets) {
-            Some(open) => app.open_remote(open),
-            None if args.targets.is_empty() => app.restore_remote_folder(),
-            None => {}
-        }
     }
 
     winc.add(key, app);
@@ -302,13 +283,11 @@ pub fn run() {
 /// 按命令行参数打开目录和文件，返回需要提示用户的 `Vec<String>`。
 ///
 /// 只给出文件时不打开其所在的目录；`文件:行` 形式的目标会跳到对应行（行号和列号从 0 起）。
-/// 临时打开（`--wait`、`-`）时不接受目录。远端的目标（`ssh://`）跳过：连接之后才能打开，见
-/// [`cli::remote_open`]。
+/// 临时打开（`--wait`、`-`）时不接受目录。
 pub(crate) fn open_targets(editor: &mut Editor, args: &cli::Args) -> Vec<String> {
     let mut problems = Vec::new();
     let mut first_file = None;
-    let local = args.targets.iter();
-    for target in local.filter(|t| !winc_backend::is_remote(&t.path)) {
+    for target in &args.targets {
         if winc_backend::fs::is_dir(&target.path) {
             if args.one_off() {
                 let path = target.path.display().to_string();

@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use winc_editor::encoding::CHOICES;
 
 use winc_core::{Indent, LineEnding};
-use winc_editor::format::PRESETS;
 use winc_editor::{DocumentId, EntryKind};
 use winc_i18n::t;
 #[cfg(any(target_os = "macos", test))]
@@ -186,14 +185,6 @@ pub enum MenuCommand {
     OpenFolder,
     /// 项目菜单：打开 WSL 发行版中的目录。
     OpenWslFolder(usize),
-    /// 项目菜单：连接到 SSH 主机，输入主机和目录。
-    RemoteConnect,
-    /// 项目菜单的 SSH 子菜单：连接 `ssh` 配置中的第几个主机（见 `remote::hosts`）。
-    RemoteHost(usize),
-    /// 项目菜单的 SSH 子菜单：连接没有列出的主机。
-    RemoteOther,
-    /// 项目菜单：关闭打开的远端目录并断开到该主机的连接。
-    RemoteDisconnect,
     CloseFolder,
     /// 提交视图「⋯」：新建工作树（输入新分支的名字）。
     NewWorktree,
@@ -214,22 +205,12 @@ pub enum MenuCommand {
     Paste,
     /// 远端的文件树：把这一项（多选时选中的各项）下载到本机的一个目录。
     Download,
-    GoToDefinition,
-    FindReferences,
     /// 在当前行添加书签。
     AddBookmark,
     /// 删除当前行的书签。
     RemoveBookmark,
     /// 列出当前文档的全部书签。
     ListBookmarks,
-    Format,
-    FormatSelection,
-    Fix,
-    /// 设置中「添加语言…」菜单的一项，参数为语言在 `winc_syntax::languages()` 中的序号（从 0 起）。
-    Language(usize),
-    /// 设置中「排除的语言」菜单的一项：切换某种语言保存时是否跳过格式化和修复，
-    /// 参数为语言序号（从 0 起）。
-    SkipOnSave(usize),
     /// 设置中「语言」菜单的一项，参数为 [`LocaleChoice::ALL`](winc_i18n::LocaleChoice::ALL)
     /// 中的序号（从 0 起）。
     Locale(usize),
@@ -294,16 +275,6 @@ pub enum MenuCommand {
     Font(usize),
     /// 设置中字体菜单「后备字体」中的一项，参数同 [`MenuCommand::Font`]：加入或移出字体列表。
     FallbackFont(usize),
-    /// 设置中某种语言的格式化（修复）工具：自动选择。
-    ToolAuto,
-    /// 设置中某种语言的格式化（修复）工具：预设，参数为 `PRESETS` 中的序号（从 0 起）。
-    ToolPreset(usize),
-    /// 设置中某种语言的格式化（修复）工具：自定义命令，进入输入框。
-    ToolCustom,
-    /// 设置中某种语言的格式化（修复）工具：显示安装方法。
-    ToolInstall,
-    /// 设置中某种语言的格式化工具：把这种语言从列表中移除。
-    ToolRemove,
     IndentUsingSpaces,
     IndentUsingTabs,
     /// 缩进宽度：空格缩进时为空格数，制表符缩进时为一个 Tab 占的列数。
@@ -318,12 +289,6 @@ pub enum MenuCommand {
     LineEnding(LineEnding),
     /// 通过编码重新打开，参数为编码在 `encoding::CHOICES` 中的序号（从 0 起）。
     ReopenEncoding(usize),
-    /// 改按十六进制查看文件的字节。
-    ReopenHex,
-    /// 十六进制视图：把选中的字节按文字复制。
-    HexCopyText,
-    /// 十六进制视图：转到偏移。
-    HexGoTo,
     /// 通过编码保存，参数为编码在 `encoding::CHOICES` 中的序号（从 0 起）。
     SaveEncoding(usize),
     /// 状态栏语言菜单：改用这种语言，参数为语言在 `winc_syntax::languages()` 中的序号（从 0 起）。
@@ -478,8 +443,6 @@ pub enum MenuCommand {
     CommitNoVerify,
     /// 提交按钮的菜单：提交前检查新增的 TODO（开着时打勾）。
     CommitCheckTodo,
-    /// 提交按钮的菜单：提交前格式化要提交的文件（开着时打勾）。
-    CommitReformat,
     /// 提交按钮的菜单：最近的第几条提交信息。
     CommitMessage(usize),
     /// 提交按钮的菜单：添加第几个共同作者。
@@ -695,7 +658,6 @@ impl MenuCommand {
             MenuCommand::CommitAmend => t!("menu-commit-amend"),
             MenuCommand::CommitSignOff => t!("menu-commit-sign-off"),
             MenuCommand::CommitCheckTodo => t!("menu-commit-check-todo"),
-            MenuCommand::CommitReformat => t!("menu-commit-reformat"),
             MenuCommand::CommitMessage(_) | MenuCommand::CommitCoAuthor(_) => "",
             MenuCommand::CommitNoVerify => t!("menu-commit-no-verify"),
             MenuCommand::TreeRefresh => t!("workspace-tree-tool-refresh"),
@@ -744,9 +706,6 @@ impl MenuCommand {
             MenuCommand::GitHeading(false) => t!("menu-git-local-branches"),
             MenuCommand::GitHeading(true) => t!("menu-git-remote-branches"),
             MenuCommand::GitBranch(op, _) => op.label(),
-            MenuCommand::Language(i) | MenuCommand::SkipOnSave(i) => {
-                winc_syntax::languages().get(i).map_or("", |l| l.name)
-            }
             MenuCommand::Whitespace(i) => winc_config::RenderWhitespace::ALL
                 .get(i)
                 .map_or("", |&choice| crate::layout::whitespace_label(choice)),
@@ -809,29 +768,13 @@ impl MenuCommand {
             MenuCommand::OpenWslFolder(i) => crate::system::wsl_distributions()
                 .get(i)
                 .map_or("", String::as_str),
-            MenuCommand::RemoteConnect => t!("workspace-remote-menu"),
-            MenuCommand::RemoteHost(i) => (crate::app::remote::hosts().get(i))
-                .copied()
-                .unwrap_or_default(),
-            MenuCommand::RemoteOther => t!("workspace-remote-other"),
-            MenuCommand::RemoteDisconnect => t!("workspace-remote-disconnect"),
             MenuCommand::CloseFolder => t!("cmd-close-folder"),
             MenuCommand::Cut => t!("cmd-cut"),
             MenuCommand::Copy => t!("cmd-copy"),
             MenuCommand::Paste => t!("cmd-paste"),
-            MenuCommand::GoToDefinition => t!("cmd-go-to-definition"),
-            MenuCommand::FindReferences => t!("cmd-find-references"),
             MenuCommand::AddBookmark => t!("menu-add-bookmark"),
             MenuCommand::RemoveBookmark => t!("menu-remove-bookmark"),
             MenuCommand::ListBookmarks => t!("cmd-list-bookmarks"),
-            MenuCommand::Format => t!("cmd-format"),
-            MenuCommand::FormatSelection => t!("cmd-format-selection"),
-            MenuCommand::Fix => t!("cmd-fix"),
-            MenuCommand::ToolAuto => t!("format-tool-auto"),
-            MenuCommand::ToolPreset(i) => PRESETS.get(i).map_or("", |p| p.name),
-            MenuCommand::ToolCustom => t!("format-tool-custom-command"),
-            MenuCommand::ToolInstall => t!("format-install-link"),
-            MenuCommand::ToolRemove => t!("format-tool-remove"),
             MenuCommand::IndentUsingSpaces => t!("cmd-indent-using-spaces"),
             MenuCommand::IndentUsingTabs => t!("cmd-indent-using-tabs"),
             MenuCommand::IndentSize(n) => ["1", "2", "3", "4", "5", "6", "7", "8"]
@@ -845,9 +788,6 @@ impl MenuCommand {
             MenuCommand::ReopenEncoding(i) | MenuCommand::SaveEncoding(i) => {
                 CHOICES.get(i).map_or("", |(_, label)| label)
             }
-            MenuCommand::ReopenHex => t!("editor-encoding-hex"),
-            MenuCommand::HexCopyText => t!("menu-hex-copy-text"),
-            MenuCommand::HexGoTo => t!("menu-hex-go-to"),
             MenuCommand::UseLanguage(i) => winc_syntax::languages().get(i).map_or("", |l| l.name),
             MenuCommand::UsePlainText => winc_syntax::detect("").name,
             MenuCommand::DetectLanguage => t!("menu-detect-language"),
@@ -895,13 +835,8 @@ impl MenuCommand {
             MenuCommand::GitShowDiff => Action::ChangesShowDiff,
             MenuCommand::GitOpenFile => Action::ChangesOpenSource,
             MenuCommand::GitRollbackFile => Action::ChangesRollback,
-            MenuCommand::GoToDefinition => Action::GoToDefinition,
-            MenuCommand::FindReferences => Action::FindReferences,
             MenuCommand::AddBookmark | MenuCommand::RemoveBookmark => Action::ToggleBookmark,
             MenuCommand::ListBookmarks => Action::ListBookmarks,
-            MenuCommand::Format => Action::Format,
-            MenuCommand::FormatSelection => Action::FormatSelection,
-            MenuCommand::Fix => Action::Fix,
             MenuCommand::NewFile => Action::NewFile,
             MenuCommand::IndentUsingSpaces => Action::IndentUsingSpaces,
             MenuCommand::IndentUsingTabs => Action::IndentUsingTabs,
@@ -959,6 +894,7 @@ pub enum MenuTarget {
     /// 侧栏顶部的项目名。
     Project,
     /// 设置的外观页中的「语言」。
+    #[allow(dead_code)]
     Locale,
     /// 设置的编辑器页中的「空白符」。
     Whitespace,
@@ -971,10 +907,13 @@ pub enum MenuTarget {
     /// 设置的编辑器页中的「自动保存」。
     AutoSave,
     /// 设置的外观页中的「界面缩放」。
+    #[allow(dead_code)]
     Zoom,
     /// 设置的外观页中的「背景图片」。
+    #[allow(dead_code)]
     BackgroundImage,
     /// 设置的外观页中的「背景显示方式」。
+    #[allow(dead_code)]
     BackgroundFit,
     /// 设置外观页中的「浅色主题」。
     LightTheme,
@@ -991,6 +930,7 @@ pub enum MenuTarget {
     /// 设置外观页中的「段落间距」。
     ParagraphSpacing,
     /// 设置中「Markdown 预览正文宽度」的选项菜单。
+    #[allow(dead_code)]
     TextWidth,
     /// 设置的终端页中的「默认 Shell」。
     DefaultShell,

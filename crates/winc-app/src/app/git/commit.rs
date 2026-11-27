@@ -9,7 +9,6 @@
 mod actions;
 mod compose;
 mod ignore;
-mod reformat;
 pub(in crate::app) use super::operate::COMMITTED_SHOWN;
 pub(crate) use super::operate::{PUSH_PREVIEW, PushIntent};
 pub(crate) use actions::SyncState;
@@ -588,8 +587,6 @@ enum Outcome {
     Staged(Result<(), String>, PathBuf),
     /// 提交前检查完了新增的内容：其中 TODO、FIXME 的处数，在哪个仓库里检查的。
     TodoChecked(usize, PathBuf),
-    /// 提交前的格式化做完了：改动了几个文件，在哪个仓库里进行的。
-    Reformatted(usize, PathBuf),
     /// 写入其他仓库暂存区的一步操作完成，或者失败的原因。
     OtherStaged(Result<(), String>),
     /// 读到了文件在暂存区中的内容：仓库、文件、发出读取时暂存区的版本、内容（不是文本时为
@@ -710,8 +707,6 @@ pub(crate) struct CommitState {
     history_seeded: bool,
     /// 提交前的 TODO 检查已经通过或确认过，放行下一次提交。
     todo_passed: bool,
-    /// 提交前的格式化已经做过，放行下一次提交。
-    reformat_passed: bool,
     /// 等待写入其他仓库暂存区的操作：仓库的根目录、暂存还是取消暂存、各个文件。
     other_stage_queue: VecDeque<(PathBuf, bool, Vec<PathBuf>)>,
     /// 是否有写入其他仓库暂存区的操作正在后台执行。
@@ -900,7 +895,6 @@ impl Default for CommitState {
             staging_running: false,
             history_seeded: false,
             todo_passed: false,
-            reformat_passed: false,
             other_stage_queue: VecDeque::new(),
             other_stage_running: false,
             commit_queued: false,

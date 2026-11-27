@@ -300,10 +300,6 @@ pub(crate) fn report_unreadable(args: &mut Args) -> bool {
 ///
 /// 只尝试打开目录和普通文件：打开没有写入端的命名管道会一直阻塞。
 fn unreadable(path: &std::path::Path) -> Option<String> {
-    // 远端的路径连接之后才能访问，由打开的流程报告。
-    if winc_backend::is_remote(path) {
-        return None;
-    }
     let result = std::fs::metadata(path).and_then(|meta| {
         if meta.is_dir() {
             std::fs::read_dir(path).map(|_| ())

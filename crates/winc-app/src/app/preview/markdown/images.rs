@@ -140,8 +140,7 @@ impl ImagePool {
             let urls = &self.urls;
             let before = self.slots.len();
             self.slots.retain(|path, _| {
-                embedded.contains_key(path)
-                    || urls.get(path).is_some_and(|u| u.contains("://"))
+                embedded.contains_key(path) || urls.get(path).is_some_and(|u| u.contains("://"))
             });
             removed |= self.slots.len() != before;
         } else {

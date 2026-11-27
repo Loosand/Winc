@@ -205,73 +205,6 @@ impl App {
         self.flash(message);
     }
 
-    /// 返回缩略图最上方显示的行和滑块的位置。
-    fn minimap_place(&self) -> (usize, Rect) {
-        let area = self.layout.minimap;
-        let scroll = self.editor.active().map_or(0.0, |doc| doc.scroll_line);
-        let shown = (area.h / MINIMAP_ROW).ceil() as usize;
-        let first = crate::layout::minimap_first_row(
-            self.row_count(),
-            shown,
-            scroll,
-            self.max_scroll_line(),
-        );
-        let slider = Rect::new(
-            area.x,
-            area.y + (scroll - first as f64) as f32 * MINIMAP_ROW,
-            area.w,
-            self.visible_lines() as f32 * MINIMAP_ROW,
-        );
-        (first, slider)
-    }
-
-    /// 返回绘制缩略图所需的状态：最上方显示的行、滑块的位置，以及滑块是否加深。
-    pub(crate) fn minimap_view(&self) -> (usize, Rect, bool) {
-        let active = self.pointer.hover == Hover::Minimap
-            || matches!(self.pointer.drag, Drag::Minimap { .. });
-        let (first, slider) = self.minimap_place();
-        (first, slider, active)
-    }
-
-    /// 在缩略图上按下，开始拖动滑块。
-    ///
-    /// 点在滑块外时视为按在滑块中心：滑块移到指针下方，之后按指针的位移继续拖动。
-    pub(in crate::app) fn press_minimap(&mut self, y: f32) {
-        let (_, slider) = self.minimap_place();
-        let scroll = self.editor.active().map_or(0.0, |doc| doc.scroll_line);
-        let from = if y < slider.y || y >= slider.bottom() {
-            slider.y + slider.h / 2.0
-        } else {
-            y
-        };
-        self.pointer.drag = Drag::Minimap { from, scroll };
-        self.drag_minimap(y, from, scroll);
-    }
-
-    /// 处理缩略图滑块的拖动：滚动位置从按下时的 `scroll` 起，按指针相对按下点 `from` 的位移变化，
-    /// 指针不动时滚动位置不变。
-    ///
-    /// 滑块的可移动距离等于滚动到底时滑块的位置，因此滑块与指针同步移动。
-    pub(in crate::app) fn drag_minimap(&mut self, y: f32, from: f32, scroll: f64) {
-        let total = self.row_count();
-        let shown = (self.layout.minimap.h / MINIMAP_ROW).ceil() as usize;
-        let max = self.max_scroll_line();
-        let first = crate::layout::minimap_first_row(total, shown, max, max);
-        let room = (max - first as f64) as f32 * MINIMAP_ROW;
-        if room > 0.0 {
-            self.set_minimap_scroll(scroll + f64::from((y - from) / room) * max);
-        }
-    }
-
-    /// 把当前文档滚动到第 `line` 行（可为小数），不播放平滑滚动。
-    fn set_minimap_scroll(&mut self, line: f64) {
-        let max = self.max_scroll_line();
-        self.scroll.glide = None;
-        self.set_active_scroll(line.clamp(0.0, max));
-        self.clamp_scroll();
-        self.request_redraw();
-    }
-
     /// 返回当前文档的文件行数；没有打开文档时为 0。
     pub(super) fn line_count(&self) -> usize {
         self.editor.active().map_or(0, |d| d.text().line_count())
@@ -304,9 +237,6 @@ impl App {
         // 日志标签：滚动条位于左侧提交列表的右边缘，详情栏不使用该滚动条。
         if self.log_active() {
             return self.log_parts().list;
-        }
-        if self.hex_active() {
-            return self.hex_parts().body;
         }
         if self.editor.active().is_some_and(|d| d.diff.is_some()) {
             let header = crate::app::diff::DIFF_HEADER;
@@ -461,13 +391,6 @@ impl App {
 
     /// 复制选区（`cut` 为 `true` 时剪切）；没有选区时操作光标所在的整行。
     pub(in crate::app) fn copy(&mut self, cut: bool) {
-        // 十六进制视图：复制选中的字节，写成十六进制；只读，不能剪切。
-        if self.hex_active() {
-            if !cut {
-                self.copy_hex(false);
-            }
-            return;
-        }
         // 日志标签：详情中有选中文字时复制选中的文字，否则复制选中提交的完整提交号，
         // 效果同点击详情中的提交号。
         if self.log_active() {

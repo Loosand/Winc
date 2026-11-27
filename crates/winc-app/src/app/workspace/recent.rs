@@ -133,7 +133,6 @@ impl App {
         self.overlays.picker.places = None;
         self.overlays.picker.branch_rows = None;
         self.overlays.picker.location_rows = None;
-        self.overlays.picker.remote = None;
         self.overlays.picker.languages = false;
         self.overlays.picker.folders = true;
         self.overlays.picker.open = true;
