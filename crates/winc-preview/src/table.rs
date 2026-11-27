@@ -329,14 +329,7 @@ pub fn read_workbook(bytes: &[u8]) -> Result<Table, String> {
 ///
 /// 文件无法读取时返回给用户看的原因。
 pub fn load_delimited(path: &Path, tabs: bool) -> Result<Table, String> {
-    let (bytes, more) = if winc_backend::is_remote(path) {
-        (
-            winc_backend::fs::read(path).map_err(|e| e.to_string())?,
-            false,
-        )
-    } else {
-        head_lines(path, MAX_ROWS + 1).map_err(|e| e.to_string())?
-    };
+    let (bytes, more) = head_lines(path, MAX_ROWS + 1).map_err(|e| e.to_string())?;
     let mut sheet = read_delimited(&String::from_utf8_lossy(&bytes), tabs);
     sheet.mark_truncated(more);
     Ok(Table {

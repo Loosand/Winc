@@ -1,9 +1,8 @@
-//! 改动文件系统的操作：结果与 `std::fs` 一致，虚拟路径被拒绝。
+//! 改动文件系统的操作：结果与 `std::fs` 一致。
 
 use std::path::PathBuf;
 
 use super::*;
-use crate::{Target, virtual_path};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir()
@@ -60,42 +59,5 @@ fn links_are_copied_as_links_to_the_same_target() {
         PathBuf::from("gone")
     );
     assert!(copy_symlink(dir.join("target.txt"), dir.join("copy3")).is_err());
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn virtual_paths_need_a_connection_and_both_paths_on_one_host() {
-    let dir = scratch("virtual");
-    let local = dir.join("local.txt");
-    std::fs::write(&local, "x").unwrap();
-    let remote = virtual_path(
-        &Target::new("unconnected-change").unwrap(),
-        b"/tmp/remote.txt",
-    );
-    let other = virtual_path(&Target::new("another-host").unwrap(), b"/tmp/remote.txt");
-    let fails = |kind: io::ErrorKind, result: io::Result<()>| {
-        assert_eq!(result.unwrap_err().kind(), kind);
-    };
-    let unconnected = io::ErrorKind::NotConnected;
-    fails(unconnected, create_dir(&remote));
-    fails(unconnected, create_dir_all(&remote));
-    fails(unconnected, create_new(&remote, b"x"));
-    fails(unconnected, write(&remote, "x"));
-    fails(unconnected, remove_file(&remote));
-    fails(unconnected, rename(&remote, &remote));
-    fails(unconnected, copy(&remote, &remote).map(drop));
-    fails(unconnected, copy_symlink(&remote, &remote));
-    // 一个在本机、一个在远端，或分属两台主机：改名不支持，本机的文件不受影响。
-    let unsupported = io::ErrorKind::Unsupported;
-    fails(unsupported, rename(&local, &remote));
-    fails(unsupported, rename(&remote, &local));
-    fails(unsupported, rename(&remote, &other));
-    // 复制可以跨主机，内容经本进程中转：这里没有连接，在访问远端的一侧时失败。
-    fails(unconnected, copy(&local, &remote).map(drop));
-    fails(unconnected, copy(&remote, &local).map(drop));
-    fails(unconnected, copy(&remote, &other).map(drop));
-    fails(unconnected, copy_symlink(&remote, &other));
-    fails(unconnected, set_mode(&remote, 0o644));
-    assert_eq!(std::fs::read(&local).unwrap(), b"x");
     std::fs::remove_dir_all(&dir).unwrap();
 }

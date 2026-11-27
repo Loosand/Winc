@@ -1,9 +1,8 @@
-//! 文件操作：本机路径的结果与 `std::fs` 一致，虚拟路径被拒绝。
+//! 文件操作：结果与 `std::fs` 一致。
 
 use std::time::{Duration, UNIX_EPOCH};
 
 use super::*;
-use crate::{Target, virtual_path};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir()
@@ -116,22 +115,4 @@ fn stamps_keep_the_nanoseconds_on_both_sides_of_the_epoch() {
         Stamp { secs: -3, nanos: 0 }
     );
     assert!(Stamp::from(before) < Stamp::from(UNIX_EPOCH));
-}
-
-#[test]
-fn virtual_paths_need_a_connection_and_never_touch_the_local_file_system() {
-    let file = virtual_path(&Target::new("unconnected-fs").unwrap(), b"/etc/hosts");
-    let unconnected = |result: io::Result<()>| {
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotConnected);
-    };
-    unconnected(metadata(&file).map(drop));
-    unconnected(symlink_metadata(&file).map(drop));
-    unconnected(read(&file).map(drop));
-    unconnected(read_to_string(&file).map(drop));
-    unconnected(read_link(&file).map(drop));
-    // 取不到信息时各项判断为否：无法确定不等于存在。
-    assert!(!exists(&file) && !is_file(&file) && !is_dir(&file) && !is_symlink(&file));
-    for result in metadata_many(&[&file]) {
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotConnected);
-    }
 }

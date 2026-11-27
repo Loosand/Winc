@@ -83,8 +83,6 @@ pub struct Config {
     pub word_wrap: Option<bool>,
     /// 超长行显示全部内容，而不是只显示开头的一部分，默认为否。
     pub whole_lines: Option<bool>,
-    /// 在编辑区右侧显示缩略图，默认为否。
-    pub minimap: Option<bool>,
     /// 鼠标滚轮每滚一格平滑地滑到位，而不是立即跳到，默认为是。
     pub smooth_scrolling: Option<bool>,
     /// 在侧栏文件视图的底部显示大纲（当前文件的函数、类型、标题），默认为是。
@@ -225,14 +223,6 @@ pub struct Config {
     pub terminal_vertical_tabs: Option<bool>,
     /// 暂停终端内容增强的快捷键，保留终端管理和复制、粘贴；默认关闭。
     pub terminal_application_priority: Option<bool>,
-    /// 是否启用远程模块（经 `ssh` 打开其他主机上的目录），默认为否。
-    pub remote_enabled: Option<bool>,
-    /// 远端目录挂载在本机的位置（SSHFS、Samba 映射的盘符等）：键是远端目录的显示写法
-    /// `目标:/路径`（如 `devbox:/home/me`），值是本机上对应的目录（如 `Z:\`）。
-    ///
-    /// 远端的文件在这些目录之内时，「在文件管理器中显示」「用默认应用打开」改为对本机上
-    /// 对应的位置执行；默认没有。键已规范：路径中没有空段、`.` 和 `..`。
-    pub remote_local_folders: BTreeMap<String, String>,
     /// 键位方案：`idea` 或 `vscode`；没写时用 `idea`。
     pub keymap: Option<String>,
     /// 改过的快捷键：命令名 → 按键写法的数组，空数组表示不设快捷键。
@@ -271,20 +261,6 @@ pub struct Config {
     pub git_open_worktree: Option<WorktreeOpen>,
     /// 新建工作树时复制过去的被忽略的文件（gitignore 写法的 glob，如 `.env*`），默认不复制。
     pub git_worktree_copy: Vec<String>,
-    /// 保存时先格式化，默认为否。
-    pub format_on_save: Option<bool>,
-    /// 保存时不格式化的语言（语言的 id）；手动格式化（`⇧⌥F`）仍然生效。
-    pub format_on_save_exclude: Vec<String>,
-    /// 各语言的格式化命令，键是语言的 id。
-    ///
-    /// 没写的语言自动选择工具。
-    pub format_commands: BTreeMap<String, String>,
-    /// 保存时先修复（在格式化之前），默认为否。
-    pub fix_on_save: Option<bool>,
-    /// 各语言的修复命令，键是语言的 id。
-    ///
-    /// 没写的语言自动选择工具。
-    pub fix_commands: BTreeMap<String, String>,
 }
 
 impl Config {
@@ -500,44 +476,6 @@ impl Config {
         out
     }
 
-    /// 读取项目配置（`root` 下的 `.winc/config.json`），只认 `format` 一节，其他内容报告后忽略。
-    ///
-    /// 文件不存在时返回 `None`；无法读取或无法理解的部分与用户配置相同，退回默认值并报告。
-    /// 远端主机上的目录没有项目配置：这里只读本机的文件，项目配置管的格式化也只在本机运行。
-    pub fn load_project(root: &Path) -> Option<(Config, Vec<String>)> {
-        if winc_backend::is_remote(root) {
-            return None;
-        }
-        let text = match std::fs::read_to_string(project_config_path(root)) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
-            Err(e) => {
-                let problem = t!("config-project-read-failed", error = e.to_string());
-                return Some((Config::default(), vec![problem]));
-            }
-        };
-        Some(Config::parse_project(&text))
-    }
-
-    /// 解析项目配置的内容，规则见 [`Config::load_project`]。
-    pub(crate) fn parse_project(text: &str) -> (Config, Vec<String>) {
-        let mut config = Config::default();
-        let mut problems = Vec::new();
-        let root = Json::parse_jsonc(text);
-        let Some(object) = root.as_ref().and_then(|(root, _)| root.as_object()) else {
-            problems.push(t!("config-project-invalid-json").to_owned());
-            return (config, problems);
-        };
-        for (key, value) in object {
-            if key == "format" {
-                Self::read_section(&mut config, "format", Self::FORMAT, value, &mut problems);
-            } else {
-                problems.push(t!("config-project-unsupported-key", key = key.as_str()));
-            }
-        }
-        (config, problems)
-    }
-
     /// 把相对 `base`（上次读入或写出该文件时的配置）修改过的项写入指定文件，目录不存在时先创建。
     ///
     /// 其余内容按文件当前的内容保留，其他位置在程序运行期间手动修改的设置不会被覆盖。原文件无法
@@ -599,11 +537,6 @@ pub fn config_path() -> Option<PathBuf> {
     Some(dir.join("config.json"))
 }
 
-/// 返回项目配置文件的路径：`root`（打开的目录）下的 `.winc/config.json`。
-pub(crate) fn project_config_path(root: &Path) -> PathBuf {
-    root.join(".winc").join("config.json")
-}
-
 /// 一项设置在配置文件里的写法：键名、读入和写回。
 ///
 /// 解析、序列化以及写回时保留不认识的键，都以 [`Config::SECTIONS`] 和 [`Config::TOP_LEVEL`] 两张表
@@ -654,9 +587,7 @@ impl Config {
         ("vim", Self::VIM),
         ("git", Self::GIT),
         ("network", Self::NETWORK),
-        ("remote", Self::REMOTE),
         ("keyboard", Self::KEYBOARD),
-        ("format", Self::FORMAT),
     ];
 
     /// 顶层的单值设置，写在各节之后。
@@ -781,7 +712,6 @@ impl Config {
         bool_field!("stickyScroll", sticky_scroll),
         bool_field!("wordWrap", word_wrap),
         bool_field!("wholeLines", whole_lines),
-        bool_field!("minimap", minimap),
         bool_field!("smoothScrolling", smooth_scrolling),
         bool_field!("outline", outline),
         Field {
@@ -1371,23 +1301,6 @@ impl Config {
         Self::MOVED.iter().any(|m| (m.0, m.1) == (name, key))
     }
 
-    /// `remote` 一节。
-    const REMOTE: &[Field<Self>] = &[
-        bool_field!("enabled", remote_enabled),
-        Field {
-            key: "localFolders",
-            read: |config, value, name, problems| {
-                read_local_folders(value, name, &mut config.remote_local_folders, problems)
-            },
-            write: |config| {
-                let folders = &config.remote_local_folders;
-                let pairs = (folders.iter())
-                    .map(|(remote, local)| (remote.as_str(), Json::String(local.clone())));
-                (!folders.is_empty()).then(|| Json::object(pairs))
-            },
-        },
-    ];
-
     /// `keyboard` 一节：键位方案和改过的快捷键；命令名和按键写法由应用检查。
     const KEYBOARD: &[Field<Self>] = &[
         Field {
@@ -1432,53 +1345,6 @@ impl Config {
                     Json::Object(object.collect())
                 })
             },
-        },
-    ];
-
-    /// `format` 一节，用户配置和项目配置共用。
-    ///
-    /// 语言可以写 id 或状态栏上显示的名字（如 `json`、`JSON`），统一存成 id。
-    const FORMAT: &[Field<Self>] = &[
-        bool_field!("onSave", format_on_save),
-        Field {
-            key: "onSaveExclude",
-            read: |config, value, name, problems| {
-                let Some(items) = value.as_array() else {
-                    problems.push(t!("config-not-array", name = name));
-                    return;
-                };
-                for item in items {
-                    let Some(language) = item.as_str() else {
-                        problems.push(t!("config-item-not-string", name = name));
-                        continue;
-                    };
-                    if let Some(id) = language_id(language, name, problems)
-                        && !config.format_on_save_exclude.contains(&id)
-                    {
-                        config.format_on_save_exclude.push(id);
-                    }
-                }
-            },
-            write: |config| {
-                let ids = &config.format_on_save_exclude;
-                (!ids.is_empty())
-                    .then(|| Json::Array(ids.iter().cloned().map(Json::String).collect()))
-            },
-        },
-        Field {
-            key: "commands",
-            read: |config, value, name, problems| {
-                read_commands(value, name, &mut config.format_commands, problems)
-            },
-            write: |config| commands_json(&config.format_commands),
-        },
-        bool_field!("fixOnSave", fix_on_save),
-        Field {
-            key: "fixCommands",
-            read: |config, value, name, problems| {
-                read_commands(value, name, &mut config.fix_commands, problems)
-            },
-            write: |config| commands_json(&config.fix_commands),
         },
     ];
 

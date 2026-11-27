@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::{Target, virtual_path};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir()
@@ -51,13 +50,4 @@ fn entries_carry_their_name_kind_and_path() {
     assert!(read_dir(dir.join("missing")).is_err());
     assert!(read_dir(dir.join("a.txt")).is_err());
     std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn virtual_paths_need_a_connection() {
-    let dir = virtual_path(&Target::new("unconnected-dir").unwrap(), b"/etc");
-    assert_eq!(
-        read_dir(&dir).err().unwrap().kind(),
-        io::ErrorKind::NotConnected
-    );
 }

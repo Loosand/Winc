@@ -3612,7 +3612,6 @@ version = "0.0.0"
 dependencies = [
  "winc-backend",
  "winc-i18n",
- "winc-syntax",
 ]
 
 [[package]]
@@ -3736,14 +3735,6 @@ dependencies = [
  "winc-render",
  "winc-syntax",
  "winc-typeset",
-]
-
-[[package]]
-name = "winc-server"
-version = "0.0.0"
-dependencies = [
- "winc-backend",
- "winc-watch",
 ]
 
 [[package]]

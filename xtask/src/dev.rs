@@ -87,7 +87,6 @@ const LAYERS: &[(&str, &[&str])] = &[
     ("winc-pty", &["winc-emoji", "winc-version"]),
     ("winc-core", &["winc-emoji"]),
     ("winc-render", &["winc-emoji"]),
-    ("winc-server", &["winc-backend", "winc-watch"]),
     // 仅测试依赖。
     ("winc-watch", &["winc-config"]),
     (

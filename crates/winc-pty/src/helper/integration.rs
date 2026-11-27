@@ -112,33 +112,6 @@ pub fn inject(
     Some(nonce)
 }
 
-/// 为经 `ssh` 在远端主机上启动的 shell 准备注入：`args` 的最后一项（在远端运行的命令）里有
-/// [`winc_pty::scripts::REMOTE_NONCE`] 时，把最后一处换成新生成的随机数并返回它。
-///
-/// 脚本已由 winc 经它自己的连接写到远端；命令里没有该记号（没有启用集成、脚本没有写好）时
-/// 不注入，返回 `None`。
-pub fn inject_remote(program: &[u8], args: &mut [Vec<u8>]) -> Option<String> {
-    let name = program
-        .rsplit(|&b| b == b'/' || b == b'\\')
-        .next()
-        .unwrap_or(program);
-    if !name.eq_ignore_ascii_case(b"ssh") && !name.eq_ignore_ascii_case(b"ssh.exe") {
-        return None;
-    }
-    let mark = winc_pty::scripts::REMOTE_NONCE.as_bytes();
-    let command = args.last_mut()?;
-    let at = command.windows(mark.len()).rposition(|part| part == mark)?;
-    let nonce = match nonce() {
-        Ok(nonce) => nonce,
-        Err(error) => {
-            eprintln!("winc-pty: 无法生成 shell 集成的随机数：{error}");
-            return None;
-        }
-    };
-    command.splice(at..at + mark.len(), nonce.bytes());
-    Some(nonce)
-}
-
 /// 为 WSL 发行版的默认 shell 准备注入：写入脚本，并修改 `args`、`env`。
 ///
 /// 返回脚本报告命令行时附带的随机数。`program` 和 `args` 不是进入默认 shell 的 `wsl.exe`，或脚本

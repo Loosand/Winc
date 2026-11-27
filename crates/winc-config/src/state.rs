@@ -86,8 +86,6 @@ pub struct State {
     pub commit_messages: Vec<String>,
     /// 提交前检查这次新增的内容里有没有 TODO、FIXME，有时先确认。所有窗口和仓库共用。
     pub commit_check_todo: bool,
-    /// 提交前用格式化工具整理要提交的文件。所有窗口和仓库共用。
-    pub commit_reformat: bool,
     /// 提交时附加签署行（`Signed-off-by`）的仓库，元素是仓库的根目录。
     ///
     /// 在提交按钮的菜单中逐个仓库打开；所有窗口共用，下次启动沿用。
@@ -117,20 +115,11 @@ pub struct State {
     /// 目录进入这一段时选一个其他目录未使用的颜色，之后保持不变，使项目名旁和最近项目菜单中
     /// 始终显示同一种颜色。
     badges: Vec<(PathBuf, usize)>,
-    /// 用户对项目自带格式化工具（位于 `node_modules/.bin` 等目录）的确认结果，最近的在前。
-    ///
-    /// 每项为（工具所在目录，是否运行该目录中的程序）；`false` 表示改用系统安装的程序。
-    /// 最多 [`MAX_TOOL_CHOICES`] 项。
-    tool_choices: Vec<(PathBuf, bool)>,
     /// 用户信任了配置的 Git 仓库（根目录）和当时配置的指纹，最近的在前，最多
-    /// [`MAX_TOOL_CHOICES`] 项。
+    /// [`MAX_TRUSTED_REPOS`] 项。
     ///
     /// 仓库的配置变了（指纹不同）要重新确认。
     trusted_repos: Vec<(PathBuf, u64)>,
-    /// 用户为远端主机指定的密钥文件：（连接目标的文字，密钥文件的路径），按目标排序。
-    ///
-    /// 只记路径，不读取也不保存密钥的内容；路径原样交给 `ssh`。
-    remote_keys: Vec<(String, String)>,
     /// Vim 模式的大写标记：名字、文件路径、行号与列号（都从 0 起），按名字排序。
     pub vim_marks: Vec<(char, PathBuf, usize, usize)>,
     /// Vim 模式命令行的历史，从旧到新，最多 `MAX_VIM_HISTORY` 条。
@@ -144,10 +133,8 @@ pub struct State {
 /// 取自调参：与输入框的历史同一量级。
 const MAX_VIM_HISTORY: usize = 100;
 
-/// 最多记录的项目自带工具选择数量（个）。
-///
-/// 取 50（经验值），作用于工具选择和已信任仓库两项列表。
-const MAX_TOOL_CHOICES: usize = 50;
+/// 最多记录的已信任 Git 仓库数量（个）。
+const MAX_TRUSTED_REPOS: usize = 50;
 
 /// 窗口没有最大化、全屏时的大小和位置，以及关闭时是否最大化。
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -476,19 +463,6 @@ impl State {
             })
             .unwrap_or_default();
 
-        let tool_choices = root
-            .get("toolChoices")
-            .and_then(Json::as_array)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|item| {
-                let item = item.as_object()?;
-                let folder = item.get("folder")?.as_str().filter(|f| !f.is_empty())?;
-                Some((PathBuf::from(folder), item.get("run")?.as_bool()?))
-            })
-            .take(MAX_TOOL_CHOICES)
-            .collect();
-
         // 指纹是 64 位，存成十六进制字符串：JSON 的数字按 f64 读，精度不够，装不下。
         let trusted_repos = root
             .get("trustedRepos")
@@ -502,19 +476,8 @@ impl State {
                     u64::from_str_radix(item.get("fingerprint")?.as_str()?, 16).ok()?;
                 Some((PathBuf::from(folder), fingerprint))
             })
-            .take(MAX_TOOL_CHOICES)
+            .take(MAX_TRUSTED_REPOS)
             .collect();
-
-        let remote_keys = root
-            .get("remoteKeys")
-            .and_then(Json::as_object)
-            .map(|items| {
-                (items.iter())
-                    .filter_map(|(target, key)| Some((target.clone(), key.as_str()?.to_owned())))
-                    .filter(|(_, key)| !key.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
 
         let saved_workspaces = root.get("notebookWorkspaces");
         let mut notebook_workspaces = paths(saved_workspaces);
@@ -551,9 +514,7 @@ impl State {
                 .cloned()
                 .unwrap_or_default(),
             badges,
-            tool_choices,
             trusted_repos,
-            remote_keys,
             vim_marks,
             vim_commands,
             vim_searches,
@@ -604,7 +565,6 @@ impl State {
             .map(str::to_owned)
             .collect();
         state.commit_check_todo = root.get("commitCheckTodo").and_then(Json::as_bool) == Some(true);
-        state.commit_reformat = root.get("commitReformat").and_then(Json::as_bool) == Some(true);
         state.pdf_thumbnails_hidden = root
             .get("pdfThumbnailsHidden")
             .and_then(Json::as_bool)
@@ -796,9 +756,6 @@ impl State {
         if self.commit_check_todo {
             fields.push(("commitCheckTodo", Json::Bool(true)));
         }
-        if self.commit_reformat {
-            fields.push(("commitReformat", Json::Bool(true)));
-        }
         if self.pdf_thumbnails_hidden {
             fields.push(("pdfThumbnailsHidden", Json::Bool(true)));
         }
@@ -927,17 +884,6 @@ impl State {
         });
         fields.push(("sessions", Json::Array(sessions.collect())));
 
-        if !self.remote_keys.is_empty() {
-            let keys = (self.remote_keys.iter())
-                .map(|(target, key)| (target.clone(), Json::String(key.clone())));
-            fields.push(("remoteKeys", Json::object(keys)));
-        }
-        if !self.tool_choices.is_empty() {
-            let choices = self.tool_choices.iter().map(|(folder, run)| {
-                Json::object(vec![("folder", path(folder)), ("run", Json::Bool(*run))])
-            });
-            fields.push(("toolChoices", Json::Array(choices.collect())));
-        }
         if !self.trusted_repos.is_empty() {
             let repos = self.trusted_repos.iter().map(|(folder, fingerprint)| {
                 Json::object(vec![
@@ -1032,38 +978,6 @@ impl State {
         self.assign_badges();
     }
 
-    /// 返回用户为连接目标 `target` 指定的密钥文件；没有指定时返回 `None`。
-    pub fn remote_key(&self, target: &str) -> Option<&str> {
-        (self.remote_keys.iter())
-            .find(|(known, _)| known == target)
-            .map(|(_, key)| key.as_str())
-    }
-
-    /// 记下连接目标 `target` 使用的密钥文件 `key`；`key` 为空时去掉这条记录。
-    pub fn set_remote_key(&mut self, target: &str, key: &str) {
-        self.remote_keys.retain(|(known, _)| known != target);
-        if !key.is_empty() {
-            self.remote_keys.push((target.to_owned(), key.to_owned()));
-            self.remote_keys.sort();
-        }
-    }
-
-    /// 返回 `folder` 中项目自带格式化工具的上次选择：运行该目录中的程序（`true`），
-    /// 或使用系统安装的程序（`false`）；没有记录时返回 `None`。
-    pub fn tool_choice(&self, folder: &Path) -> Option<bool> {
-        self.tool_choices
-            .iter()
-            .find(|(p, _)| p == folder)
-            .map(|&(_, run)| run)
-    }
-
-    /// 记录对 `folder` 中项目自带工具的选择并移到最前面，超出 `MAX_TOOL_CHOICES` 的从末尾移除。
-    pub fn set_tool_choice(&mut self, folder: &Path, run: bool) {
-        self.tool_choices.retain(|(p, _)| p != folder);
-        self.tool_choices.insert(0, (folder.to_path_buf(), run));
-        self.tool_choices.truncate(MAX_TOOL_CHOICES);
-    }
-
     /// 返回用户信任 Git 仓库 `root` 的配置时记下的指纹；没有信任过时返回 `None`。
     pub fn trusted_repo(&self, root: &Path) -> Option<u64> {
         self.trusted_repos
@@ -1077,7 +991,7 @@ impl State {
         self.trusted_repos.retain(|(p, _)| p != root);
         self.trusted_repos
             .insert(0, (root.to_path_buf(), fingerprint));
-        self.trusted_repos.truncate(MAX_TOOL_CHOICES);
+        self.trusted_repos.truncate(MAX_TRUSTED_REPOS);
     }
 
     /// 返回目录 `folder` 的徽章颜色（值在 `0..BADGE_COLORS` 之内）；不在最近列表的前

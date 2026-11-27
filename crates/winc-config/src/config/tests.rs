@@ -64,11 +64,6 @@ fn reads_every_field() {
                     "zoom": 125
                 },
                 "tree": { "confirmDragAndDrop": false },
-                "format": {
-                    "onSave": true,
-                    "onSaveExclude": ["Markdown"],
-                    "commands": { "JSON": "jq --indent 4 .", "c++": " clang-format ", "rust": "" }
-                },
                 "theme": "light"
             }"#,
     );
@@ -85,16 +80,6 @@ fn reads_every_field() {
     assert_eq!(config.ui_zoom, Some(125));
     assert_eq!(config.theme, Some(ThemeChoice::Light));
     assert_eq!(config.confirm_drag_and_drop, Some(false));
-    // 语言写名字（`JSON`）也能识别并存成 id；空命令视为没写，因此 `rust` 一项不出现。
-    assert_eq!(config.format_on_save, Some(true));
-    assert_eq!(config.format_on_save_exclude, ["markdown"]);
-    assert_eq!(
-        config.format_commands,
-        BTreeMap::from([
-            ("cpp".to_string(), "clang-format".to_string()),
-            ("json".to_string(), "jq --indent 4 .".to_string()),
-        ])
-    );
 }
 
 #[test]
@@ -143,122 +128,6 @@ fn bad_values_are_reported_and_ignored() {
 }
 
 #[test]
-fn bad_format_settings_are_reported_one_by_one() {
-    let (config, problems) = Config::parse(
-        r#"{"format": {
-                "onSave": "yes",
-                "onSaveExclude": ["cobol", 3, "md", "markdown"],
-                "commands": { "cobol": "cobc", "go": 1, "JSON": "jq .", "json": "jq -S ." },
-                "fixCommands": { "go": true, "Python": "", "typescript": " eslint " },
-                "onsave": true
-            }}"#,
-    );
-    assert_eq!(config.format_on_save, None);
-    assert_eq!(config.format_on_save_exclude, ["markdown"]);
-    // 同一种语言写了两遍（`JSON` 和 `json`）：按键名排序后靠后的一条生效，并报告该问题。
-    assert_eq!(
-        config.format_commands,
-        BTreeMap::from([("json".to_string(), "jq -S .".to_string())])
-    );
-    assert_eq!(
-        config.fix_commands,
-        BTreeMap::from([("typescript".to_string(), "eslint".to_string())])
-    );
-    for expected in [
-        "format.onSave 应为 true 或 false",
-        "format.onSaveExclude 中有无法识别的语言「cobol」",
-        "format.onSaveExclude 中有无法识别的语言「md」",
-        "format.onSaveExclude 中的项应为字符串",
-        "format.commands 中有无法识别的语言「cobol」",
-        "format.commands.go 应为字符串",
-        "format.commands 中「json」与另一项指向同一种语言",
-        "format.fixCommands.go 应为字符串",
-        "无法识别 format.onsave",
-    ] {
-        assert!(
-            problems.iter().any(|p| p.contains(expected)),
-            "{expected}：{problems:?}"
-        );
-    }
-    assert_eq!(problems.len(), 9, "{problems:?}");
-}
-
-/// `remote.localFolders`：键规范为 `目标:/路径`（空段、`.`、`..` 与远端位置的比较方式相同），
-/// 写法不对、目标无效、规范后重复的项逐项报告。
-#[test]
-fn remote_local_folders_are_normalised_and_checked() {
-    let (config, problems) = Config::parse(
-        r#"{"remote": {"localFolders": {
-                "devbox:/home//me/./proj/../": "Z:\\",
-                "devbox:/home/me": "W:\\",
-                "devbox:2222:/": " /mnt/devbox ",
-                "devbox:/srv": "",
-                "devbox": "Y:\\",
-                "/srv": "X:\\",
-                "-oProxyCommand=x:/": "V:\\",
-                "devbox:/opt": 3
-            }}}"#,
-    );
-    assert_eq!(
-        config.remote_local_folders,
-        BTreeMap::from([
-            ("devbox:/home/me".to_string(), r"Z:\".to_string()),
-            ("devbox:2222:/".to_string(), "/mnt/devbox".to_string()),
-        ])
-    );
-    for expected in [
-        "remote.localFolders.devbox：键应写成「主机:/远端目录」",
-        "remote.localFolders./srv：键应写成「主机:/远端目录」",
-        "remote.localFolders.-oProxyCommand=x:/：键应写成「主机:/远端目录」",
-        "remote.localFolders.devbox:/home/me：与前面的一项是同一个远端目录",
-        "remote.localFolders.devbox:/opt 应为字符串",
-    ] {
-        assert!(
-            problems.iter().any(|p| p.contains(expected)),
-            "{expected}：{problems:?}"
-        );
-    }
-    assert_eq!(problems.len(), 5, "{problems:?}");
-    let (wrong, problems) = Config::parse(r#"{"remote": {"localFolders": ["Z:"]}}"#);
-    assert!(wrong.remote_local_folders.is_empty());
-    assert!(
-        problems[0].contains("remote.localFolders 应为对象"),
-        "{problems:?}"
-    );
-}
-
-#[test]
-fn project_configs_only_read_the_format_section() {
-    let (config, problems) = Config::parse_project(
-        r#"{
-                "format": { "onSave": true, "commands": { "TypeScript": "biome format --stdin-file-path={file}" } },
-                "editor": { "size": 30 }
-            }"#,
-    );
-    assert_eq!(config.format_on_save, Some(true));
-    assert_eq!(
-        config.format_commands.get("typescript").map(String::as_str),
-        Some("biome format --stdin-file-path={file}")
-    );
-    assert_eq!(config.editor_size, None, "项目改不了编辑器的字号");
-    assert_eq!(problems, ["项目设置仅支持 format，已忽略 editor"]);
-    assert!(!Config::parse_project("[]").1.is_empty());
-
-    let dir = std::env::temp_dir().join(format!("winc-project-config-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    assert!(Config::load_project(&dir).is_none());
-    std::fs::create_dir_all(dir.join(".winc")).unwrap();
-    std::fs::write(
-        project_config_path(&dir),
-        r#"{"format": {"onSave": false}}"#,
-    )
-    .unwrap();
-    let (config, problems) = Config::load_project(&dir).unwrap();
-    assert_eq!((config.format_on_save, problems.len()), (Some(false), 0));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
 fn malformed_json_does_not_panic() {
     for text in [
         "",
@@ -302,7 +171,6 @@ fn round_trips_through_json() {
         sticky_scroll: Some(false),
         word_wrap: Some(true),
         whole_lines: Some(true),
-        minimap: Some(true),
         outline: Some(false),
         render_whitespace: Some(RenderWhitespace::Trailing),
         diff_inline: Some(true),
@@ -375,26 +243,13 @@ fn round_trips_through_json() {
         git_worktree_root: Some("~/worktrees".to_string()),
         git_open_worktree: Some(WorktreeOpen::NewWindow),
         git_path: Some("C:\\Tools\\wslgit.exe".to_string()),
-        remote_enabled: Some(true),
-        remote_local_folders: BTreeMap::from([
-            ("devbox:2222:/home/me".to_string(), r"Z:\".to_string()),
-            ("me@build:/".to_string(), "~/mnt/build".to_string()),
-        ]),
         keymap: Some("vscode".to_owned()),
         shortcuts: [
             ("quickOpen".to_owned(), vec!["cmd+p".to_owned()]),
-            ("format".to_owned(), Vec::new()),
+            ("save".to_owned(), Vec::new()),
         ]
         .into(),
         git_worktree_copy: vec![".env*".to_string(), "config/local.toml".to_string()],
-        format_on_save: Some(false),
-        format_on_save_exclude: vec!["markdown".to_string(), "yaml".to_string()],
-        format_commands: BTreeMap::from([(
-            "python".to_string(),
-            "sh -c 'ruff format - | cat'".to_string(),
-        )]),
-        fix_on_save: Some(true),
-        fix_commands: BTreeMap::from([("python".to_string(), "ruff check --fix -".to_string())]),
     };
 
     let (parsed, problems) = Config::parse(&config.to_json());
@@ -461,14 +316,12 @@ fn to_json_writes_sections_in_a_fixed_order() {
         git_enabled: Some(true),
         editor_size: Some(13.0),
         editor_font: Some("Menlo".to_string()),
-        format_commands: BTreeMap::from([("json".to_string(), "jq .".to_string())]),
         ..Config::default()
     };
     assert_eq!(
         config.to_json(),
         "{\n  \"editor\": {\n    \"font\": \"Menlo\",\n    \"size\": 13\n  },\n  \"git\": {\n    \
-             \"enabled\": true\n  },\n  \"format\": {\n    \"commands\": {\n      \"json\": \
-             \"jq .\"\n    }\n  },\n  \"theme\": \"auto\"\n}\n"
+             \"enabled\": true\n  },\n  \"theme\": \"auto\"\n}\n"
     );
     assert_eq!(Config::default().to_json(), "{}\n");
 }
@@ -661,11 +514,6 @@ fn configs_are_read_as_jsonc_and_comments_are_kept_aside_when_writing() {
     assert_eq!(config.save_to(&path, &config).unwrap().backup, None);
     std::fs::write(&path, "{\"editor\": {\"size\": 16,},}").unwrap();
     assert_eq!(config.save_to(&path, &config).unwrap().backup, None);
-
-    let (project, problems) =
-        Config::parse_project("{\n  // 团队用的\n  \"format\": {\"onSave\": true,},\n}");
-    assert!(problems.is_empty(), "{problems:?}");
-    assert_eq!(project.format_on_save, Some(true));
 
     let _ = std::fs::remove_dir_all(&dir);
 }

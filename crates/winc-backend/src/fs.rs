@@ -1,10 +1,4 @@
-//! 文件操作：函数名和语义与 `std::fs` 中的同名函数相同，路径可以是本机路径或虚拟路径。
-//!
-//! 虚拟路径经到该主机的连接访问（见 [`remote`]），此时还可能返回连接的错误：
-//! 没有连接时为 [`io::ErrorKind::NotConnected`]，当前线程不允许等待时为
-//! [`io::ErrorKind::WouldBlock`]，连接中断时为 [`io::ErrorKind::BrokenPipe`]。文件信息用本 crate
-//! 的 [`Metadata`] 表示：
-//! `std::fs::Metadata` 无法由远端的数据构造。
+//! 文件操作：函数名和语义与 `std::fs` 中的同名函数相同，返回统一的 [`Metadata`]。
 
 mod change;
 mod dir;
@@ -25,87 +19,36 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub use crate::meta::{Kind, Metadata, Stamp, Unix};
-use crate::{locate, remote};
 
 /// 返回 `path` 的文件信息，跟随符号链接。
 ///
 /// # Errors
 ///
-/// 与 `std::fs::metadata` 相同；`path` 是虚拟路径时还有连接的错误，见本模块的说明。
+/// 与 `std::fs::metadata` 相同。
 pub fn metadata(path: impl AsRef<Path>) -> io::Result<Metadata> {
-    let path = path.as_ref();
-    match locate(path) {
-        None => std::fs::metadata(path).map(|m| Metadata::from(&m)),
-        Some(at) => remote::connection(&at.target)?.metadata(&at.path, true),
-    }
+    std::fs::metadata(path.as_ref()).map(|m| Metadata::from(&m))
 }
 
 /// 返回 `path` 的文件信息，不跟随符号链接。
 ///
 /// # Errors
 ///
-/// 与 `std::fs::symlink_metadata` 相同；`path` 是虚拟路径时还有连接的错误，见本模块的说明。
+/// 与 `std::fs::symlink_metadata` 相同。
 pub fn symlink_metadata(path: impl AsRef<Path>) -> io::Result<Metadata> {
-    let path = path.as_ref();
-    match locate(path) {
-        None => std::fs::symlink_metadata(path).map(|m| Metadata::from(&m)),
-        Some(at) => remote::connection(&at.target)?.metadata(&at.path, false),
-    }
+    std::fs::symlink_metadata(path.as_ref()).map(|m| Metadata::from(&m))
 }
 
-/// 一个路径在调用方列表中的位置，以及它在远端的路径。
-type Indexed = (usize, Vec<u8>);
-
 /// 对若干路径逐个取文件信息（跟随符号链接），结果与 `paths` 的顺序一一对应。
-///
-/// 远端路径由一次请求完成，不逐个往返。
 pub fn metadata_many<P: AsRef<Path>>(paths: &[P]) -> Vec<io::Result<Metadata>> {
-    let mut results: Vec<Option<io::Result<Metadata>>> = Vec::new();
-    // 远端的路径按主机分组，每个主机一次往返；本机的路径逐个取。
-    let mut groups: Vec<(crate::Target, Vec<Indexed>)> = Vec::new();
-    for (index, path) in paths.iter().enumerate() {
-        let path = path.as_ref();
-        match locate(path) {
-            None => {
-                let found = std::fs::metadata(path).map(|m| Metadata::from(&m));
-                results.push(Some(found));
-            }
-            Some(at) => {
-                results.push(None);
-                match groups.iter_mut().find(|(target, _)| *target == at.target) {
-                    Some((_, group)) => group.push((index, at.path)),
-                    None => groups.push((at.target, vec![(index, at.path)])),
-                }
-            }
-        }
-    }
-    for (target, group) in groups {
-        let remote: Vec<&[u8]> = group.iter().map(|(_, path)| path.as_slice()).collect();
-        let found = remote::connection(&target).and_then(|c| c.metadata_many(&remote));
-        match found {
-            Ok(found) => {
-                for ((index, _), metadata) in group.iter().zip(found) {
-                    results[*index] = Some(metadata);
-                }
-            }
-            // 整组失败（没有连接、连接中断）：每个路径都是同一种错误。
-            Err(error) => {
-                for (index, _) in &group {
-                    results[*index] = Some(Err(io::Error::new(error.kind(), error.to_string())));
-                }
-            }
-        }
-    }
-    (results.into_iter())
-        .map(|result| {
-            result.unwrap_or_else(|| Err(remote::unavailable(remote::Unavailable::NotConnected)))
-        })
+    paths
+        .iter()
+        .map(|path| std::fs::metadata(path.as_ref()).map(|m| Metadata::from(&m)))
         .collect()
 }
 
 /// 是否表示文件不存在：路径上没有该项，或路径中间的一段不是目录。
 ///
-/// 其他错误（权限不足、连接中断）不说明文件是否存在，不能据此认为文件已被删除。
+/// 其他错误（权限不足等）不说明文件是否存在，不能据此认为文件已被删除。
 pub fn is_absent(error: &io::Error) -> bool {
     matches!(
         error.kind(),
@@ -115,25 +58,21 @@ pub fn is_absent(error: &io::Error) -> bool {
 
 /// 是否存在并且是普通文件（跟随符号链接）；无法确定时为否。
 pub fn is_file(path: impl AsRef<Path>) -> bool {
-    let path = path.as_ref();
     metadata(path).is_ok_and(|m| m.is_file())
 }
 
 /// 是否存在并且是目录（跟随符号链接）；无法确定时为否。
 pub fn is_dir(path: impl AsRef<Path>) -> bool {
-    let path = path.as_ref();
     metadata(path).is_ok_and(|m| m.is_dir())
 }
 
 /// 是否为符号链接（不跟随链接，指向不存在目标的链接同样为是）；无法确定时为否。
 pub fn is_symlink(path: impl AsRef<Path>) -> bool {
-    let path = path.as_ref();
     symlink_metadata(path).is_ok_and(|m| m.is_symlink())
 }
 
 /// 是否存在（跟随符号链接，指向不存在目标的符号链接不算存在）；无法确定时为否。
 pub fn exists(path: impl AsRef<Path>) -> bool {
-    let path = path.as_ref();
     metadata(path).is_ok()
 }
 
@@ -141,48 +80,25 @@ pub fn exists(path: impl AsRef<Path>) -> bool {
 ///
 /// # Errors
 ///
-/// 与 `std::fs::read` 相同；`path` 是虚拟路径时还有连接的错误，见本模块的说明。
+/// 与 `std::fs::read` 相同。
 pub fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
-    let path = path.as_ref();
-    match locate(path) {
-        None => std::fs::read(path),
-        Some(at) => remote::connection(&at.target)?.read(&at.path),
-    }
+    std::fs::read(path.as_ref())
 }
 
 /// 读取 `path` 的全部内容并按 UTF-8 解码。
 ///
 /// # Errors
 ///
-/// 与 `std::fs::read_to_string` 相同；`path` 是虚拟路径时还有连接的错误，见本模块的说明。
+/// 与 `std::fs::read_to_string` 相同。
 pub fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
-    let path = path.as_ref();
-    match locate(path) {
-        None => std::fs::read_to_string(path),
-        Some(at) => {
-            let bytes = remote::connection(&at.target)?.read(&at.path)?;
-            String::from_utf8(bytes).map_err(|_| io::ErrorKind::InvalidData.into())
-        }
-    }
+    std::fs::read_to_string(path.as_ref())
 }
 
 /// 返回符号链接 `path` 指向的目标。
 ///
 /// # Errors
 ///
-/// 与 `std::fs::read_link` 相同。`path` 是虚拟路径时，结果是远端的目标原样的写法，不是虚拟路径。
+/// 与 `std::fs::read_link` 相同。
 pub fn read_link(path: impl AsRef<Path>) -> io::Result<PathBuf> {
-    let path = path.as_ref();
-    match locate(path) {
-        None => std::fs::read_link(path),
-        Some(at) => {
-            let target = remote::connection(&at.target)?.read_link(&at.path)?;
-            #[cfg(unix)]
-            let target: std::ffi::OsString = std::os::unix::ffi::OsStringExt::from_vec(target);
-            // Windows 的字符串无法表示不是有效 UTF-8 的目标，换成替换字符。
-            #[cfg(not(unix))]
-            let target = String::from_utf8_lossy(&target).into_owned();
-            Ok(PathBuf::from(target))
-        }
-    }
+    std::fs::read_link(path.as_ref())
 }

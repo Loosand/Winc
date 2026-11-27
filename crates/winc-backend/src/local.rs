@@ -7,7 +7,7 @@ pub(crate) mod save;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use save::{SaveError, SaveOptions, save_local};
+pub(crate) use save::save_local;
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};

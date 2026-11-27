@@ -4,7 +4,6 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use super::*;
-use crate::{Target, virtual_path};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir()
@@ -73,13 +72,4 @@ fn handles_read_at_offsets_and_keep_the_file_they_opened() {
     assert_eq!(crate::fs::metadata(&file).unwrap().len, 16);
     drop((handle, copy));
     std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn virtual_paths_need_a_connection() {
-    let file = virtual_path(&Target::new("unconnected-open").unwrap(), b"/etc/hosts");
-    assert_eq!(
-        open(&file, 16).err().unwrap().kind(),
-        io::ErrorKind::NotConnected
-    );
 }

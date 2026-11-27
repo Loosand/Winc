@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::{Target, virtual_path};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir()
@@ -151,14 +150,4 @@ fn the_in_place_preference_and_the_callback_apply_to_existing_files_only() {
     assert_eq!(std::fs::read(&file).unwrap(), b"four");
     assert_eq!(called.get(), 1);
     std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn virtual_paths_need_a_connection() {
-    let file = virtual_path(&Target::new("unconnected-save").unwrap(), b"/tmp/note.txt");
-    let error = save(&file, &in_memory(), |out| out.write_all(b"x")).unwrap_err();
-    let SaveError::Io(error) = error else {
-        panic!("{error}");
-    };
-    assert_eq!(error.kind(), io::ErrorKind::NotConnected);
 }

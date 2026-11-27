@@ -5,12 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
-repository.workspace = true
-homepage.workspace = true
 
 [dependencies]
 winc-backend.workspace = true
-winc-syntax.workspace = true
 winc-i18n.workspace = true
 
 [lints]

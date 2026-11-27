@@ -167,7 +167,6 @@ fn sample() -> State {
         log_columns: Some(vec!["date".into(), "hash".into()]),
         commit_messages: vec!["修复登录\n\n说明".into(), "first".into()],
         commit_check_todo: true,
-        commit_reformat: true,
         sign_off_repos: vec![PathBuf::from("/a/项目")],
         pdf_thumbnails_hidden: true,
         markdown_toc_pinned: true,
@@ -191,26 +190,10 @@ fn sample() -> State {
             maximized: true,
         }),
         badges: Vec::new(),
-        tool_choices: vec![(PathBuf::from("/a/项目"), true)],
         trusted_repos: vec![(PathBuf::from("/a/项目"), u64::MAX - 1)],
-        remote_keys: Vec::new(),
     };
-    state.set_remote_key("me@devbox:2200", "~/.ssh/工作 key");
-    state.set_remote_key("build", "/keys/build");
     state.assign_badges();
     state
-}
-
-#[test]
-fn a_key_file_is_kept_per_remote_host_until_cleared() {
-    let mut state = sample();
-    assert_eq!(state.remote_key("build"), Some("/keys/build"));
-    assert_eq!(state.remote_key("me@devbox"), None);
-    state.set_remote_key("build", "/keys/other");
-    assert_eq!(state.remote_key("build"), Some("/keys/other"));
-    state.set_remote_key("build", "");
-    assert_eq!(state.remote_key("build"), None);
-    assert_eq!(state.remote_key("me@devbox:2200"), Some("~/.ssh/工作 key"));
 }
 
 #[test]
@@ -445,24 +428,6 @@ fn sessions_are_kept_per_folder() {
         state.last_session().unwrap().tabs,
         [Tab::File(PathBuf::from("/a/x"))]
     );
-}
-
-#[test]
-fn tool_choices_are_remembered_per_folder() {
-    let mut state = State::default();
-    assert_eq!(state.tool_choice(Path::new("/a")), None);
-    state.set_tool_choice(Path::new("/a"), true);
-    state.set_tool_choice(Path::new("/b"), false);
-    state.set_tool_choice(Path::new("/a"), false);
-    assert_eq!(state.tool_choice(Path::new("/a")), Some(false));
-    assert_eq!(state.tool_choice(Path::new("/b")), Some(false));
-    assert_eq!(State::parse(&state.to_json()), state);
-
-    for i in 0..MAX_TOOL_CHOICES + 5 {
-        state.set_tool_choice(Path::new(&format!("/p{i}")), true);
-    }
-    assert_eq!(state.tool_choices.len(), MAX_TOOL_CHOICES);
-    assert_eq!(state.tool_choice(Path::new("/a")), None, "最早的挤掉了");
 }
 
 #[test]
