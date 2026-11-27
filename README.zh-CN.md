@@ -105,7 +105,7 @@ cargo xtask bench                   # 运行启动、内存与滚动性能基准
 | `winc` | 可执行程序入口 |
 | `xtask` | 测试、性能基准与构建自动化脚本 |
 
-> 注：仓库仍保留部分源自上游代码编辑器的底层模块（如 `winc-syntax`、`winc-vim`、`winc-pty`、`winc-backend`、`winc-server`），后续将按路线图从写作界面中逐步收起或按需精简。
+> 注：仓库仍保留部分源自上游代码编辑器的底层模块（如 `winc-syntax`、`winc-vim`、`winc-pty`、`winc-backend`），后续将按路线图从写作界面中逐步收起或按需精简。
 
 ## 许可证与致谢
 

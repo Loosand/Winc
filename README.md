@@ -105,7 +105,7 @@ The UI is written in Rust using `winit` for windowing and a custom CPU rasterize
 | `winc` | Binary entry point |
 | `xtask` | Testing, benchmarking, and build automation |
 
-> Note: Several lower-level crates inherited from the upstream code editor (`winc-syntax`, `winc-vim`, `winc-pty`, `winc-backend`, `winc-server`) remain in the workspace and are gradually being hidden from the writing UI or trimmed as the roadmap progresses.
+> Note: Several lower-level crates inherited from the upstream code editor (`winc-syntax`, `winc-vim`, `winc-pty`, `winc-backend`) remain in the workspace and are gradually being hidden from the writing UI or trimmed as the roadmap progresses.
 
 ## License & Attribution
 

@@ -54,12 +54,6 @@
           <Component Id="WslWatcher" Guid="*" Win64="yes">
             <File Id="WincWatch" Source="$(var.Source)\winc-watch" KeyPath="yes"/>
           </Component>
-          <Component Id="RemoteServerX64" Guid="*" Win64="yes">
-            <File Id="WincServerX64" Source="$(var.Source)\winc-server-Linux-x86_64" KeyPath="yes"/>
-          </Component>
-          <Component Id="RemoteServerArm64" Guid="*" Win64="yes">
-            <File Id="WincServerArm64" Source="$(var.Source)\winc-server-Linux-aarch64" KeyPath="yes"/>
-          </Component>
           <Component Id="InstallationKind" Guid="*" Win64="yes">
             <File Source="$(var.Source)\msi\winc-installation" KeyPath="yes"/>
           </Component>
@@ -224,7 +218,6 @@
       <ComponentRef Id="ConptyLibrary"/><ComponentRef Id="ConsoleHost"/>
       <ComponentRef Id="FileAssociations"/><ComponentRef Id="ContextMenu"/><ComponentRef Id="UrlScheme"/>
       <ComponentRef Id="CommandLine"/><ComponentRef Id="CommandLineCmd"/><ComponentRef Id="WslWatcher"/>
-      <ComponentRef Id="RemoteServerX64"/><ComponentRef Id="RemoteServerArm64"/>
       <ComponentRef Id="License"/><ComponentRef Id="Notice"/><ComponentRef Id="StartMenu"/>
       <ComponentRef Id="Icon_markdown"/><ComponentRef Id="Icon_json"/><ComponentRef Id="Icon_config"/><ComponentRef Id="Icon_markup"/><ComponentRef Id="Icon_style"/><ComponentRef Id="Icon_script"/><ComponentRef Id="Icon_table"/><ComponentRef Id="Icon_text"/><ComponentRef Id="Icon_javascript"/><ComponentRef Id="Icon_typescript"/><ComponentRef Id="Icon_python"/><ComponentRef Id="Icon_rust"/><ComponentRef Id="Icon_go"/><ComponentRef Id="Icon_c"/><ComponentRef Id="Icon_code"/><ComponentRef Id="Icon_file"/>
     </Feature>
