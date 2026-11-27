@@ -51,7 +51,7 @@ editor-word-wrap-off = Word wrap off
 editor-fold-large = The file is too large to fold
 editor-large-whole-file = The file is too large for this operation on the whole file
 
-## Bookmarks, symbols, definitions, and usages.
+## Bookmarks and symbols.
 
 editor-bookmark-added = Bookmark added
 editor-bookmark-removed = Bookmark removed
@@ -68,26 +68,11 @@ editor-symbol-module = Module
 editor-symbol-variable = Variable
 editor-symbol-heading = Heading
 editor-symbol-section = Section
-editor-definition-no-name = No name to look up at the cursor
-editor-usages-not-found = No other usages of “{ $name }” found
-editor-definition-at-caret = The cursor is already at the definition of “{ $name }”
-editor-definition-not-found = No definition of “{ $name }” found
-editor-open-folder-first = Open a folder first
-editor-places-definitions-count = { $count ->
-        [one] { $count } definition
-       *[other] { $count } definitions
-    }
-editor-places-usages-count = { $count ->
-        [one] { $count } usage
-       *[other] { $count } usages
-    }
 editor-places-bookmarks-count = { $count ->
         [one] { $count } bookmark
        *[other] { $count } bookmarks
     }
 editor-places-no-match = No matching locations
-editor-places-usages-suffix = { " " }usages
-editor-places-definitions-suffix = { " " }definitions
 editor-places-bookmarks = Bookmarks
 
 ## Diff view.
@@ -197,7 +182,6 @@ editor-vim-fewer-lines = { $count } fewer lines
 editor-vim-no-buffer = No such document
 editor-vim-no-file = No file at that path under the cursor
 editor-vim-file-exists = File exists; add ! to overwrite
-editor-vim-file-unknown = Can’t tell whether the remote file exists; add ! to write
 editor-vim-written = Wrote { $name }
 editor-vim-diff-read-only = This side of the diff is read-only
 editor-vim-help-title = Vim Mode: Commands
@@ -225,7 +209,6 @@ editor-paste-copied-items = { $count ->
         [one] Copied { $count } item
        *[other] Copied { $count } items
     }
-editor-paste-cut-copied-across-hosts = Items can’t be moved between hosts, so they were copied
 editor-paste-cut-item = Cut “{ $name }”
 editor-paste-cut-items = { $count ->
         [one] Cut { $count } item
@@ -240,15 +223,3 @@ editor-paste-clipboard-empty = The clipboard is empty
 editor-paste-clipboard-unavailable = Couldn’t write to the system clipboard
 editor-paste-copy-name = { $stem } copy{ $ext }
 editor-paste-copy-name-numbered = { $stem } copy { $number }{ $ext }
-
-editor-show-hex = Open as Hex
-editor-encoding-hex = Hexadecimal
-hex-offset = Offset
-hex-status-offset = Offset { $offset }
-hex-status-selected = Offset { $offset } · { $count } bytes selected
-hex-copy-too-large = The selection is larger than { $limit }, so it wasn't copied
-hex-goto-title = Go to Offset
-hex-goto-placeholder = 0x4E or 78
-hex-goto-total = { $size } in total
-editor-readonly-hex = The hex view is read-only
-editor-definition-in-dependencies = “{ $name }” isn’t defined in the project; searching dependencies…

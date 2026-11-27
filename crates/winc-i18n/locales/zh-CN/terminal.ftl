@@ -66,13 +66,6 @@ terminal-close-confirm = 要结束「{ $name }」吗？
 terminal-close-confirm-detail = 关闭此终端标签页将结束其中正在运行的程序。
 terminal-paste-confirm = 要将 { $count } 行文字粘贴到终端吗？
 terminal-paste-confirm-detail = 终端中的程序未开启括号粘贴，每一行将作为单独的命令立即执行。
-terminal-upload-started = 正在把剪贴板中的内容传到 { $host }…
-terminal-upload-failed = 无法把剪贴板中的内容传到远端主机：{ $error }
-terminal-upload-folder = 不能把文件夹粘贴到远端终端：{ $name }
-terminal-upload-too-large = { $size } 太大，没有传到远端主机（每次最多 { $limit }）
-terminal-upload-no-image = 剪贴板中的图片无法读取
-terminal-upload-no-folder = 无法在远端主机上创建存放目录
-terminal-upload-elsewhere = 已传到远端主机：{ $path }
 
 ## 运行配置。
 
@@ -93,7 +86,6 @@ terminal-python-confirm-decline = 不加载
 terminal-run-config-problem = 运行配置（.winc/run.json）：{ $problem }
 terminal-run-create-failed = 无法创建运行配置：{ $error }
 terminal-run-add = 添加运行配置
-terminal-run-remote = 远端主机上的目录没有运行配置
 terminal-run-stopped = 已停止
 terminal-run-finished = 已完成
 terminal-run-failed = 「{ $name }」运行失败（退出码 { $code }）

@@ -26,7 +26,6 @@ catalog![
     "preview",
     "settings",
     "config",
-    "format",
     "menu",
 ];
 

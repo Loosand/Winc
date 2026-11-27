@@ -4,9 +4,6 @@ config-read-failed = Couldn’t read the configuration file ({ $error }); using 
 config-invalid-json = The configuration file isn’t valid JSON; using default settings
 config-root-not-object = The top level of the configuration file should be an object; using default settings
 config-unknown-key = Unknown setting { $key }; ignored
-config-project-read-failed = Couldn’t read ({ $error }); ignored
-config-project-invalid-json = Not a valid JSON object; ignored
-config-project-unsupported-key = Project settings support only format; ignored { $key }
 
 ## 运行配置（.winc/run.json）。
 
@@ -42,12 +39,7 @@ config-title-bar-style-invalid = { $name } should be "custom" or "native"; ignor
 config-option-as-meta-invalid = { $name } should be "left", "right", "both", or "none"; ignored
 config-not-array = { $name } should be an array; ignored
 config-item-not-non-empty-string = Items in { $name } should be non-empty strings; ignored
-config-item-not-string = Items in { $name } should be strings; ignored
 config-not-object = { $name } should be an object; ignored
-config-remote-folder-invalid = { $name }: the key should be written as host:/remote/folder, such as devbox:/home/me; ignored
-config-remote-folder-duplicate = { $name } names the same remote folder as an earlier entry; ignored
-config-duplicate-language = “{ $language }” in { $name } refers to the same language as another entry; using “{ $language }”
-config-unknown-language = Unknown language “{ $language }” in { $name }; ignored
 config-empty = { $name } is empty; ignored
 config-not-bool = { $name } should be true or false; ignored
 config-not-number = { $name } should be a number; ignored

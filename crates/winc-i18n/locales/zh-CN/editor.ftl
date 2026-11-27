@@ -48,7 +48,7 @@ editor-word-wrap-off = 已关闭自动换行
 editor-fold-large = 文件过大，无法折叠
 editor-large-whole-file = 文件过大，无法对整个文件执行此操作
 
-## 书签、符号、定义和用法。
+## 书签与符号。
 
 editor-bookmark-added = 已添加书签
 editor-bookmark-removed = 已移除书签
@@ -62,17 +62,8 @@ editor-symbol-module = 模块
 editor-symbol-variable = 变量
 editor-symbol-heading = 标题
 editor-symbol-section = 小节
-editor-definition-no-name = 光标处无可查找的名称
-editor-usages-not-found = 未找到「{ $name }」的其他用法
-editor-definition-at-caret = 光标处即为「{ $name }」的定义
-editor-definition-not-found = 未找到「{ $name }」的定义
-editor-open-folder-first = 请先打开一个目录
-editor-places-definitions-count = { $count } 处定义
-editor-places-usages-count = { $count } 个用法
 editor-places-bookmarks-count = { $count } 个书签
 editor-places-no-match = 无匹配的位置
-editor-places-usages-suffix = { " " }的用法
-editor-places-definitions-suffix = { " " }的定义
 editor-places-bookmarks = 书签
 
 ## 差异视图。
@@ -176,7 +167,6 @@ editor-vim-fewer-lines = 减少 { $count } 行
 editor-vim-no-buffer = 未找到该文档
 editor-vim-no-file = 光标处不是已有文件的路径
 editor-vim-file-exists = 文件已存在，加 ! 可覆盖
-editor-vim-file-unknown = 无法确认远端是否已有该文件，加 ! 写入
 editor-vim-written = 已写出 { $name }
 editor-vim-diff-read-only = 差异的此侧为只读
 editor-vim-help-title = Vim 模式：命令一览
@@ -201,7 +191,6 @@ editor-selection-copied = 已复制所选内容
 editor-selection-too-large-to-copy = 选区超过 { $size } MB，无法复制
 editor-paste-copied-item = 已复制「{ $name }」
 editor-paste-copied-items = 已复制 { $count } 项
-editor-paste-cut-copied-across-hosts = 不同主机之间不能移动，已改为复制
 editor-paste-cut-item = 已剪切「{ $name }」
 editor-paste-cut-items = 已剪切 { $count } 项
 editor-paste-copy-failed = 无法复制「{ $name }」：{ $error }
@@ -213,15 +202,3 @@ editor-paste-clipboard-empty = 剪贴板为空
 editor-paste-clipboard-unavailable = 无法写入系统剪贴板
 editor-paste-copy-name = { $stem } 副本{ $ext }
 editor-paste-copy-name-numbered = { $stem } 副本 { $number }{ $ext }
-
-editor-show-hex = 以十六进制打开
-editor-encoding-hex = 十六进制
-hex-offset = 偏移
-hex-status-offset = 偏移 { $offset }
-hex-status-selected = 偏移 { $offset } · 已选 { $count } 字节
-hex-copy-too-large = 选中的内容超过 { $limit }，没有复制
-hex-goto-title = 转到偏移
-hex-goto-placeholder = 0x4E 或 78
-hex-goto-total = 共 { $size }
-editor-readonly-hex = 十六进制视图只能查看
-editor-definition-in-dependencies = 项目中没有「{ $name }」的定义，正在依赖目录中查找…

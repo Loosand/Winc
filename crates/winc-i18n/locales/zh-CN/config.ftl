@@ -4,9 +4,6 @@ config-read-failed = 无法读取配置文件（{ $error }），已使用默认�
 config-invalid-json = 配置文件不是有效的 JSON，已使用默认设置
 config-root-not-object = 配置文件的顶层应为对象，已使用默认设置
 config-unknown-key = 无法识别 { $key }，已忽略
-config-project-read-failed = 无法读取（{ $error }），已忽略
-config-project-invalid-json = 不是有效的 JSON 对象，已忽略
-config-project-unsupported-key = 项目设置仅支持 format，已忽略 { $key }
 
 ## 运行配置（.winc/run.json）。
 
@@ -42,12 +39,7 @@ config-title-bar-style-invalid = { $name } 应为 "custom" 或 "native"，已忽
 config-option-as-meta-invalid = { $name } 应为 "left"、"right"、"both" 或 "none"，已忽略
 config-not-array = { $name } 应为数组，已忽略
 config-item-not-non-empty-string = { $name } 中的项应为非空字符串，已忽略
-config-item-not-string = { $name } 中的项应为字符串，已忽略
 config-not-object = { $name } 应为对象，已忽略
-config-remote-folder-invalid = { $name }：键应写成「主机:/远端目录」，如 devbox:/home/me，已忽略
-config-remote-folder-duplicate = { $name }：与前面的一项是同一个远端目录，已忽略
-config-duplicate-language = { $name } 中「{ $language }」与另一项指向同一种语言，已使用「{ $language }」
-config-unknown-language = { $name } 中有无法识别的语言「{ $language }」，已忽略
 config-empty = { $name } 为空，已忽略
 config-not-bool = { $name } 应为 true 或 false，已忽略
 config-not-number = { $name } 应为数字，已忽略

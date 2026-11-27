@@ -31,10 +31,6 @@ menu-copy-reference-unsaved = 文件尚未保存，无路径可复制
 
 ## 格式化工具菜单
 
-menu-tool-auto-format-desc = 优先使用项目配置的工具，其次使用已安装的工具
-menu-tool-auto-fix-desc = 仅使用项目配置的修复工具
-menu-tool-not-installed = { $name }（未安装）
-
 ## 日志中的提交菜单
 
 menu-log-checkout-branch = 签出「{ $branch }」
@@ -191,7 +187,6 @@ menu-commit-and-sync = 提交并同步
 menu-commit-amend = 修改上次提交
 menu-commit-sign-off = 签署（Signed-off-by）
 menu-commit-checks = 提交检查
-menu-commit-reformat = 格式化代码
 menu-commit-check-todo = 检查 TODO
 menu-commit-recent-messages = 最近的提交信息
 menu-commit-co-author = 添加共同作者
@@ -206,5 +201,3 @@ menu-shortcut-remove = 移除快捷键
 menu-shortcuts-reset-all = 恢复全部默认快捷键
 menu-shortcut-reset = 恢复默认
 
-menu-hex-copy-text = 按文字复制
-menu-hex-go-to = 转到偏移…

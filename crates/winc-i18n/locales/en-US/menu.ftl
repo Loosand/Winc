@@ -31,10 +31,6 @@ menu-copy-reference-unsaved = The file hasn’t been saved and has no path
 
 ## Formatter menu
 
-menu-tool-auto-format-desc = Uses the project’s configured tool first, then an installed one
-menu-tool-auto-fix-desc = Uses only the project’s configured fix tool
-menu-tool-not-installed = { $name } (Not Installed)
-
 ## Commit menu in the log
 
 menu-log-checkout-branch = Check Out “{ $branch }”
@@ -197,7 +193,6 @@ menu-commit-and-sync = Commit and Sync
 menu-commit-amend = Amend Last Commit
 menu-commit-sign-off = Sign Off (Signed-off-by)
 menu-commit-checks = Commit Checks
-menu-commit-reformat = Reformat Code
 menu-commit-check-todo = Check TODOs
 menu-commit-recent-messages = Recent Commit Messages
 menu-commit-co-author = Add Co-Author
@@ -212,5 +207,3 @@ menu-shortcut-remove = Remove Shortcut
 menu-shortcuts-reset-all = Reset All Shortcuts to Default
 menu-shortcut-reset = Reset to Default
 
-menu-hex-copy-text = Copy as Text
-menu-hex-go-to = Go to Offset…
