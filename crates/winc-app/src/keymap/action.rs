@@ -15,8 +15,6 @@ pub enum Action {
     QuickOpen,
     GoToSymbol,
     GoToLine,
-    GoToDefinition,
-    FindReferences,
     GoBack,
     GoForward,
     Settings,
@@ -30,8 +28,6 @@ pub enum Action {
     OpenFolder,
     /// 把一个目录加为窗口的附加目录。
     AddFolder,
-    RemoteConnect,
-    RemoteDisconnect,
     OpenRecent,
     Save,
     SaveAs,
@@ -173,9 +169,6 @@ pub enum Action {
     PreviousBookmark,
     ListBookmarks,
     ClearBookmarks,
-    Format,
-    FormatSelection,
-    Fix,
 
     Find,
     Replace,
@@ -220,8 +213,6 @@ pub enum Action {
     /// 开启或关闭 Vim 模式。
     ToggleVimMode,
     ToggleWordWrap,
-    /// 显示或隐藏编辑区右侧的缩略图。
-    ToggleMinimap,
     /// 显示或隐藏行号。
     ToggleLineNumbers,
     /// 显示或隐藏状态栏。
@@ -350,8 +341,6 @@ pub enum Module {
     Git,
     /// 终端模块。
     Terminal,
-    /// 远程模块。
-    Remote,
 }
 
 impl Action {
@@ -383,8 +372,6 @@ impl Action {
             QuickOpen => t!("cmd-quick-open"),
             GoToSymbol => t!("cmd-go-to-symbol"),
             GoToLine => t!("cmd-go-to-line"),
-            GoToDefinition => t!("cmd-go-to-definition"),
-            FindReferences => t!("cmd-find-references"),
             GoBack => t!("cmd-go-back"),
             GoForward => t!("cmd-go-forward"),
             Settings => t!("cmd-settings"),
@@ -396,8 +383,6 @@ impl Action {
             OpenFile => t!("cmd-open-file"),
             OpenFolder => t!("cmd-open-folder"),
             AddFolder => t!("cmd-add-folder"),
-            RemoteConnect => t!("cmd-remote-connect"),
-            RemoteDisconnect => t!("cmd-remote-disconnect"),
             OpenRecent => t!("cmd-open-recent"),
             Save => t!("cmd-save"),
             SaveAs => t!("cmd-save-as"),
@@ -520,9 +505,6 @@ impl Action {
             PreviousBookmark => t!("cmd-previous-bookmark"),
             ListBookmarks => t!("cmd-list-bookmarks"),
             ClearBookmarks => t!("cmd-clear-bookmarks"),
-            Format => t!("cmd-format"),
-            FormatSelection => t!("cmd-format-selection"),
-            Fix => t!("cmd-fix"),
             Find => t!("cmd-find"),
             Replace => t!("cmd-replace"),
             FindNext => t!("cmd-find-next"),
@@ -563,7 +545,6 @@ impl Action {
             ToggleStickyScroll => t!("cmd-toggle-sticky-scroll"),
             ToggleVimMode => t!("cmd-toggle-vim-mode"),
             ToggleWordWrap => t!("cmd-toggle-word-wrap"),
-            ToggleMinimap => t!("cmd-toggle-minimap"),
             ToggleLineNumbers => t!("cmd-toggle-line-numbers"),
             ToggleStatusBar => t!("cmd-toggle-status-bar"),
             ToggleWhitespace => t!("cmd-toggle-whitespace"),
@@ -669,8 +650,6 @@ impl Action {
             | QuickOpen
             | GoToSymbol
             | GoToLine
-            | GoToDefinition
-            | FindReferences
             | GoBack
             | GoForward
             | Settings
@@ -679,11 +658,12 @@ impl Action {
             | RecordKeys
             | InstallShellCommand
             | UninstallShellCommand => Group::General,
-            NewFile | OpenFile | OpenFolder | AddFolder | RemoteConnect | RemoteDisconnect
-            | Save | SaveAs | CloseTab | CloseOtherTabs | CloseAllTabs | ReopenClosed | NextTab
-            | PreviousTab | CloseFolder | CloseWindow | CopyPath | CopyRelativePath
-            | RevealInFinder | CopyActivePath | CopyKeyPath | RevealActiveFile | OpenInTerminal
-            | Quit => Group::File,
+            NewFile | OpenFile | OpenFolder | AddFolder | Save | SaveAs | CloseTab
+            | CloseOtherTabs | CloseAllTabs | ReopenClosed | NextTab | PreviousTab
+            | CloseFolder | CloseWindow | CopyPath | CopyRelativePath | RevealInFinder
+            | CopyActivePath | CopyKeyPath | RevealActiveFile | OpenInTerminal | Quit => {
+                Group::File
+            }
             NewWindow | OpenRecent | CopyReference | CopyAbsoluteReference => Group::File,
             Undo
             | Redo
@@ -772,10 +752,7 @@ impl Action {
             | NextBookmark
             | PreviousBookmark
             | ListBookmarks
-            | ClearBookmarks
-            | Format
-            | FormatSelection
-            | Fix => Group::Edit,
+            | ClearBookmarks => Group::Edit,
             Find | Replace | FindNext | FindPrevious | HighlightWord | ClearWordHighlights
             | ReplaceOne | ReplaceAll | SelectAllMatches | ToggleCase | ToggleWord
             | ToggleRegex | FilterLines | FindInFiles | ReplaceInFiles | ReplaceAllInFiles
@@ -802,7 +779,6 @@ impl Action {
             | ToggleStickyScroll
             | ToggleVimMode
             | ToggleWordWrap
-            | ToggleMinimap
             | ToggleLineNumbers
             | ToggleStatusBar
             | ToggleWhitespace
@@ -1073,7 +1049,6 @@ impl Action {
             | Action::NextError
             | Action::PreviousError
             | Action::SendToTerminal => Some(Module::Terminal),
-            Action::RemoteConnect | Action::RemoteDisconnect => Some(Module::Remote),
             _ => None,
         }
     }
@@ -1129,8 +1104,6 @@ pub const ACTIONS: &[Action] = {
         QuickOpen,
         GoToSymbol,
         GoToLine,
-        GoToDefinition,
-        FindReferences,
         GoBack,
         GoForward,
         ShowCommands,
@@ -1138,9 +1111,6 @@ pub const ACTIONS: &[Action] = {
         ReleaseNotes,
         KeyboardShortcuts,
         RecordKeys,
-        Format,
-        FormatSelection,
-        Fix,
         Find,
         Replace,
         FindNext,
@@ -1164,8 +1134,6 @@ pub const ACTIONS: &[Action] = {
         OpenFile,
         OpenFolder,
         AddFolder,
-        RemoteConnect,
-        RemoteDisconnect,
         OpenRecent,
         Save,
         SaveAs,
@@ -1304,7 +1272,6 @@ pub const ACTIONS: &[Action] = {
         ToggleStickyScroll,
         ToggleVimMode,
         ToggleWordWrap,
-        ToggleMinimap,
         ToggleLineNumbers,
         ToggleStatusBar,
         ToggleWhitespace,

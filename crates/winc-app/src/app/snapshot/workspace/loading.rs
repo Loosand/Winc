@@ -254,7 +254,9 @@ fn large_markdown_holds_previous_frame_across_first_async_parse() {
     std::fs::write(&first, "---\ncreated: 2026-11-15\n---\n\n短笔记。\n").unwrap();
     let mut big_text = String::from("---\ncreated: 2026-11-16\nwhy: 超大文档\n---\n\n");
     while big_text.len() <= INLINE_FIRST_PARSE_BYTES + 4096 {
-        big_text.push_str("## 章节标题\n\n这是一段用于测试超大 Markdown 文档异步解析留帧的常规正文段落。\n\n");
+        big_text.push_str(
+            "## 章节标题\n\n这是一段用于测试超大 Markdown 文档异步解析留帧的常规正文段落。\n\n",
+        );
     }
     std::fs::write(&big, &big_text).unwrap();
 
@@ -328,11 +330,15 @@ fn writing_mode_preserves_scroll_property_fold_and_recent_images_across_note_swi
     let note_b = dir.join("b.md");
     let mut body_a = String::from("---\ncreated: 2026-11-15\nwhy: 保留状态\n---\n\n");
     for i in 0..5 {
-        body_a.push_str(&format!("## 前文 {i}\n\n一段用于把图片放在滚后视口内的正文。\n\n"));
+        body_a.push_str(&format!(
+            "## 前文 {i}\n\n一段用于把图片放在滚后视口内的正文。\n\n"
+        ));
     }
     body_a.push_str("![图](pic.png)\n\n");
     for i in 0..35 {
-        body_a.push_str(&format!("## 节 {i}\n\n一段足够长以产生滚动距离的测试正文。\n\n"));
+        body_a.push_str(&format!(
+            "## 节 {i}\n\n一段足够长以产生滚动距离的测试正文。\n\n"
+        ));
     }
     std::fs::write(&note_a, &body_a).unwrap();
     std::fs::write(&note_b, "---\ncreated: 2026-11-16\n---\n\n第二篇笔记。\n").unwrap();

@@ -306,8 +306,6 @@ pub(super) const IDEA: &[PresetRow] = &[
     ),
     row(GoToSymbol, Global, &["cmd+f12"], &["ctrl+f12"]),
     row(GoToLine, Global, &["cmd+l"], &["ctrl+g"]),
-    row(GoToDefinition, Editor, &["cmd+b"], &["ctrl+b"]),
-    row(FindReferences, Editor, &["alt+f7"], &["alt+f7"]),
     row(
         GoBack,
         Global,
@@ -322,7 +320,6 @@ pub(super) const IDEA: &[PresetRow] = &[
     ),
     row(ShowCommands, Global, &["shift+cmd+a"], &["ctrl+shift+a"]),
     row(Settings, Global, &["cmd+,"], &["ctrl+alt+s"]),
-    row(Format, Editor, &["alt+cmd+l"], &["ctrl+alt+l"]),
     row(Undo, Editor, &["cmd+z"], &["ctrl+z"]),
     row(Redo, Editor, &["shift+cmd+z"], &["ctrl+shift+z"]),
     row(Cut, Editor, &["cmd+x"], &["ctrl+x", "shift+delete"]),
@@ -513,8 +510,6 @@ pub(super) const VSCODE: &[PresetRow] = &[
         &["shift+cmd+g", "shift+f3"],
         &["shift+f3"],
     ),
-    row(GoToDefinition, Editor, &["f12"], &["f12"]),
-    row(FindReferences, Editor, &["shift+f12"], &["shift+f12"]),
     row(Undo, Editor, &["cmd+z"], &["ctrl+z"]),
     row(Redo, Editor, &["shift+cmd+z"], &["ctrl+y", "ctrl+shift+z"]),
     row(Cut, Editor, &["cmd+x"], &["ctrl+x"]),
@@ -534,13 +529,6 @@ pub(super) const VSCODE: &[PresetRow] = &[
         Editor,
         &["shift+alt+down"],
         &["shift+alt+down"],
-    ),
-    row(Format, Editor, &["shift+alt+f"], &["shift+alt+f"]),
-    row(
-        FormatSelection,
-        Editor,
-        &["cmd+k cmd+f"],
-        &["ctrl+k ctrl+f"],
     ),
     row(
         TrimTrailingWhitespace,
@@ -776,7 +764,6 @@ pub(super) const VSCODE: &[PresetRow] = &[
 pub(super) const VSCODE_LINUX: &[PresetRow] = &[
     row(CopyLinesUp, Editor, &[], &["ctrl+shift+alt+up"]),
     row(CopyLinesDown, Editor, &[], &["ctrl+shift+alt+down"]),
-    row(Format, Editor, &[], &["ctrl+shift+i"]),
     row(AddCursorAbove, Editor, &[], &["shift+alt+up"]),
     row(AddCursorBelow, Editor, &[], &["shift+alt+down"]),
     row(ColumnSelectUp, Editor, &[], &[]),

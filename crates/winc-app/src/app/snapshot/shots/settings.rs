@@ -149,89 +149,6 @@ fn snapshot_settings_terminal() {
 
 #[test]
 #[ignore = "截图，手动运行"]
-fn snapshot_format_error() {
-    let dir = search_folder("format-error-shot");
-    std::fs::write(dir.join("Makefile"), "all:\n\techo hi\n").unwrap();
-    for (tag, dark) in [("light", false), ("dark", true)] {
-        // Makefile 没有可自动选用的格式化工具：编辑区右上角提示后续的处理办法。
-        let mut app = app_with(&dir.join("Makefile"), dark);
-        app.format_active();
-        shoot(&mut app, &format!("format-error-{tag}"));
-
-        // 窗口最窄时，提示文字从中间截短，不超出编辑区。
-        app.frame.renderer = Some(
-            Renderer::offscreen(640.0, 420.0, SCALE, app.palette.frame_bg, None, None).unwrap(),
-        );
-        app.relayout();
-        shoot(&mut app, &format!("format-error-small-{tag}"));
-    }
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "截图，手动运行"]
-fn snapshot_format_output() {
-    let dir = search_folder("format-output-shot");
-    let tool = dir.join("broken-fmt");
-    winc_backend::testing::write_script(
-        &tool,
-        "#!/bin/sh\necho 'error: expected expression, found `;`' >&2\n\
-         echo ' --> <stdin>:2:13' >&2\necho '  |' >&2\n\
-         echo '2 |     let x = ;' >&2\necho '  |             ^ expected expression' >&2\nexit 1\n",
-    );
-
-    for (tag, dark) in [("light", false), ("dark", true)] {
-        // 出错的提示条右侧有「查看输出」，鼠标停在其上。
-        let mut app = app_with(&dir.join("src/main.rs"), dark);
-        app.config
-            .format_commands
-            .insert("rust".to_owned(), format!("'{}'", tool.display()));
-        app.format_active();
-        app.wait_formatting();
-        paint(&mut app);
-        let button = app.hits.notice_button.unwrap();
-        app.on_mouse_move(button.x + 10.0, button.y + 10.0);
-        shoot(&mut app, &format!("format-output-{tag}"));
-
-        // 点击之后：打开只读的「格式化输出」标签。
-        app.run_notice_action();
-        app.on_mouse_move(4.0, 4.0);
-        shoot(&mut app, &format!("format-output-tab-{tag}"));
-    }
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "截图，手动运行"]
-fn snapshot_format_install() {
-    let dir = search_folder("format-install-shot");
-    std::fs::write(dir.join("tool.py"), "def main():\n  print('hi')\n").unwrap();
-
-    for (tag, dark) in [("light", false), ("dark", true)] {
-        // 项目中无法判断 Python 使用哪种工具，候选工具也都未安装：提示条右侧是「安装方法」。
-        let mut app = app_with(&dir.join("tool.py"), dark);
-        app.format_active();
-        app.wait_formatting();
-        paint(&mut app);
-        let button = app.hits.notice_button.unwrap();
-        app.on_mouse_move(button.x + 10.0, button.y + 10.0);
-        shoot(&mut app, &format!("format-install-{tag}"));
-
-        // 点击之后：打开只读的「安装格式化工具」标签。
-        app.run_notice_action();
-        app.on_mouse_move(4.0, 4.0);
-        shoot(&mut app, &format!("format-install-tab-{tag}"));
-    }
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-#[ignore = "截图，手动运行"]
 fn snapshot_english() {
     // 切换的是整个进程的界面语言，只能单独运行，结束时恢复源语言。
     winc_i18n::set_locale(winc_i18n::Locale::EnUs);
@@ -276,9 +193,9 @@ fn snapshot_about_page() {
         app.on_mouse_move(x, y);
         shoot(&mut app, &format!("settings-about-{tag}"));
 
-        // 不支持应用内更新：只写明原因，没有按钮；鼠标停在一个链接上。
+        // 不支持应用内更新：只写明原因，没有按钮；鼠标停在更新日志入口上。
         *app.link.shared.update_state.borrow_mut() = crate::winc::UpdateState::Off;
-        let (x, y) = settings_point(&app, SettingsPart::Link(Setting::Repository));
+        let (x, y) = settings_point(&app, SettingsPart::Link(Setting::ReleaseNotes));
         app.on_mouse_move(x, y);
         shoot(&mut app, &format!("settings-about-off-{tag}"));
     }

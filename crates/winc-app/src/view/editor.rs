@@ -5,9 +5,6 @@
 mod area;
 mod caret;
 mod glyphs;
-mod hex;
-pub(super) mod hint;
-mod minimap;
 mod picture;
 mod placeholder;
 pub(super) mod places;
@@ -19,7 +16,6 @@ use crate::app::HunkKind;
 use area::draw_text_area;
 pub(super) use caret::*;
 pub(super) use glyphs::*;
-pub(crate) use minimap::MinimapRows;
 pub(in crate::view) use picture::*;
 pub(in crate::view) use placeholder::draw_keycap;
 use placeholder::*;
@@ -311,7 +307,6 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) -> PaneView {
         JsonPreview,
         Diff,
         Log,
-        Hex,
         Loading,
         Unsupported(Unsupported),
         Text,
@@ -329,7 +324,6 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) -> PaneView {
         TabSurface::JsonPreview => DrawPlan::JsonPreview,
         TabSurface::Diff => DrawPlan::Diff,
         TabSurface::Log => DrawPlan::Log,
-        TabSurface::Hex => DrawPlan::Hex,
         TabSurface::Loading => DrawPlan::Loading,
         TabSurface::Unsupported(reason) => DrawPlan::Unsupported(reason.clone()),
         TabSurface::Text => DrawPlan::Text,
@@ -465,10 +459,6 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) -> PaneView {
                 }
                 DrawPlan::Diff => return PaneView::Diff(index),
                 DrawPlan::Log => return PaneView::Log(index),
-                DrawPlan::Hex => {
-                    hex::draw_hex(app, frame, index);
-                    return PaneView::Drawn;
-                }
                 // 文件仍在读取（仅读取耗时较长时执行到此处）：提示正在读取的文件名和读了多少。
                 DrawPlan::Loading => {
                     let name = app.editor.documents[index].name().into_owned();
@@ -484,13 +474,11 @@ pub(super) fn draw_editor(app: &mut App, frame: &mut Frame<'_>) -> PaneView {
                     use PlaceholderAction::*;
                     let actions: &[(PlaceholderAction, &str)] = match reason {
                         Unsupported::Binary(_) => &[
-                            (ShowHex, t!("editor-show-hex")),
                             (OpenAsText, t!("editor-open-anyway")),
                             (OpenWithDefaultApp, t!("editor-open-with-default-app")),
                             (Reveal, system::reveal_label()),
                         ],
                         Unsupported::TooLarge(_) => &[
-                            (ShowHex, t!("editor-show-hex")),
                             (OpenWithDefaultApp, t!("editor-open-with-default-app")),
                             (Reveal, system::reveal_label()),
                         ],

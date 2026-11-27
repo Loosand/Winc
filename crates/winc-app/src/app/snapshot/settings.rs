@@ -280,20 +280,18 @@ fn settings_keyboard_walks_every_item_and_adjusts() {
     assert_eq!(seen, Setting::all(custom_font_size, app.settings_modules()));
     assert_eq!(app.settings.selected, Setting::License);
     assert_eq!(app.settings_layout().page, SettingsPage::About);
-    // 往回走过关于页的九行（版本、更新三行、更新日志和四个链接），回到快捷键页的搜索框。
-    for _ in 0..9 {
+    // 往回走过关于页的六行（版本、更新三行、更新日志和许可协议），回到快捷键页的搜索框。
+    for _ in 0..6 {
         app.settings_move(false);
     }
     assert_eq!(app.settings.selected, Setting::KeySearch);
     assert_eq!(app.settings_layout().page, SettingsPage::Keys);
     assert_eq!(app.focus, Focus::KeySearch);
-    // 向回走一步，回到模块页最后的远程开关，焦点回到浮层；再往回是终端开关和 Git 开关；再走
+    // 向回走一步，回到模块页最后的终端开关，焦点回到浮层；再往回是 Git 开关；再走
     // 一步，回到终端页的最后一项（macOS 上是「Meta 键」，其他平台是「关闭前确认」）。
     app.settings_move(false);
-    assert_eq!(app.settings.selected, Setting::RemoteModule);
-    assert_eq!(app.focus, Focus::Settings);
-    app.settings_move(false);
     assert_eq!(app.settings.selected, Setting::TerminalModule);
+    assert_eq!(app.focus, Focus::Settings);
     app.settings_move(false);
     assert_eq!(app.settings.selected, Setting::GitModule);
     app.settings_move(false);
@@ -695,8 +693,14 @@ fn the_keys_page_lists_searches_and_records() {
     };
 
     // 按名称搜索，中文名和英文名都可以。
-    app.edit_field(|f| f.insert("格式化"));
-    assert_eq!(actions(&app), [Action::Format, Action::FormatSelection]);
+    app.edit_field(|f| f.insert("缩进转换为"));
+    assert_eq!(
+        actions(&app),
+        [
+            Action::ConvertIndentationToSpaces,
+            Action::ConvertIndentationToTabs
+        ]
+    );
     // Esc 先清空搜索框，搜索框为空时才关闭设置。
     app.keys_page_stroke(Stroke {
         key: KeyCode::Escape,
@@ -882,27 +886,26 @@ fn the_about_page_links_out_and_hides_unavailable_updates() {
     app.open_settings();
     app.settings_show_page(SettingsPage::About);
 
-    // 链接取自 Cargo.toml：显示名去掉协议和 github.com，许可证链接到仓库中的全文。
+    // 白板状态：只保留本地更新日志入口与开源许可信息，不指向原上游网站或社区。
     let value = |setting| about_value(setting).unwrap();
-    assert_eq!(value(Setting::Website), "winc.si");
-    assert_eq!(value(Setting::Repository), "DEEIX-AI/Winc");
-    assert_eq!(value(Setting::Community), "t.me/deeix_chat");
+    assert_eq!(value(Setting::ReleaseNotes), "查看");
     assert_eq!(value(Setting::License), "Apache-2.0");
-    assert_eq!(
-        about_link(Setting::License).as_deref(),
-        Some("https://github.com/DEEIX-AI/Winc/blob/HEAD/LICENSE")
-    );
+    assert_eq!(about_link(Setting::License), None);
     assert_eq!(about_link(Setting::Version), None);
 
-    // 版本号和链接只有文字那一块可点，控件左侧的空白不算。
+    // 版本号和更新日志只有文字那一块可点，控件左侧的空白不算；纯文本许可不响应点击。
     for part in [
-        SettingsPart::Link(Setting::Website),
+        SettingsPart::Link(Setting::ReleaseNotes),
         SettingsPart::Copy(Setting::Version),
     ] {
         let (x, y) = settings_point(&app, part);
         assert_eq!(app.settings_part_at(x, y), Some(part));
     }
-    let control = app.settings_layout().row(Setting::Website).unwrap().control;
+    let control = app
+        .settings_layout()
+        .row(Setting::ReleaseNotes)
+        .unwrap()
+        .control;
     let y = control.y + control.h / 2.0;
     assert_eq!(app.settings_part_at(control.x + 2.0, y), None);
 

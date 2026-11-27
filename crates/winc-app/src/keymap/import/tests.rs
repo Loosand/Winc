@@ -36,17 +36,17 @@ fn idea_keymaps_follow_their_parents() {
         &dir.join("keymaps/Base.xml"),
         r#"<keymap version="1" name="Base" parent="Mac OS X 10.5+">
   <action id="GotoFile"><keyboard-shortcut first-keystroke="meta P" /></action>
-  <action id="ReformatCode"><keyboard-shortcut first-keystroke="meta shift L" /></action>
+  <action id="SaveAll"><keyboard-shortcut first-keystroke="meta shift L" /></action>
 </keymap>"#,
     );
     write(
         &dir.join("keymaps/Mine.xml"),
         r#"<keymap version="1" name="Mine" parent="Base">
-  <action id="ReformatCode"><keyboard-shortcut first-keystroke="control alt F" /></action>
+  <action id="SaveAll"><keyboard-shortcut first-keystroke="control alt F" /></action>
   <action id="EditorDuplicate" />
   <action id="SomePluginAction"><keyboard-shortcut first-keystroke="meta Y" /></action>
-  <action id="FindUsages"><keyboard-shortcut first-keystroke="meta U" /></action>
-  <action id="ShowUsages"><keyboard-shortcut first-keystroke="meta shift U" /></action>
+  <action id="CloseContent"><keyboard-shortcut first-keystroke="meta U" /></action>
+  <action id="CloseEditor"><keyboard-shortcut first-keystroke="meta shift U" /></action>
   <action id="ShowSettings">
     <keyboard-shortcut first-keystroke="meta K" second-keystroke="meta OPEN_BRACKET" />
   </action>
@@ -57,7 +57,7 @@ fn idea_keymaps_follow_their_parents() {
     assert_eq!(imported.skipped, 1);
     let custom = &imported.custom;
     assert_eq!(keys(custom, Action::QuickOpen).unwrap(), ["cmd+p"]);
-    assert_eq!(keys(custom, Action::Format).unwrap(), ["ctrl+alt+f"]);
+    assert_eq!(keys(custom, Action::Save).unwrap(), ["ctrl+alt+f"]);
     assert_eq!(
         keys(custom, Action::CopyLinesDown).unwrap(),
         Vec::<String>::new()
@@ -65,7 +65,7 @@ fn idea_keymaps_follow_their_parents() {
     assert_eq!(keys(custom, Action::Settings).unwrap(), ["cmd+k cmd+["]);
     // 对应同一个命令的几个操作，键合在一起。
     assert_eq!(
-        keys(custom, Action::FindReferences).unwrap(),
+        keys(custom, Action::CloseTab).unwrap(),
         ["cmd+u", "shift+cmd+u"]
     );
 
@@ -97,7 +97,7 @@ fn vscode_keybindings_add_and_remove_keys() {
 [
   { "key": "cmd+e", "command": "workbench.action.quickOpen" },
   { "key": "cmd+p", "command": "-workbench.action.quickOpen" },
-  { "command": "-editor.action.formatDocument" },
+  { "command": "-workbench.action.files.save" },
   { "key": "cmd+k cmd+u", "command": "editor.action.commentLine", "when": "editorTextFocus" },
   { "key": "cmd+shift+x", "command": "someExtension.command" },
   { "key": "[KeyA]", "command": "workbench.action.gotoLine" },
@@ -111,7 +111,7 @@ fn vscode_keybindings_add_and_remove_keys() {
     assert_eq!(imported.skipped, 2);
     let custom = &imported.custom;
     assert_eq!(keys(custom, Action::QuickOpen).unwrap(), ["cmd+e"]);
-    assert_eq!(keys(custom, Action::Format).unwrap(), Vec::<String>::new());
+    assert_eq!(keys(custom, Action::Save).unwrap(), Vec::<String>::new());
     assert_eq!(
         keys(custom, Action::ToggleComment).unwrap(),
         ["cmd+/", "cmd+k cmd+u"]

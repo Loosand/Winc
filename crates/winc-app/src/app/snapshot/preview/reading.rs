@@ -136,14 +136,14 @@ fn the_first_launch_after_an_update_offers_the_release_notes() {
         Some(NoticeAction::ReleaseNotes(None))
     ));
 
-    // 启动时右上角已有别的提示（例如正在连接远端主机）：更新提示等它收起后再显示。
+    // 启动时右上角已有别的提示（例如正在复制文件）：更新提示等它收起后再显示。
     let mut app = blank_app(false);
     app.state.recent = vec![PathBuf::from("/项目")];
     app.state.version = Some("0.0.1".into());
     app.note_version();
-    app.notify_pinned("正在连接", NoticeAction::CancelConnect);
+    app.notify_pinned("正在复制", NoticeAction::CancelCopy);
     app.show_update_notice();
-    assert_eq!(app.notice.text.as_deref(), Some("正在连接"));
+    assert_eq!(app.notice.text.as_deref(), Some("正在复制"));
     app.dismiss_notice();
     app.notice.leaving = None;
     app.show_update_notice();

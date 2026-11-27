@@ -127,7 +127,6 @@ impl SettingsPage {
                     Setting::LineNumbers,
                     Setting::WordWrap,
                     Setting::WholeLines,
-                    Setting::Minimap,
                     Setting::StickyScroll,
                     Setting::RenderWhitespace,
                 ]),
@@ -182,11 +181,7 @@ impl SettingsPage {
                     Setting::GitAutoFetch,
                 ]),
             ],
-            SettingsPage::Modules => vec![plain(vec![
-                Setting::GitModule,
-                Setting::TerminalModule,
-                Setting::RemoteModule,
-            ])],
+            SettingsPage::Modules => vec![plain(vec![Setting::GitModule, Setting::TerminalModule])],
             SettingsPage::Keys => Vec::new(),
             SettingsPage::About => vec![
                 plain(vec![Setting::Version]),
@@ -195,13 +190,7 @@ impl SettingsPage {
                     Setting::CheckUpdates,
                     Setting::SystemProxy,
                 ]),
-                plain(vec![
-                    Setting::ReleaseNotes,
-                    Setting::Website,
-                    Setting::Repository,
-                    Setting::Community,
-                    Setting::License,
-                ]),
+                plain(vec![Setting::ReleaseNotes, Setting::License]),
             ],
         }
     }
@@ -313,8 +302,6 @@ pub enum Setting {
     WordWrap,
     /// 超长行显示全部内容（`wholeLines`）。
     WholeLines,
-    /// 编辑区右侧的缩略图。
-    Minimap,
     /// 文件视图底部的大纲。
     Outline,
     /// 显示行号。
@@ -351,13 +338,7 @@ pub enum Setting {
     Updates,
     /// 「关于」页的「更新日志」：在阅读标签中打开，列出各版的更改。
     ReleaseNotes,
-    /// 「关于」页的官网链接。
-    Website,
-    /// 「关于」页的源代码仓库（GitHub）链接。
-    Repository,
-    /// 「关于」页的社区群组（Telegram）链接。
-    Community,
-    /// 「关于」页的开源许可：许可证名称，链接到许可证全文。
+    /// 「关于」页的开源许可：许可证名称。
     License,
     /// 新建终端时运行的 shell（`terminal.shell`）。
     TerminalShell,
@@ -403,8 +384,6 @@ pub enum Setting {
     GitPath,
     /// 终端模块的开关。
     TerminalModule,
-    /// 远程模块的开关。
-    RemoteModule,
     /// 「快捷键」页顶部的搜索框。
     ///
     /// 该页没有设置项，选中这一项即表示停留在该页。
@@ -474,7 +453,6 @@ impl Setting {
             | Setting::VimYankHighlight
             | Setting::WordWrap
             | Setting::WholeLines
-            | Setting::Minimap
             | Setting::Outline
             | Setting::LineNumbers
             | Setting::RenderWhitespace => SettingsPage::Editor,
@@ -490,9 +468,6 @@ impl Setting {
             | Setting::CheckUpdates
             | Setting::SystemProxy
             | Setting::ReleaseNotes
-            | Setting::Website
-            | Setting::Repository
-            | Setting::Community
             | Setting::License => SettingsPage::About,
             Setting::TerminalShell
             | Setting::TerminalPosition
@@ -514,9 +489,7 @@ impl Setting {
             | Setting::GitAutoFetch
             | Setting::GitTree
             | Setting::DiffInline => SettingsPage::Git,
-            Setting::GitModule | Setting::TerminalModule | Setting::RemoteModule => {
-                SettingsPage::Modules
-            }
+            Setting::GitModule | Setting::TerminalModule => SettingsPage::Modules,
             Setting::KeySearch => SettingsPage::Keys,
         }
     }
@@ -549,7 +522,6 @@ impl Setting {
             Setting::VimYankHighlight => t!("settings-vim-yank-highlight"),
             Setting::WordWrap => t!("settings-word-wrap"),
             Setting::WholeLines => t!("settings-whole-lines"),
-            Setting::Minimap => t!("settings-minimap"),
             Setting::LineNumbers => t!("settings-line-numbers"),
             Setting::DiffInline => t!("settings-diff-inline"),
             Setting::RenderWhitespace => t!("settings-render-whitespace"),
@@ -565,9 +537,6 @@ impl Setting {
             Setting::Beta(option) => option.label(),
             Setting::CheckUpdates => t!("settings-check-updates"),
             Setting::Version => t!("settings-version"),
-            Setting::Website => t!("settings-website"),
-            Setting::Repository => "GitHub",
-            Setting::Community => "Telegram",
             Setting::License => t!("settings-license"),
             Setting::Updates => t!("settings-updates"),
             Setting::ReleaseNotes => t!("settings-release-notes"),
@@ -593,7 +562,6 @@ impl Setting {
             Setting::GitOpenWorktree => t!("settings-git-open-worktree"),
             Setting::GitPath => t!("settings-git-path"),
             Setting::TerminalModule => t!("settings-terminal-module"),
-            Setting::RemoteModule => t!("settings-remote-module"),
             Setting::KeySearch => t!("settings-key-search"),
         }
     }
@@ -626,7 +594,6 @@ impl Setting {
             Setting::Outline => Some(t!("settings-outline-desc")),
             Setting::CompactFolders => Some(t!("settings-compact-folders-desc")),
             Setting::PreviewOnClick => Some(t!("settings-preview-on-click-desc")),
-            Setting::Minimap => Some(t!("settings-minimap-desc")),
             Setting::LineNumbers => Some(t!("settings-line-numbers-desc")),
             Setting::DiffInline => Some(t!("settings-diff-inline-desc")),
             Setting::RenderWhitespace => Some(t!("settings-render-whitespace-desc")),
@@ -643,7 +610,6 @@ impl Setting {
             // 绘制时换成当前的更新状态（`UpdateState`）。
             Setting::Updates => Some(t!("settings-updates-off")),
             Setting::GitModule => Some(t!("settings-git-module-desc")),
-            Setting::RemoteModule => Some(t!("settings-remote-module-desc")),
             Setting::GitConfirmPush => Some(t!("settings-git-confirm-push-desc")),
             Setting::GitRememberCredentials => Some(t!("settings-git-remember-credentials-desc")),
             Setting::SystemProxy => Some(t!("settings-system-proxy-desc")),
@@ -690,7 +656,6 @@ impl Setting {
             | Setting::VimYankHighlight
             | Setting::WordWrap
             | Setting::WholeLines
-            | Setting::Minimap
             | Setting::Outline
             | Setting::LineNumbers
             | Setting::DiffInline
@@ -710,7 +675,6 @@ impl Setting {
             | Setting::GitTree
             | Setting::GitStagingArea
             | Setting::TerminalModule
-            | Setting::RemoteModule
             | Setting::TerminalCopyOnSelect
             | Setting::TerminalConfirmClose
             | Setting::TerminalPrompt
@@ -734,11 +698,7 @@ impl Setting {
             | Setting::GitOpenWorktree => SettingControl::Choice,
             Setting::KeySearch => SettingControl::Search,
             Setting::Version => SettingControl::Product,
-            Setting::ReleaseNotes
-            | Setting::Website
-            | Setting::Repository
-            | Setting::Community
-            | Setting::License => SettingControl::Link,
+            Setting::ReleaseNotes | Setting::License => SettingControl::Link,
             Setting::Updates => SettingControl::Button,
             Setting::Beta(_) => SettingControl::Beta,
         }

@@ -95,30 +95,30 @@ fn shortcuts_are_edited_in_place() {
 
     // 悬停时点「编辑」；× 去掉已有的键，回车保存后该命令没有快捷键。Esc、「取消」、点在别处
     // 都放弃修改。
-    let format = app.current_keys(Action::Format);
-    show_row(&mut app, Action::Format);
-    click_part(&mut app, SettingsPart::KeyEdit(Action::Format));
+    let target = app.current_keys(Action::ToggleComment);
+    show_row(&mut app, Action::ToggleComment);
+    click_part(&mut app, SettingsPart::KeyEdit(Action::ToggleComment));
     paint(&mut app);
     click_part(&mut app, SettingsPart::KeyRemove(0));
     assert!(app.settings.key_edit.as_ref().unwrap().keys.is_empty());
     app.key_edit_stroke(key(KeyCode::Escape, Mods::NONE));
-    assert_eq!(app.current_keys(Action::Format), format);
-    click_part(&mut app, SettingsPart::KeyRow(Action::Format));
+    assert_eq!(app.current_keys(Action::ToggleComment), target);
+    click_part(&mut app, SettingsPart::KeyRow(Action::ToggleComment));
     paint(&mut app);
     click_part(&mut app, SettingsPart::KeyCancel);
     assert!(app.settings.key_edit.is_none());
-    click_part(&mut app, SettingsPart::KeyRow(Action::Format));
+    click_part(&mut app, SettingsPart::KeyRow(Action::ToggleComment));
     click_part(&mut app, SettingsPart::KeySearch);
     assert!(app.settings.key_edit.is_none());
-    click_part(&mut app, SettingsPart::KeyRow(Action::Format));
+    click_part(&mut app, SettingsPart::KeyRow(Action::ToggleComment));
     paint(&mut app);
     click_part(&mut app, SettingsPart::KeyRemove(0));
     app.key_edit_stroke(key(KeyCode::Enter, Mods::NONE));
-    assert!(app.current_keys(Action::Format).is_empty());
+    assert!(app.current_keys(Action::ToggleComment).is_empty());
 
     // 两段组合键按两下记下。
-    show_row(&mut app, Action::Format);
-    click_part(&mut app, SettingsPart::KeyRow(Action::Format));
+    show_row(&mut app, Action::ToggleComment);
+    click_part(&mut app, SettingsPart::KeyRow(Action::ToggleComment));
     app.key_edit_stroke(key(KeyCode::Char('k'), command()));
     app.key_edit_stroke(key(KeyCode::Char('f'), command()));
     let recorded = app.settings.key_edit.as_ref().unwrap().recorded;
@@ -126,17 +126,17 @@ fn shortcuts_are_edited_in_place() {
     app.cancel_key_edit();
 
     // 改过的行悬停时有「恢复默认」。
-    show_row(&mut app, Action::Format);
-    click_part(&mut app, SettingsPart::KeyReset(Action::Format));
-    assert_eq!(app.current_keys(Action::Format), format);
+    show_row(&mut app, Action::ToggleComment);
+    click_part(&mut app, SettingsPart::KeyReset(Action::ToggleComment));
+    assert_eq!(app.current_keys(Action::ToggleComment), target);
 
     // 右键菜单：移除全部键；「键位方案」菜单中恢复全部默认。
-    let point = settings_point(&app, SettingsPart::KeyRow(Action::Format));
+    let point = settings_point(&app, SettingsPart::KeyRow(Action::ToggleComment));
     app.context_click(point.0, point.1);
     let menu = app.overlays.context_menu.as_ref().expect("右键菜单");
-    assert_eq!(menu.target, MenuTarget::Shortcut(Action::Format));
+    assert_eq!(menu.target, MenuTarget::Shortcut(Action::ToggleComment));
     app.run_menu_command(MenuCommand::ShortcutRemove);
-    assert!(app.current_keys(Action::Format).is_empty());
+    assert!(app.current_keys(Action::ToggleComment).is_empty());
     click_part(&mut app, SettingsPart::Keymap);
     app.run_menu_command(MenuCommand::ResetAllShortcuts);
     assert!(app.config.shortcuts.is_empty());
@@ -166,14 +166,14 @@ fn shortcuts_are_edited_in_place() {
 fn saving_a_key_takes_it_from_changed_commands() {
     let mut app = keys_page();
     let j = key(KeyCode::Char('j'), command() | Mods::SHIFT);
-    app.change_shortcuts(|custom| custom.set(Action::Format, vec![(j, None)]));
+    app.change_shortcuts(|custom| custom.set(Action::ToggleComment, vec![(j, None)]));
     show_row(&mut app, Action::GoToLine);
     click_part(&mut app, SettingsPart::KeyRow(Action::GoToLine));
     app.key_edit_stroke(j);
-    assert_eq!(app.key_edit_conflicts(), [Action::Format]);
+    assert_eq!(app.key_edit_conflicts(), [Action::ToggleComment]);
     assert!(!app.key_edit_takes_typing());
     app.key_edit_stroke(key(KeyCode::Enter, Mods::NONE));
-    assert_eq!(app.config.shortcuts.get("format"), Some(&Vec::new()));
+    assert_eq!(app.config.shortcuts.get("toggleComment"), Some(&Vec::new()));
     assert_eq!(runs(j), Some(Action::GoToLine));
 
     app.start_key_edit(Action::GoToLine, true);

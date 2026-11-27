@@ -324,22 +324,9 @@ fn snapshot_palette_and_definitions() {
 
         // ⇧⌘P：列出命令，右侧显示快捷键。
         app.open_palette();
-        app.overlays.picker.input.set_text(">格式");
+        app.overlays.picker.input.set_text(">缩进");
         app.picker_refresh();
         shoot(&mut app, &format!("palette-{tag}"));
-        app.close_picker();
-
-        // F12 找到两处 `load` 的定义：列出供选择。
-        let text = app
-            .editor
-            .active()
-            .unwrap()
-            .text_range(0, usize::MAX)
-            .unwrap();
-        let at = text.find("load").unwrap() + 1;
-        app.select(at, at);
-        app.go_to_definition();
-        shoot(&mut app, &format!("definitions-{tag}"));
         app.close_picker();
 
         // `⇧⌘O`：列出当前文档中的符号，选中某项后编辑区随之滚动。截图后删除该文件，

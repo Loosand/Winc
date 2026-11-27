@@ -22,10 +22,6 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let layout = app.dialog_layout();
     let p = app.palette;
     match app.motion.dialog_card.motion {
-        // 换页时遮罩一直在，不随新的一页重新淡入。
-        Some(_) if app.motion.dialog_card.turning.is_some() => {
-            frame.rect(app.layout.window, p.scrim)
-        }
         Some((true, clock)) => {
             let fade = dialog_curve(true, clock).0;
             frame.rect(app.layout.window, p.scrim.alpha(p.scrim.a * fade));
@@ -96,7 +92,6 @@ fn draw_card(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
         ),
         FormKind::Question(..)
         | FormKind::Remote { .. }
-        | FormKind::Connect
         | FormKind::GoToRevision
         | FormKind::CompareRevision { .. }
         | FormKind::RenameGroup
@@ -309,15 +304,6 @@ fn draw_question(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
             check,
         );
     }
-    // 密钥文件右端选文件的按钮，样子同「位置」右端的目录按钮。
-    if let Some(choose) = layout.choose {
-        if hover == Some(DialogPart::Change) {
-            frame.rounded(choose, p.hover, RADIUS_ROW - 2.0);
-        }
-        let (cx, cy) = center(choose);
-        let at = ((cx - 7.5).round(), (cy - 6.0).round());
-        icons::folder(frame, at, false, p.text_dim, card);
-    }
     let enabled = plan.enabled && !running;
     render_dialog_footer(
         app,
@@ -329,7 +315,6 @@ fn draw_question(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
         hover,
     );
     let ring = match focus {
-        DialogPart::Change => layout.choose,
         DialogPart::Cancel => Some(layout.cancel),
         DialogPart::Confirm => Some(layout.confirm),
         DialogPart::Checkout => (layout.options.first())
@@ -786,15 +771,10 @@ fn draw_field(
         focused,
         focused && part == DialogPart::Branch && plan.problem.is_some(),
     );
-    // 右端有选择按钮的输入框，文字让出按钮的位置。
-    let button = (app.dialog_layout().choose).filter(|_| part == DialogPart::Third);
     let Some(mut dialog) = app.overlays.form_dialog.take() else {
         return;
     };
     let mut area = rect.inset(DIALOG_FIELD_INSET, 0.0);
-    if let Some(button) = button {
-        area.w = (button.x - 8.0 - area.x).max(0.0);
-    }
     // 原因只写在第一个输入框里，第二个输入框留给输入的内容。
     if let Some(problem) = plan.problem.as_ref().filter(|_| part == DialogPart::Branch) {
         let size = app.fonts.ui_small;

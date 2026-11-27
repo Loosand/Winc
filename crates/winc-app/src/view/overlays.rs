@@ -236,15 +236,6 @@ pub(super) fn draw_goto(app: &mut App, frame: &mut Frame<'_>) {
                     t!("workspace-goto-total", count = total),
                 )
             }
-            crate::app::PromptKind::GoToOffset => {
-                let view = app.editor.active().and_then(|d| d.hex.as_deref());
-                let size = winc_editor::size_text(view.map_or(0, |v| v.size()));
-                (
-                    t!("hex-goto-title"),
-                    t!("hex-goto-placeholder"),
-                    t!("hex-goto-total", size = size),
-                )
-            }
             crate::app::PromptKind::Stash | crate::app::PromptKind::StashFiles(_) => (
                 t!("workspace-stash-title"),
                 t!("workspace-stash-placeholder"),
@@ -381,9 +372,6 @@ pub(super) fn draw_picker(app: &mut App, frame: &mut Frame<'_>) {
 
         let total = if app_mut.overlays.picker.folders {
             t!("workspace-picker-folders-new-window").to_owned()
-        } else if app_mut.overlays.picker.remote.is_some() {
-            // 目录阶段在右端显示正在浏览的主机。
-            app_mut.remote_picker_host().unwrap_or_default().to_owned()
         } else if app_mut.overlays.picker.vim_list.is_some() {
             String::new()
         } else if app_mut.overlays.picker.languages {
@@ -422,11 +410,6 @@ pub(super) fn draw_picker(app: &mut App, frame: &mut Frame<'_>) {
         t!("workspace-picker-folders-placeholder")
     } else if app.overlays.picker.languages {
         t!("workspace-picker-languages-placeholder")
-    } else if app.overlays.picker.remote.is_some() {
-        match app.remote_picker_host() {
-            Some(_) => t!("workspace-picker-remote-folders-placeholder"),
-            None => t!("workspace-picker-remote-hosts-placeholder"),
-        }
     } else if let Some(list) = &app.overlays.picker.vim_list {
         match list.kind {
             winc_vim::Listing::Registers => t!("workspace-picker-vim-registers"),
@@ -463,10 +446,6 @@ pub(super) fn draw_picker(app: &mut App, frame: &mut Frame<'_>) {
 
     if app.overlays.picker.folders {
         app.hits.picker_parts = draw_folder_rows(app, frame, &parts);
-        return;
-    }
-    if app.overlays.picker.remote.is_some() {
-        app.hits.picker_parts = draw_remote_rows(app, frame, &parts);
         return;
     }
     if app.overlays.picker.vim_list.is_some() {
@@ -604,107 +583,6 @@ pub(super) fn draw_picker(app: &mut App, frame: &mut Frame<'_>) {
             }
         }
     }
-}
-
-/// 绘制连接远端主机的选择面板：图标、名字，其后是淡色的说明；各行之后（没有行时在第一行的
-/// 位置）是正在读取、读取失败或没有匹配项的说明。
-///
-/// 返回各行行尾「✕」的矩形。
-fn draw_remote_rows(
-    app: &App,
-    frame: &mut Frame<'_>,
-    parts: &PickerParts,
-) -> Vec<(Rect, PickerPart)> {
-    use crate::app::remote::picker::RowIcon;
-
-    let p = app.palette;
-    let list = parts.list;
-    let mut hits = Vec::new();
-    let Some(rows) = app.overlays.picker.remote.as_ref().map(|shown| &shown.rows) else {
-        return hits;
-    };
-    let scroll = drawn_scroll(app.overlays.picker.scroll);
-    let count = app.overlays.picker.hits.len();
-    for i in parts.visible(scroll, count) {
-        let Some(item) = rows.get(app.overlays.picker.hits[i]) else {
-            continue;
-        };
-        let row = parts.row(i, scroll);
-        let clip = row.intersect(list);
-        let forget = PickerPart::ForgetRemote(i);
-        let selected = i == app.overlays.picker.selected;
-        draw_pick_row(app, frame, row, i, clip);
-        if !selected && app.pointer.hover == Hover::PickerPart(forget) {
-            frame.rect_clipped(row.inset(6.0, 1.0), p.hover, RADIUS_ROW, clip);
-        }
-        let cy = icon_center_y(app, row, app.fonts.ui);
-        // 各种图标的中心与文件图标的中心对齐。
-        let middle = row.x + PICKER_ICON_X + icons::FILE_WIDTH / 2.0;
-        match item.icon {
-            RowIcon::Host => icons::server(frame, (middle, cy), p.text_muted, clip),
-            RowIcon::Config => icons::gear(frame, (middle, cy), p.text_muted, clip),
-            RowIcon::Folder | RowIcon::Open => {
-                let x = middle - icons::FOLDER_WIDTH / 2.0;
-                let open = item.icon == RowIcon::Open;
-                icons::folder(frame, (x, cy - 6.0), open, p.folder, clip);
-            }
-        }
-        let x = ui_text(
-            frame,
-            app,
-            row.x + PICKER_TEXT_X,
-            row,
-            &item.title,
-            p.text,
-            clip,
-        );
-        // 可以移除的行在行尾有「✕」，只在选中或悬停时显示，位置同最近目录面板中的一样。
-        let mut right = row.right() - 14.0;
-        if item.removable {
-            let close = Rect::new(
-                row.right() - 8.0 - BUTTON_SMALL,
-                row.y + 2.0,
-                BUTTON_SMALL,
-                row.h - 4.0,
-            );
-            let hovered = matches!(app.pointer.hover,
-                Hover::PickerRow(r) | Hover::PickerPart(PickerPart::ForgetRemote(r)) if r == i);
-            if selected || hovered {
-                let over = app.pointer.hover == Hover::PickerPart(forget);
-                draw_button(frame, p, close, clip, over, false);
-                icons::close(frame, center(close), 6.5, p.text_muted, clip);
-                hits.push((close, forget));
-            }
-            right = close.x - 8.0;
-        }
-        // 选中的一行在右端提示可用的按键，说明文字让出相应的位置。
-        if let Some(hint) = item.hint().filter(|_| selected) {
-            right -= frame.measure(FontKind::Ui, app.fonts.ui_small, hint);
-            ui_text_small(frame, app, right, row, hint, p.text_dim, clip);
-            right -= 12.0;
-        }
-        let room = (right - x - 12.0).max(0.0);
-        if room > 20.0 && !item.detail.is_empty() {
-            let text = ellipsize(frame, &item.detail, app.fonts.ui_small, room);
-            ui_text_small(frame, app, x + 12.0, row, &text, p.text_dim, clip);
-        }
-    }
-    if let Some(message) = app.remote_picker_message() {
-        let y = list.y + count as f32 * PICKER_ROW - scroll;
-        let row = Rect::new(list.x, y, list.w, PICKER_ROW);
-        if row.intersect(list).h > 0.0 {
-            ui_text(
-                frame,
-                app,
-                list.x + PICKER_TEXT_X,
-                row,
-                &message,
-                p.text_dim,
-                list,
-            );
-        }
-    }
-    hits
 }
 
 /// 绘制 Vim 模式的寄存器、标记或文档的列表：名字，其后是淡色的内容预览。

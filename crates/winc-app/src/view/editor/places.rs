@@ -13,7 +13,7 @@ use winc_i18n::t;
 use winc_syntax::{LineState, TokenKind, detect, highlight_line};
 
 use super::*;
-use crate::app::editor::definition::{Place, Places, PlacesKind};
+use crate::app::editor::places::{Place, Places, PlacesKind};
 use crate::app::{Focus, PICKER_ICON_X, PICKER_ROW, PICKER_TEXT_X, PlacesGhost};
 use crate::layout::PickerParts;
 
@@ -204,8 +204,6 @@ fn draw_header(
     let clip = Rect::new(bar.x, bar.y, (right - 16.0 - bar.x).max(0.0), bar.h);
     let mut x = bar.x + PICKER_ICON_X;
     let (title, kind) = match places.kind {
-        PlacesKind::Usages => (places.name.as_str(), t!("editor-places-usages-suffix")),
-        PlacesKind::Definitions => (places.name.as_str(), t!("editor-places-definitions-suffix")),
         PlacesKind::Bookmarks => (t!("editor-places-bookmarks"), ""),
     };
     let title = ellipsize(frame, title, app.fonts.ui, (clip.right() - x) * 0.5);

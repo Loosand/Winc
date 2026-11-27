@@ -436,6 +436,7 @@ pub struct ThemeEntry {
 
 impl ThemeEntry {
     /// 返回设置里显示的主题名。
+    #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self.id {
             "winc-day" => t!("settings-theme-name-winc-day"),

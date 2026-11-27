@@ -195,67 +195,6 @@ fn co_authors_come_from_recent_commits() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// 提交前格式化：开着时要提交的文件先用格式化工具整理再提交，勾选式和暂存视图都是；关着时
-/// 照原样提交。
-#[cfg(unix)]
-#[test]
-fn files_are_reformatted_before_committing() {
-    let Some((mut app, root)) = git_app("git-reformat", false) else {
-        return;
-    };
-    let committed = |path: &str| {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .args(["show", &format!("HEAD:{path}")])
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    };
-    // 用户设置里的命令不用询问；把小写换成大写，看得出整理过。
-    let command = "tr a-z A-Z".to_owned();
-    app.config
-        .format_commands
-        .insert("rust".to_owned(), command);
-    app.run_action(Action::ShowCommit);
-    app.open_context_menu(MenuTarget::CommitButton, (0.0, 0.0));
-    app.run_menu_command(MenuCommand::CommitReformat);
-    assert!(app.state.commit_reformat && app.menu_checked(MenuCommand::CommitReformat));
-
-    ready_to_commit(&mut app, "勾选式");
-    app.git_commit();
-    app.poll_commit();
-    assert_eq!(last_message(&root), "勾选式");
-    assert_eq!(committed("src/main.rs"), "FN MAIN() {}\n");
-    assert_eq!(committed("src/new.rs"), "\n");
-    assert_eq!(
-        std::fs::read_to_string(root.join("src/main.rs")).unwrap(),
-        "FN MAIN() {}\n"
-    );
-
-    // 暂存视图：整个暂存的文件整理后重新暂存，提交的是整理过的内容。
-    app.git.commit.set_staging(true);
-    std::fs::write(root.join("src/main.rs"), "fn other() {}\n").unwrap();
-    git_in(&root, &["add", "src/main.rs"]);
-    app.git_refresh();
-    app.git.commit.message.set_text("暂存视图");
-    app.git_commit();
-    app.poll_commit();
-    assert_eq!(last_message(&root), "暂存视图");
-    assert_eq!(committed("src/main.rs"), "FN OTHER() {}\n");
-
-    // 关掉以后照原样提交。
-    app.run_commit_button_command(MenuCommand::CommitReformat);
-    std::fs::write(root.join("src/main.rs"), "fn third() {}\n").unwrap();
-    git_in(&root, &["add", "src/main.rs"]);
-    app.git_refresh();
-    app.git.commit.message.set_text("原样");
-    app.git_commit();
-    app.poll_commit();
-    assert_eq!(committed("src/main.rs"), "fn third() {}\n");
-    let _ = std::fs::remove_dir_all(&root);
-}
-
 /// 「提交并同步」：确认后提交，再与上游同步：上游的新提交先拉下来，本地的提交再推上去。
 #[test]
 fn commit_and_sync_pulls_then_pushes() {

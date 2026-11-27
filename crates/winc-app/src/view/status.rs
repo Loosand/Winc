@@ -459,46 +459,7 @@ pub(super) fn draw_status(app: &mut App, frame: &mut Frame<'_>) {
         }
     }
 
-    // 远程模块开着时终端开关左边是连接远端主机的按钮：点了打开主机面板。打开的目录在远端
-    // 主机上时图标亮，否则灰。出现、消失的方式与终端开关相同。
-    let enabled = app.remote_enabled();
-    let share = app.motion.module_fx.remote.share(enabled);
-    let opacity = app.motion.module_fx.remote.opacity(enabled);
-    if share > 0.0 {
-        let item = StatusItem::Remote;
-        let slot = right - icons::SIDEBAR_WIDTH;
-        right -= (icons::SIDEBAR_WIDTH + STATUS_GAP) * share;
-        let pill = Rect::new(
-            slot - CRUMB_PAD,
-            bar.y + 4.0,
-            icons::SIDEBAR_WIDTH + 2.0 * CRUMB_PAD,
-            bar.h - 8.0,
-        );
-        let connected = app.editor.root().is_some_and(winc_backend::is_remote);
-        let hovered = enabled && app.pointer.hover == Hover::Status(item);
-        frame.with_opacity(opacity, |frame| {
-            draw_button(frame, p, pill, bar, hovered, false);
-        });
-        let center = (slot + icons::SIDEBAR_WIDTH / 2.0, bar.y + bar.h / 2.0);
-        // 打开着远端目录而连接已断开、或对端迟迟没有响应时用提醒色。
-        let troubled = (app.editor.root().and_then(winc_backend::locate)).is_some_and(|at| {
-            !winc_backend::remote::is_connected(&at.target)
-                || winc_backend::remote::is_stalled(&at.target)
-        });
-        let color = if troubled {
-            p.warning
-        } else if connected || hovered {
-            p.text
-        } else {
-            p.text_muted
-        };
-        icons::remote(frame, center, color.alpha(opacity), bar);
-        if enabled {
-            status_hits.push((pill, item));
-        }
-    }
-
-    // 只读开关位于远程按钮左侧；文档因自身的状态而只读时不显示。
+    // 只读开关位于终端按钮左侧；文档因自身的状态而只读时不显示。
     if let Some(doc) = shown.filter(|doc| doc.can_lock()) {
         let item = StatusItem::ReadOnly;
         let slot = right - icons::SIDEBAR_WIDTH;
@@ -649,19 +610,6 @@ pub(super) fn draw_status(app: &mut App, frame: &mut Frame<'_>) {
                 clickable(StatusItem::Language),
             ),
         ]);
-    } else if let Some(view) = doc.and_then(|d| d.hex.as_deref()) {
-        // 十六进制视图：光标所在的偏移和选中的字节数；编码一项可以切回文本。
-        let range = view.selection();
-        let offset = format!("0x{:X}", view.head);
-        let position = match range.end - range.start {
-            0 | 1 => t!("hex-status-offset", offset = offset),
-            n => t!("hex-status-selected", offset = offset, count = n),
-        };
-        let hex = t!("editor-encoding-hex").to_owned();
-        items = vec![
-            (StatusKey::Position, position, None),
-            (StatusKey::Encoding, hex, Some(StatusItem::Encoding)),
-        ];
     }
     draw_group(
         frame,
@@ -771,11 +719,7 @@ pub(super) fn draw_status(app: &mut App, frame: &mut Frame<'_>) {
     // 消息放不下时从中间截短；可用宽度不超过 60 逻辑像素时不显示。
     let room = left.right() - x;
 
-    let progress = app.format_in_progress().map(|task| match task {
-        winc_editor::format::Task::Format => t!("workspace-status-formatting"),
-        winc_editor::format::Task::Fix => t!("workspace-status-fixing"),
-    });
-    if let Some(message) = app.status.message.as_deref().or(progress)
+    if let Some(message) = app.status.message.as_deref()
         && room > 60.0
     {
         let message = ellipsize(frame, message, app.fonts.ui_small, room);

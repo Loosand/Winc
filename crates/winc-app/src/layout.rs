@@ -73,8 +73,6 @@ pub struct Layout {
     pub gutter: Rect,
     /// 编辑区中行号栏右侧的文本区。
     pub text: Rect,
-    /// 编辑区右侧的缩略图；没有显示时宽度为 0。
-    pub minimap: Rect,
     /// 悬浮在编辑区右上角的查找条，展开替换时为两行高；关闭时尺寸为 0。
     pub search: Rect,
     /// 快速打开面板（⌘P）：输入框加结果列表；关闭时尺寸为 0。
@@ -219,7 +217,6 @@ impl Layout {
             editor,
             gutter,
             text,
-            minimap: Rect::default(),
             search,
             picker,
             status,
@@ -525,15 +522,6 @@ pub enum Scrollbar {
     TableHorizontal,
     /// 设置页（含快捷键列表）的竖直滚动条。
     Settings,
-}
-
-/// 返回缩略图最上方显示的行：`total` 行超出 `shown` 行时，随滚动位置 `scroll`（最大为 `max`）
-/// 按比例移动。
-pub fn minimap_first_row(total: usize, shown: usize, scroll: f64, max: f64) -> usize {
-    if total <= shown || max <= 0.0 {
-        return 0;
-    }
-    ((scroll / max).clamp(0.0, 1.0) * (total - shown) as f64) as usize
 }
 
 /// 返回水平滚动条的滑块位置，紧贴 `track` 的下边；内容不超过可视宽度时没有滑块，返回 `None`。

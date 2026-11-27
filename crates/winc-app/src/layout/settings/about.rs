@@ -6,15 +6,11 @@ use super::Setting;
 use crate::layout::{SETTINGS_GLYPH_PAD, SETTINGS_LOGO};
 use winc_render::Rect;
 
-/// 社区群组（Telegram）的地址。
-const COMMUNITY_URL: &str = "https://t.me/deeix_chat";
-
 /// 链接文字与其后外链箭头之间的距离，加上箭头的宽度（逻辑像素）。
 pub const LINK_ICON_W: f32 = 6.0 + 9.0;
 
-/// 产品名称，与 README 的标题和 macOS 应用包的显示名一致：显示在「关于」页顶部、开始页，
-/// 以及没有打开目录时的窗口标题中。命令行命令仍是小写的 `winc`。
-pub const PRODUCT_NAME: &str = "Winc";
+/// 产品显示名；定名前保持白板留空。
+pub const PRODUCT_NAME: &str = "";
 
 /// 「关于」页顶部产品信息的各部分：图标、名称所在的行、版本号所在的行，水平居中。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -55,33 +51,20 @@ pub fn version_line() -> String {
     t!("settings-version-line", version = version_label())
 }
 
-/// 返回「关于」页中链接的显示名（如「winc.si」）；不是链接时返回 `None`。
+/// 返回「关于」页中条目的右对齐显示文本；不是该类条目时返回 `None`。
 ///
-/// 官网、仓库和许可证取自 `Cargo.toml` 的 `homepage`、`repository` 和 `license`；更新日志在
-/// 应用内打开，显示「查看」。
+/// 许可证取自 `Cargo.toml` 的 `license`；更新日志在应用内打开，显示「查看」。
 pub fn about_value(setting: Setting) -> Option<String> {
-    let text = match setting {
-        Setting::ReleaseNotes => return Some(t!("settings-release-notes-view").to_owned()),
-        Setting::Website => env!("CARGO_PKG_HOMEPAGE"),
-        Setting::Repository => env!("CARGO_PKG_REPOSITORY"),
-        Setting::Community => COMMUNITY_URL,
-        Setting::License => env!("CARGO_PKG_LICENSE"),
-        _ => return None,
-    };
-    let text = text.trim_start_matches("https://");
-    Some(text.strip_prefix("github.com/").unwrap_or(text).to_owned())
+    match setting {
+        Setting::ReleaseNotes => Some(t!("settings-release-notes-view").to_owned()),
+        Setting::License => Some(env!("CARGO_PKG_LICENSE").to_owned()),
+        _ => None,
+    }
 }
 
-/// 返回「关于」页中链接的地址；不是链接时返回 `None`。许可证链接到仓库中的许可证全文。
-pub fn about_link(setting: Setting) -> Option<String> {
-    let repository = env!("CARGO_PKG_REPOSITORY");
-    Some(match setting {
-        Setting::Website => env!("CARGO_PKG_HOMEPAGE").to_owned(),
-        Setting::Repository => repository.to_owned(),
-        Setting::Community => COMMUNITY_URL.to_owned(),
-        Setting::License => format!("{repository}/blob/HEAD/LICENSE"),
-        _ => return None,
-    })
+/// 返回「关于」页中条目的外部链接地址；白板状态下不指向任何外部上游地址。
+pub fn about_link(_setting: Setting) -> Option<String> {
+    None
 }
 
 /// 返回链接实际占的区域：右缘与控件 `control` 对齐，宽为内容宽 `content` 加左右内边距，不超过

@@ -208,17 +208,6 @@ fn dragging_out_of_the_window_hands_local_files_to_the_system() {
     app.on_mouse_up(MouseButton::Left);
     assert!(from.is_file());
 
-    // 远程的项不交给系统，仍在窗口内拖动。
-    app.panels.tree.dragged_out.clear();
-    drag_row(&mut app, notes, lib);
-    let target = winc_backend::Target::new("drag-out").unwrap();
-    app.panels.tree.drag.as_mut().unwrap().paths =
-        vec![winc_backend::virtual_path(&target, b"/notes.md")];
-    app.on_mouse_move(outside.0, outside.1);
-    assert!(app.panels.tree.dragged_out.is_empty());
-    assert!(app.tree_dragging().is_some());
-    app.cancel_tree_drag();
-
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

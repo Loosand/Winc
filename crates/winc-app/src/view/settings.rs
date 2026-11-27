@@ -608,24 +608,32 @@ fn draw_row(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
     }
 }
 
-/// 绘制「关于」页的链接：右对齐的显示名后跟外链箭头；在应用内打开的更新日志后跟朝右的箭头。
+/// 绘制「关于」页的条目：可打开的链接在右对齐文字后跟箭头，无外链的纯信息（如许可证）只显示文字。
 ///
-/// 悬停时只在内容处铺悬停底色（[`crate::layout::value_area`]），点击范围与之相同。
+/// 悬停时只在可点击内容处铺悬停底色（[`crate::layout::value_area`]），点击范围与之相同。
 fn draw_link(app: &App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) {
     let p = app.palette;
     let text = crate::layout::about_value(row.setting).unwrap_or_default();
     let text_w = frame.measure(FontKind::Ui, app.fonts.ui, &text);
-    let icon_w = crate::layout::LINK_ICON_W;
+    let has_action =
+        row.setting == Setting::ReleaseNotes || crate::layout::about_link(row.setting).is_some();
+    let icon_w = if has_action {
+        crate::layout::LINK_ICON_W
+    } else {
+        0.0
+    };
     let area = crate::layout::value_area(row.control, text_w + icon_w);
-    if app.settings.hover == Some(SettingsPart::Link(row.setting)) {
+    if has_action && app.settings.hover == Some(SettingsPart::Link(row.setting)) {
         frame.rect_clipped(area, p.hover, RADIUS_ROW, clip);
     }
     let right = area.right() - SETTINGS_GLYPH_PAD;
-    let center = (right - 4.5, area.y + area.h / 2.0);
-    if row.setting == Setting::ReleaseNotes {
-        icons::chevron(frame, center, 6.5, Direction::Right, p.text_dim, clip);
-    } else {
-        icons::external(frame, center, p.text_dim, clip);
+    if has_action {
+        let center = (right - 4.5, area.y + area.h / 2.0);
+        if row.setting == Setting::ReleaseNotes {
+            icons::chevron(frame, center, 6.5, Direction::Right, p.text_dim, clip);
+        } else {
+            icons::external(frame, center, p.text_dim, clip);
+        }
     }
     ui_text(
         frame,
@@ -638,7 +646,7 @@ fn draw_link(app: &App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) {
     );
 }
 
-/// 绘制「关于」页顶部的产品信息：应用图标、名称和版本号，水平居中（[`ProductParts`]）。
+/// 绘制「关于」页顶部的产品信息：应用图标、名称（未定名时留白）和版本号，水平居中（[`ProductParts`]）。
 ///
 /// 图标按当前缩放从应用图标的 SVG 渲染，与屏幕像素一一对应。版本号点击复制，悬停时只在文字处
 /// 铺悬停底色。
@@ -649,12 +657,14 @@ fn draw_product(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Re
     let logo = parts.logo;
     frame.pixels((logo.x, logo.y), size, size, app.product_logo(size), clip);
 
-    // 名称比界面文字大 7 点，随界面字号一同缩放。
-    let name_size = app.fonts.ui + 7.0;
+    // 名称比界面文字大 7 点，随界面字号一同缩放；白板留空时不绘制。
     let name = crate::layout::PRODUCT_NAME;
-    let w = frame.measure(FontKind::Ui, name_size, name);
-    let x = (parts.name.x + (parts.name.w - w) / 2.0).round();
-    label(frame, app, name_size, (x, parts.name), name, p.text, clip);
+    if !name.is_empty() {
+        let name_size = app.fonts.ui + 7.0;
+        let w = frame.measure(FontKind::Ui, name_size, name);
+        let x = (parts.name.x + (parts.name.w - w) / 2.0).round();
+        label(frame, app, name_size, (x, parts.name), name, p.text, clip);
+    }
 
     let text = crate::layout::version_line();
     let w = frame.measure(FontKind::Ui, app.fonts.ui, &text);

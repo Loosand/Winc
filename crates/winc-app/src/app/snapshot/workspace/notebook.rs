@@ -281,10 +281,7 @@ fn notebook_menu_has_a_full_width_trigger_and_a_single_workspace_path_row() {
     );
     app.frame.dirty = false;
     app.on_mouse_move(at.x + 25.0, at.y + at.h / 2.0);
-    assert!(
-        !app.frame.dirty,
-        "在同一菜单项内微移鼠标不应触发多余重绘"
-    );
+    assert!(!app.frame.dirty, "在同一菜单项内微移鼠标不应触发多余重绘");
     assert!(matches!(
         app.popup().unwrap().levels[1].rows[0],
         PopupRow::Item {

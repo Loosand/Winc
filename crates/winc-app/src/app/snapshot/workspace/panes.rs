@@ -90,12 +90,11 @@ fn drawing_other_panes_leaves_the_focused_panes_layout_alone() {
     let path = dir.join("picture.svg");
     std::fs::write(&path, r#"<svg xmlns="http://www.w3.org/2000/svg"/>"#).unwrap();
     let mut app = app_with(&path, false);
-    app.config.minimap = Some(true);
     app.run_action(Action::SplitRight);
     app.relayout();
     let parts = |app: &App| {
         let l = &app.layout;
-        (l.tabs, l.text, l.preview, l.minimap)
+        (l.tabs, l.text, l.preview)
     };
     let placed = parts(&app);
     assert!(placed.2.w > 0.0);
@@ -104,8 +103,7 @@ fn drawing_other_panes_leaves_the_focused_panes_layout_alone() {
     assert_eq!(parts(&app), placed);
     // 其他窗格按它自己的位置放这些部分。
     let left = app.panes.rects[0];
-    let (minimap, preview) = app.with_pane(left.id, |app| (app.layout.minimap, app.layout.preview));
-    assert_eq!(minimap.right() + SCROLLBAR_HIT, left.editor.right());
+    let preview = app.with_pane(left.id, |app| app.layout.preview);
     assert!(preview.right() <= left.tabs.right() && preview.x > left.tabs.x);
     let _ = std::fs::remove_dir_all(&dir);
 }

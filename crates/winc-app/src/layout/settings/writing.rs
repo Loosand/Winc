@@ -4,7 +4,7 @@
 use winc_i18n::t;
 
 macro_rules! beta_settings {
-    ($($page:ident { $($setting:ident => $label:literal $(, $desc:literal)? ;)* })*) => {
+    ($($page:ident { $($setting:ident => $label:expr $(, $desc:expr)? ;)* })*) => {
         /// A not-yet-configurable writing or Markdown option.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum BetaSetting { $($($setting,)*)* }
@@ -15,7 +15,7 @@ macro_rules! beta_settings {
             }
 
             pub(super) fn label(self) -> &'static str {
-                match self { $($(Self::$setting => t!($label),)*)* }
+                match self { $($(Self::$setting => $label,)*)* }
             }
 
             pub(super) fn description(self) -> Option<&'static str> {
@@ -25,69 +25,69 @@ macro_rules! beta_settings {
     };
     (@markdown Writing) => { false };
     (@markdown Markdown) => { true };
-    (@desc $desc:literal) => { Some(t!($desc)) };
+    (@desc $desc:expr) => { Some($desc) };
     (@desc) => { None };
 }
 
 beta_settings! {
     Writing {
-        Spellcheck => "settings-writing-spellcheck", "settings-writing-spellcheck-desc";
-        Autocorrect => "settings-writing-autocorrect";
-        SpellcheckLanguage => "settings-writing-spellcheck-language";
-        PairBrackets => "settings-writing-pair-brackets", "settings-writing-pair-brackets-desc";
-        PairMarkdown => "settings-writing-pair-markdown";
-        Direction => "settings-writing-direction", "settings-writing-direction-desc";
-        SmartQuotes => "settings-writing-smart-quotes";
-        DoubleQuotes => "settings-writing-double-quotes";
-        SingleQuotes => "settings-writing-single-quotes";
-        SmartDashes => "settings-writing-smart-dashes";
-        PunctuationTiming => "settings-writing-punctuation-timing";
-        ConvertPunctuation => "settings-writing-convert-punctuation", "settings-writing-convert-punctuation-desc";
-        TextReplacement => "settings-writing-text-replacement";
-        CjkPairs => "settings-writing-cjk-pairs", "settings-writing-cjk-pairs-desc";
-        CornerQuotes => "settings-writing-corner-quotes";
-        CjkSpacing => "settings-writing-cjk-spacing";
-        CjkMarkdown => "settings-writing-cjk-markdown", "settings-writing-cjk-markdown-desc";
-        ZenMode => "settings-writing-zen-mode", "settings-writing-zen-mode-desc";
-        ZenHideTitlebar => "settings-writing-zen-hide-titlebar";
-        ZenRevealTitlebar => "settings-writing-zen-reveal-titlebar";
-        ZenHideToolbar => "settings-writing-zen-hide-toolbar";
-        ZenFocus => "settings-writing-zen-focus";
-        ZenTypewriter => "settings-writing-zen-typewriter";
-        ZenFlow => "settings-writing-zen-flow";
-        ZenFullscreen => "settings-writing-zen-fullscreen";
-        TypewriterWithFocus => "settings-writing-typewriter-with-focus";
-        FocusWithTypewriter => "settings-writing-focus-with-typewriter";
-        FlowMode => "settings-writing-flow-mode", "settings-writing-flow-mode-desc";
-        FlowDisableSpellcheck => "settings-writing-flow-disable-spellcheck";
+        Spellcheck => t!("settings-writing-spellcheck"), t!("settings-writing-spellcheck-desc");
+        Autocorrect => t!("settings-writing-autocorrect");
+        SpellcheckLanguage => t!("settings-writing-spellcheck-language");
+        PairBrackets => t!("settings-writing-pair-brackets"), t!("settings-writing-pair-brackets-desc");
+        PairMarkdown => t!("settings-writing-pair-markdown");
+        Direction => t!("settings-writing-direction"), t!("settings-writing-direction-desc");
+        SmartQuotes => t!("settings-writing-smart-quotes");
+        DoubleQuotes => t!("settings-writing-double-quotes");
+        SingleQuotes => t!("settings-writing-single-quotes");
+        SmartDashes => t!("settings-writing-smart-dashes");
+        PunctuationTiming => t!("settings-writing-punctuation-timing");
+        ConvertPunctuation => t!("settings-writing-convert-punctuation"), t!("settings-writing-convert-punctuation-desc");
+        TextReplacement => t!("settings-writing-text-replacement");
+        CjkPairs => t!("settings-writing-cjk-pairs"), t!("settings-writing-cjk-pairs-desc");
+        CornerQuotes => t!("settings-writing-corner-quotes");
+        CjkSpacing => t!("settings-writing-cjk-spacing");
+        CjkMarkdown => t!("settings-writing-cjk-markdown"), t!("settings-writing-cjk-markdown-desc");
+        ZenMode => t!("settings-writing-zen-mode"), t!("settings-writing-zen-mode-desc");
+        ZenHideTitlebar => t!("settings-writing-zen-hide-titlebar");
+        ZenRevealTitlebar => t!("settings-writing-zen-reveal-titlebar");
+        ZenHideToolbar => t!("settings-writing-zen-hide-toolbar");
+        ZenFocus => t!("settings-writing-zen-focus");
+        ZenTypewriter => t!("settings-writing-zen-typewriter");
+        ZenFlow => t!("settings-writing-zen-flow");
+        ZenFullscreen => t!("settings-writing-zen-fullscreen");
+        TypewriterWithFocus => t!("settings-writing-typewriter-with-focus");
+        FocusWithTypewriter => t!("settings-writing-focus-with-typewriter");
+        FlowMode => t!("settings-writing-flow-mode"), t!("settings-writing-flow-mode-desc");
+        FlowDisableSpellcheck => t!("settings-writing-flow-disable-spellcheck");
     }
     Markdown {
-        Strict => "settings-syntax-strict", "settings-syntax-strict-desc";
-        Containers => "settings-syntax-containers", "settings-syntax-containers-desc";
-        Subscript => "settings-syntax-subscript";
-        Superscript => "settings-syntax-superscript";
-        Highlight => "settings-syntax-highlight", "settings-syntax-highlight-desc";
-        Wiki => "settings-syntax-wiki", "settings-syntax-wiki-desc";
-        Comments => "settings-syntax-comments", "settings-syntax-comments-desc";
-        CriticMarkup => "settings-syntax-criticmarkup";
-        HeadingStyle => "settings-syntax-heading-style";
-        BulletMarker => "settings-syntax-bullet-marker";
-        Citations => "settings-syntax-citations", "settings-syntax-citations-desc";
-        Bibliography => "settings-syntax-bibliography";
-        CitationStyle => "settings-syntax-citation-style";
-        Zotero => "settings-syntax-zotero";
-        InlineMath => "settings-math-inline", "settings-math-inline-desc";
-        LatexDelimiters => "settings-math-latex-delimiters", "settings-math-latex-delimiters-desc";
-        FencedMath => "settings-math-fenced", "settings-math-fenced-desc";
-        Physics => "settings-math-physics";
-        LegacyMath => "settings-math-legacy";
-        EquationNumbers => "settings-math-equation-numbers";
-        MathHtml => "settings-math-html";
-        TexMacros => "settings-math-macros";
-        MathExtensions => "settings-math-extensions", "settings-math-extensions-desc";
-        CodeLineNumbers => "settings-code-line-numbers", "settings-code-line-numbers-desc";
-        CodeWrap => "settings-code-wrap", "settings-code-wrap-desc";
-        CustomFormats => "settings-syntax-custom-formats", "settings-syntax-custom-formats-desc";
+        Strict => t!("settings-syntax-strict"), t!("settings-syntax-strict-desc");
+        Containers => t!("settings-syntax-containers"), t!("settings-syntax-containers-desc");
+        Subscript => t!("settings-syntax-subscript");
+        Superscript => t!("settings-syntax-superscript");
+        Highlight => t!("settings-syntax-highlight"), t!("settings-syntax-highlight-desc");
+        Wiki => t!("settings-syntax-wiki"), t!("settings-syntax-wiki-desc");
+        Comments => t!("settings-syntax-comments"), t!("settings-syntax-comments-desc");
+        CriticMarkup => t!("settings-syntax-criticmarkup");
+        HeadingStyle => t!("settings-syntax-heading-style");
+        BulletMarker => t!("settings-syntax-bullet-marker");
+        Citations => t!("settings-syntax-citations"), t!("settings-syntax-citations-desc");
+        Bibliography => t!("settings-syntax-bibliography");
+        CitationStyle => t!("settings-syntax-citation-style");
+        Zotero => t!("settings-syntax-zotero");
+        InlineMath => t!("settings-math-inline"), t!("settings-math-inline-desc");
+        LatexDelimiters => t!("settings-math-latex-delimiters"), t!("settings-math-latex-delimiters-desc");
+        FencedMath => t!("settings-math-fenced"), t!("settings-math-fenced-desc");
+        Physics => t!("settings-math-physics");
+        LegacyMath => t!("settings-math-legacy");
+        EquationNumbers => t!("settings-math-equation-numbers");
+        MathHtml => t!("settings-math-html");
+        TexMacros => t!("settings-math-macros");
+        MathExtensions => t!("settings-math-extensions"), t!("settings-math-extensions-desc");
+        CodeLineNumbers => t!("settings-code-line-numbers"), t!("settings-code-line-numbers-desc");
+        CodeWrap => t!("settings-code-wrap"), t!("settings-code-wrap-desc");
+        CustomFormats => t!("settings-syntax-custom-formats"), t!("settings-syntax-custom-formats-desc");
     }
 }
 

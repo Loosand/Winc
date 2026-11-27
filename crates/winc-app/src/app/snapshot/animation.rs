@@ -54,12 +54,13 @@ fn finished_animations_are_settled_before_the_last_frame() {
 
 #[test]
 fn places_popup_slides_in_and_fades_out() {
-    let dir = super::editor::navigation::navigation_folder("places-fade");
+    let dir = sample_folder("places-fade");
     // 深色主题下浮窗底色与编辑区底色差得多，淡入淡出时的像素容易区分。
     let mut app = app_with(&dir, true);
-    app.open_path(&dir.join("lib/util.py"));
-    app.select(5, 5);
-    app.go_to_definition();
+    app.open_path(&dir.join("short.rs"));
+    app.select(0, 0);
+    app.toggle_bookmark();
+    app.list_bookmarks();
     paint(&mut app);
     let card = app.layout.picker;
     // 像素是否接近颜色 `c`（每个通道相差不超过 2，容许舍入）。
@@ -113,9 +114,7 @@ fn places_popup_slides_in_and_fades_out() {
     assert!(near(pixel(&app, probe), editor_bg));
 
     // 选中一项并跳转时不淡出。
-    app.open_path(&dir.join("lib/util.py"));
-    app.select(5, 5);
-    app.go_to_definition();
+    app.list_bookmarks();
     app.picker_accept();
     assert!(app.overlays.picker.places_out.is_none());
 

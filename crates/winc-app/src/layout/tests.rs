@@ -389,14 +389,6 @@ fn keys_header_matches_the_full_keys_layout() {
 }
 
 #[test]
-fn the_minimap_moves_only_when_the_document_does_not_fit() {
-    assert_eq!(minimap_first_row(100, 200, 50.0, 80.0), 0);
-    assert_eq!(minimap_first_row(1000, 200, 0.0, 950.0), 0);
-    assert_eq!(minimap_first_row(1000, 200, 950.0, 950.0), 800);
-    assert_eq!(minimap_first_row(1000, 200, 475.0, 950.0), 400);
-}
-
-#[test]
 fn setting_descriptions_wrap_up_to_a_limit() {
     // 每个字宽 10：宽 30 时每行 3 个字。
     let mut measure = |s: &str| s.chars().count() as f32 * 10.0;

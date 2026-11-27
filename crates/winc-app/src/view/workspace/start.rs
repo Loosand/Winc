@@ -35,22 +35,12 @@ const ACTIONS: &[(StartAction, Action)] = if cfg!(target_os = "macos") {
     ]
 };
 
-/// 返回「开始」一段要显示的操作：[`ACTIONS`]，远程模块开着时加上连接到 SSH 主机。
-fn actions(app: &App) -> Vec<(StartAction, Action)> {
-    let mut actions = ACTIONS.to_vec();
-    if app.remote_enabled() {
-        actions.push((StartAction::Remote, Action::RemoteConnect));
-    }
-    actions
-}
-
 /// 返回「开始」一段中操作 `action` 所在行上的文字。
 fn action_label(action: StartAction) -> &'static str {
     match action {
         StartAction::Settings => t!("workspace-start-settings"),
         StartAction::NewFile => t!("workspace-start-new-file"),
         StartAction::OpenFolder => t!("workspace-start-open-folder"),
-        StartAction::Remote => t!("workspace-start-remote"),
         _ if cfg!(target_os = "macos") => t!("workspace-start-open"),
         _ => t!("workspace-start-open-file"),
     }
@@ -64,9 +54,10 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
 
     // 先计算总高度，使整块内容在编辑区内垂直居中，并整体上移 24 逻辑像素
     // （上边距至少 16 逻辑像素）。
-    // 标题块的高度（逻辑像素）：应用名 34、版本号 20，再留 2 的间隔。
-    let title_h = 56.0;
-    let actions = actions(app);
+    // 标题块的高度（逻辑像素）：应用名 34（非空时）、版本号 20，再留 2 的间隔。
+    let has_name = !crate::layout::PRODUCT_NAME.is_empty();
+    let title_h = if has_name { 56.0 } else { 22.0 };
+    let actions = ACTIONS;
     let actions_h = SECTION_TITLE + actions.len() as f32 * ROW;
     let recent_h = if recent > 0 {
         GAP + SECTION_TITLE + recent as f32 * ROW
@@ -78,23 +69,28 @@ pub(in crate::view) fn draw(app: &mut App, frame: &mut Frame<'_>) {
     let x = (editor.x + (editor.w - w) / 2.0).round();
     let mut y = (editor.y + ((editor.h - total) / 2.0 - 24.0).max(16.0)).round();
 
-    let title = Rect::new(x + 10.0, y, w, 34.0);
-    crate::view::label(
-        frame,
-        app,
-        app.fonts.ui + 13.0,
-        (title.x, title),
-        crate::layout::PRODUCT_NAME,
-        p.text,
-        editor,
-    );
-    let version = Rect::new(title.x, title.bottom(), w, 20.0);
+    let version_y = if has_name {
+        let title = Rect::new(x + 10.0, y, w, 34.0);
+        crate::view::label(
+            frame,
+            app,
+            app.fonts.ui + 13.0,
+            (title.x, title),
+            crate::layout::PRODUCT_NAME,
+            p.text,
+            editor,
+        );
+        title.bottom()
+    } else {
+        y
+    };
+    let version = Rect::new(x + 10.0, version_y, w, 20.0);
     let text = t!("workspace-start-version", version = winc_version::VERSION);
     ui_text_small(frame, app, version.x, version, &text, p.text_dim, editor);
     y += title_h + GAP;
 
     y = section_title(app, frame, t!("workspace-start-section-start"), x, y, w);
-    for (action, key) in actions {
+    for &(action, key) in actions {
         let label = action_label(action);
         let row = Rect::new(x, y, w, ROW);
         draw_row_bg(app, frame, row, action);
@@ -216,7 +212,6 @@ fn action_icon(app: &App, frame: &mut Frame<'_>, action: StartAction, row: Rect)
         StartAction::Open | StartAction::OpenFolder => {
             icons::folder(frame, (cx - 7.5, cy - 6.0), true, color, clip);
         }
-        StartAction::Remote => icons::server(frame, (cx, cy), color, clip),
         StartAction::Recent(_) | StartAction::Forget(_) => {}
     }
 }

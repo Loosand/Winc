@@ -27,8 +27,6 @@ mod input;
 mod memory;
 mod pictures;
 mod preview;
-#[cfg(unix)]
-mod remote;
 mod settings;
 mod shots;
 mod status;

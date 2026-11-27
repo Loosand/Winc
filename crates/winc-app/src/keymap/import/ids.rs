@@ -13,19 +13,6 @@ const IDS: &[(Action, &[&str], &[&str])] = &[
         &["workbench.action.gotoSymbol"],
     ),
     (GoToLine, &["GotoLine"], &["workbench.action.gotoLine"]),
-    (
-        GoToDefinition,
-        &["GotoDeclaration"],
-        &["editor.action.revealDefinition"],
-    ),
-    (
-        FindReferences,
-        &["FindUsages", "ShowUsages"],
-        &[
-            "editor.action.goToReferences",
-            "references-view.findReferences",
-        ],
-    ),
     (GoBack, &["Back"], &["workbench.action.navigateBack"]),
     (
         GoForward,
@@ -48,13 +35,6 @@ const IDS: &[(Action, &[&str], &[&str])] = &[
         &["workbench.action.openGlobalKeybindings"],
     ),
     (RecordKeys, &[], &["keybindings.editor.recordSearchKeys"]),
-    (Format, &["ReformatCode"], &["editor.action.formatDocument"]),
-    (
-        FormatSelection,
-        &["ReformatCode"],
-        &["editor.action.formatSelection"],
-    ),
-    (Fix, &["ShowIntentionActions"], &["editor.action.quickFix"]),
     (Find, &["Find"], &["actions.find"]),
     (
         Replace,

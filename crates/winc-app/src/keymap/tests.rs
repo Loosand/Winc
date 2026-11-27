@@ -288,9 +288,6 @@ fn vscode_key_labels_per_system() {
     assert_eq!(label(Os::Mac, Action::Settings), ["⌘,"]);
     assert_eq!(label(Os::Windows, Action::Settings), ["Ctrl+,"]);
     assert_eq!(label(Os::Linux, Action::Settings), ["Ctrl+,"]);
-    assert_eq!(label(Os::Mac, Action::Format), ["⌥⇧F"]);
-    assert_eq!(label(Os::Linux, Action::Format), ["Ctrl+Shift+I"]);
-    assert_eq!(label(Os::Mac, Action::FormatSelection), ["⌘K ⌘F"]);
     assert_eq!(label(Os::Mac, Action::GoBack), ["⌃-"]);
     assert_eq!(label(Os::Windows, Action::GoBack), ["Alt+←"]);
     assert_eq!(label(Os::Linux, Action::GoBack), ["Ctrl+Alt+-"]);
@@ -502,9 +499,8 @@ fn rows_merge_identical_keys_and_split_different_ones() {
     assert_eq!(copy[0].when.note(), Some("非编辑区"));
     assert_eq!(copy[1].when.note(), Some("编辑区、查找栏"));
     // 没有键的也列。
-    assert!(of(Action::Fix)[0].keys.is_empty());
-    // 「常用」组中只在编辑区生效的命令标注生效范围；「编辑」组的命令不标注。
-    assert_eq!(of(Action::GoToDefinition)[0].when.note(), Some("编辑区"));
+    assert!(of(Action::SortLinesAscending)[0].keys.is_empty());
+    // 「编辑」组的命令不标注生效范围。
     assert_eq!(of(Action::ToggleComment)[0].when.note(), None);
 }
 
@@ -520,10 +516,10 @@ fn search_matches_names_and_keys() {
             .map(|r| r.action)
             .collect::<Vec<_>>()
     };
-    assert!(found("格式化").contains(&Action::Format));
-    assert!(found("format sel").contains(&Action::FormatSelection));
+    assert!(found("缩进").contains(&Action::IndentLines));
+    assert!(found("trim trailing").contains(&Action::TrimTrailingWhitespace));
     assert_eq!(found("⌘K ⌘S"), [Action::KeyboardShortcuts]);
-    assert!(found("cmd k").contains(&Action::FormatSelection));
+    assert!(found("cmd k").contains(&Action::TrimTrailingWhitespace));
     assert!(found("shift cmd p").contains(&Action::ShowCommands));
     assert!(found("没有这个").is_empty());
     // 录制的键：只匹配以所录各段开头的键，⌘K 不会匹配 ⌥⌘K。
@@ -534,7 +530,7 @@ fn search_matches_names_and_keys() {
             .collect::<Vec<_>>()
     };
     assert_eq!(recorded("⌘K ⌘S"), [Action::KeyboardShortcuts]);
-    assert!(recorded("⌘K").contains(&Action::FormatSelection));
+    assert!(recorded("⌘K").contains(&Action::TrimTrailingWhitespace));
     assert!(!recorded("⌘K").contains(&Action::RecordKeys));
     assert!(recorded("⌘S").contains(&Action::Save));
     assert!(!recorded("⌘S").contains(&Action::KeyboardShortcuts));
@@ -542,9 +538,9 @@ fn search_matches_names_and_keys() {
         .into_iter()
         .flat_map(|(_, r)| r)
         .collect();
-    assert!(linux.iter().any(
-            |r| r.action == Action::Format && row_matches(r, "ctrl+shift+i", Os::Linux, false)
-        ));
+    assert!(linux.iter().any(|r| {
+        r.action == Action::CopyPath && row_matches(r, "ctrl+alt+c", Os::Linux, false)
+    }));
 }
 
 /// 差异右侧接手的命令正好是这份清单：「编辑」分组去掉折叠、书签和缩进、换行符设置，
@@ -593,9 +589,6 @@ fn edits_in_diff_matches_the_diff_command_list() {
         SortLinesAscending,
         SortLinesDescending,
         TrimTrailingWhitespace,
-        Format,
-        FormatSelection,
-        Fix,
     ];
     for &action in ACTIONS {
         assert_eq!(
@@ -725,9 +718,6 @@ fn idea_key_labels_per_system() {
         label(Os::Windows, Action::QuickOpen),
         ["Ctrl+Shift+N", "Shift Shift"]
     );
-    assert_eq!(label(Os::Mac, Action::GoToDefinition), ["⌘B"]);
-    assert_eq!(label(Os::Mac, Action::Format), ["⌥⌘L"]);
-    assert_eq!(label(Os::Windows, Action::Format), ["Ctrl+Alt+L"]);
     assert_eq!(label(Os::Mac, Action::CopyLinesDown), ["⌘D"]);
     assert_eq!(label(Os::Mac, Action::DeleteLine), ["⌘⌫"]);
     assert_eq!(label(Os::Windows, Action::DeleteLine), ["Ctrl+Y"]);
@@ -744,17 +734,13 @@ fn idea_key_labels_per_system() {
     assert!(label(Os::Mac, Action::OpenRecent).is_empty());
     assert!(label(Os::Windows, Action::Quit).is_empty());
 
-    // 编辑区里 ⌘B 跳到定义，可编辑的 Markdown 预览里 ⌘B 加粗。
+    // 可编辑的 Markdown 预览里 ⌘B 加粗。
     let table = Preset::Idea.bindings(Os::Mac);
     let first = |mods, key, context| match lookup(&table, Stroke { key, mods }, None, context) {
         Lookup::Run(actions) => actions.first().copied(),
         _ => None,
     };
     let b = KeyCode::Char('b');
-    assert_eq!(
-        first(Mods::META, b, Context::Editor),
-        Some(Action::GoToDefinition)
-    );
     assert_eq!(
         first(Mods::META, b, Context::Markdown),
         Some(Action::MarkdownBold)
@@ -824,7 +810,7 @@ fn key_specs_round_trip() {
 fn custom_keys_replace_the_preset_and_take_the_key() {
     let mut map = std::collections::BTreeMap::new();
     map.insert("quickOpen".to_owned(), vec!["cmd+p".to_owned()]);
-    map.insert("format".to_owned(), vec![]);
+    map.insert("toggleComment".to_owned(), vec![]);
     map.insert("noSuchCommand".to_owned(), vec!["cmd+j".to_owned()]);
     map.insert(
         "save".to_owned(),
@@ -840,7 +826,7 @@ fn custom_keys_replace_the_preset_and_take_the_key() {
             .collect::<Vec<_>>()
     };
     assert_eq!(keys(Action::QuickOpen), ["⌘P"]);
-    assert!(keys(Action::Format).is_empty());
+    assert!(keys(Action::ToggleComment).is_empty());
     assert_eq!(keys(Action::Save), ["⌘S"]);
     let mut written = map.clone();
     written.remove("noSuchCommand");
@@ -855,7 +841,7 @@ fn custom_keys_replace_the_preset_and_take_the_key() {
     let found = lookup(&table, cmd_d.0, None, Context::Editor);
     assert_eq!(found, Lookup::Run(vec![Action::AddNextOccurrence]));
     // 两个改过的命令抢同一个键时，只有一个命令得到它；去掉其中一个后另一个得到。
-    custom.set(Action::Format, vec![cmd_d]);
+    custom.set(Action::ToggleComment, vec![cmd_d]);
     let table = custom.apply(Preset::Idea, Os::Mac);
     let Lookup::Run(found) = lookup(&table, cmd_d.0, None, Context::Editor) else {
         panic!("⌘D 应有命令");
@@ -865,7 +851,7 @@ fn custom_keys_replace_the_preset_and_take_the_key() {
     let table = custom.apply(Preset::Idea, Os::Mac);
     let other = lookup(&table, cmd_d.0, None, Context::Editor);
     assert!(matches!(other, Lookup::Run(ref a) if a.len() == 1 && a[0] != found[0]));
-    custom.reset(Action::Format);
+    custom.reset(Action::ToggleComment);
     custom.reset(Action::AddNextOccurrence);
     assert!(custom.is_empty());
     for (i, action) in ACTIONS.iter().enumerate() {

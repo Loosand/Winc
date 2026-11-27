@@ -42,6 +42,7 @@ pub struct Palette {
     /// 当前标签的底色和外圈细边，带一点强调色；未选中的标签是凸起的一块灰。
     pub tab_fill: Color,
     /// 标签的描边：当前标签带强调色，未选中的标签是同色系的一圈细线，把标签与卡片分开。
+    #[allow(dead_code)]
     pub tab_edge: Color,
     /// 设置页中一组设置项的底色：叠在编辑区底色之上，浅色配色下比编辑区底色略深，深色配色下略浅。
     pub group_bg: Color,
@@ -791,8 +792,6 @@ pub const GUTTER_PADDING: f32 = 18.0;
 pub const TEXT_PAD: f32 = 8.0;
 /// 滚动条可点击、可拖动区域的宽度（逻辑像素），从区域的右边缘（水平滚动条为下边缘）向内计算。
 pub const SCROLLBAR_HIT: f32 = 12.0;
-/// 缩略图中一行的高度（逻辑像素）。
-pub const MINIMAP_ROW: f32 = 2.0;
 /// 滚动条滑块的活动范围在轨道两端各让出的距离（逻辑像素）：滑块贴着卡片的边，到头时不能
 /// 伸出卡片的圆角（圆角半径 10，离边 1 像素处要往里收约 6 像素）。
 pub const SCROLLBAR_END: f32 = 6.0;
